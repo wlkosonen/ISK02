@@ -1628,7 +1628,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                         className="w-full bg-header/60 border border-border rounded-lg p-2 font-mono text-xs text-text-main focus:border-accent focus:outline-none"
                         placeholder="e.g. llama3, deepseek-coder..."
                       />
-                      <p className="text-[9px] text-text-dim leading-normal">
+                      <p className="text-[11px] text-text-dim leading-normal">
                         Type any model currently downloaded on your machine (e.g., <code className="font-mono text-white/50 text-[8px]">ollama run llama3</code>).
                       </p>
                     </div>
@@ -1662,7 +1662,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                           {showGeminiKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                         </button>
                       </div>
-                      <p className="text-[9px] text-text-dim leading-normal">
+                      <p className="text-[11px] text-text-dim leading-normal">
                         💡 Key is processed server-side so it is never exposed in the browser's developer console. Leave empty to use server environment variable default.
                       </p>
                     </div>
@@ -1696,7 +1696,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                           {showAnthropicKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                         </button>
                       </div>
-                      <p className="text-[9px] text-text-dim leading-normal">
+                      <p className="text-[11px] text-text-dim leading-normal">
                         💡 Key is processed server-side so it is never exposed in the browser's developer console. Leave empty to use server environment variable default.
                       </p>
                     </div>
@@ -1852,7 +1852,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                       }))}
                       className="w-full h-1 bg-border rounded-full appearance-none accent-accent cursor-pointer"
                     />
-                    <p className="text-[9px] text-text-dim leading-normal">Capped to the selected model's output limit. Higher values prevent long HTML cards / guideline sets from being truncated.</p>
+                    <p className="text-[11px] text-text-dim leading-normal">Capped to the selected model's output limit. Higher values prevent long HTML cards / guideline sets from being truncated.</p>
                   </div>
                 </div>
               </div>
@@ -2957,7 +2957,7 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
                   <span className={`block text-[11px] font-black uppercase tracking-wider ${state.budgetTierMode ? "text-[#fbbf24]" : "text-text-muted"}`}>
                     Budget-Tier Mode {state.budgetTierMode ? "· ON" : "· OFF"}
                   </span>
-                  <span className="block text-[9px] text-text-dim mt-0.5 leading-snug">
+                  <span className="block text-[11px] text-text-dim mt-0.5 leading-snug">
                     USCS §21 optimizations for free models (DeepSeek/Ministral/GLM): state-based triggers, mandatory status block, worked examples, strict document separation.
                   </span>
                 </div>
@@ -2969,7 +2969,7 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
               {/* Relax §21 per-component caps */}
               <div className="space-y-2 pt-3 border-t border-border/40">
                 <p className="text-[9px] uppercase tracking-[0.2em] font-black text-label">Relax §21 caps <span className="text-text-dim/60 normal-case tracking-normal">— advanced</span></p>
-                <p className="text-[9px] text-text-dim leading-snug">
+                <p className="text-[11px] text-text-dim leading-snug">
                   Let specific blocks exceed their §21 size cap for richer detail. The <span className="text-text-muted">20k platform total still applies</span> — the AI trims elsewhere to fit. Note: a bigger Prompt Plot / Guidelines costs tokens on every turn of the deployed story.
                 </p>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -3161,7 +3161,7 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
                     }}
                     className="w-24 bg-card border border-border rounded px-2 py-1 text-[10px] font-mono text-center text-text-muted uppercase focus:border-accent focus:outline-none transition-colors" 
                   />
-                  <div className="text-[8px] text-label uppercase font-black tracking-widest opacity-40">
+                  <div className="text-[10px] text-label uppercase font-black tracking-widest opacity-80">
                     {idx === 0 ? "Background" : idx === 1 ? "Main Text" : idx === 2 ? "Accent 1" : idx === 3 ? "Accent 2" : "Contrast"}
                   </div>
                 </div>
