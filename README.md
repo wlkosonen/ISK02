@@ -97,3 +97,17 @@ All are **optional** — the app works with keys entered in the UI. See `.env.ex
 | `npm run build` | Build client + bundle server to `dist/`. |
 | `npm start` | Run the production build. |
 | `npm run lint` | TypeScript type-check (`tsc --noEmit`). |
+
+---
+
+## License & credits
+
+- **Application code** — [MIT](./LICENSE) © 2026 **Shegs**. Use, modify, and
+  redistribute freely; just keep the copyright notice.
+- **USCS v6.1 framework** (`docs/USCS_v6.1.txt`) — a community effort by the
+  **Isekai Zero community**, released into the public domain under **CC0 1.0**.
+  No conditions, no attribution required — but credit the community anyway. ✨
+
+Built by **@Shegs** — find me in the [ISK0 Discord](https://discord.com/invite/isekaizero)
+for feedback and ideas.
+

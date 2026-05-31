@@ -1463,7 +1463,16 @@ Rules:
           <span className="text-[10px] font-mono text-text-dim/50 uppercase tracking-widest hidden lg:block">System_Stability: 99.2%</span>
         </div>
 
-        <div className="w-32 hidden sm:block"></div>
+        <a
+          href="https://discord.com/invite/isekaizero"
+          target="_blank"
+          rel="noopener noreferrer"
+          title="@Shegs — find me in the ISK0 Discord for feedback & ideas"
+          className="hidden sm:flex items-center gap-1.5 text-[9px] font-mono uppercase tracking-widest text-text-dim hover:text-accent transition-colors"
+        >
+          <span className="text-accent">@Shegs</span>
+          <span className="hidden lg:inline opacity-60">· ISK0 Discord — feedback &amp; ideas</span>
+        </a>
       </footer>
 
       {/* Model Settings Modal */}
@@ -2213,6 +2222,12 @@ function HelpModal({ onClose }: { onClose: () => void }) {
               <li>• <span className="text-text-main">LOCK IN</span> — when the AI marks a step complete, the top-right button pulses; click it (or the chat banner) to advance when you're ready.</li>
               <li>• <span className="text-text-main">Snapshot</span> saves a full backup (chat included); <span className="text-text-main">Export_Core</span> saves just the clean deliverables.</li>
             </ul>
+          </section>
+
+          <section className="space-y-2">
+            <H>Credits &amp; feedback</H>
+            <p>This workshop runs on <span className="text-text-main">USCS v6.1</span> — a community effort from the Isekai Zero community, released into the public domain (CC0). Huge thanks to everyone who built it.</p>
+            <p>App put together by <span className="text-accent font-bold">@Shegs</span> — find me in the <Link href="https://discord.com/invite/isekaizero">ISK0 Discord</Link> for feedback and ideas. 💬</p>
           </section>
         </div>
 
