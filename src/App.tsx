@@ -265,12 +265,21 @@ const DEFAULT_STATE: StoryState = {
   },
 };
 
+// True if loadInitialState restored a non-trivial prior session (used to warn
+// the user they're resuming an old story rather than starting fresh).
+let SESSION_RESTORED = false;
+
 function loadInitialState(): StoryState {
   if (typeof window === "undefined") return DEFAULT_STATE;
   try {
     const raw = window.sessionStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
+      // Did the prior session actually contain creative work?
+      SESSION_RESTORED = !!(
+        (parsed.assistantHistory && parsed.assistantHistory.length) ||
+        parsed.step || parsed.concept || parsed.mode || parsed.title || parsed.settingType
+      );
       return {
         ...DEFAULT_STATE,
         ...parsed,
@@ -390,6 +399,7 @@ function downloadTextFile(filename: string, content: string) {
 export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const [showRestoreNotice, setShowRestoreNotice] = useState(SESSION_RESTORED);
   const [favourites, setFavourites] = useState<Record<string, string[]>>(loadFavourites);
 
   useEffect(() => {
@@ -1184,6 +1194,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
     setResponseTruncated(false);
     setReadyToAdvance(false);
     setShowSettings(false);
+    setShowRestoreNotice(false);
     try { window.sessionStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
     triggerToast("New project started — your provider, keys & favourites were kept.", "info");
   };
@@ -1255,6 +1266,13 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
             <MessageSquare className="w-5 h-5" />
           </button>
           <button
+            onClick={startNewProject}
+            title="Start a new project — clears the current story & chat (keeps your provider, keys & favourites)"
+            className="flex px-2 sm:px-3 py-2 border border-[#f43f5e]/40 text-[#f43f5e] rounded-md items-center gap-1.5 text-[10px] font-black uppercase tracking-widest hover:bg-[#f43f5e]/10 hover:border-[#f43f5e]/60 transition-all"
+          >
+            <RefreshCw className="w-4 h-4 sm:w-3.5 sm:h-3.5" /> <span className="hidden sm:inline">New</span>
+          </button>
+          <button
             onClick={() => setShowHelp(true)}
             title="How this works · getting API keys · local models"
             className={`p-2 hover:bg-white/5 rounded-md transition-all ${showHelp ? 'bg-accent/10 border border-accent/30' : ''}`}
@@ -1286,6 +1304,41 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
           </button>
         </div>
       </header>
+
+      {/* Resumed-session notice — prevents unknowingly continuing an old story */}
+      <AnimatePresence>
+        {showRestoreNotice && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="bg-[#fbbf24]/10 border-b border-[#fbbf24]/30 overflow-hidden z-40"
+          >
+            <div className="px-4 lg:px-6 py-2.5 flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-2 min-w-0">
+                <AlertTriangle className="w-4 h-4 text-[#fbbf24] shrink-0" />
+                <p className="text-[11px] sm:text-xs text-[#fbbf24] font-medium leading-snug">
+                  <span className="font-black uppercase tracking-wide">Resuming a saved session.</span> You're continuing a previous story{state.title ? ` ("${state.title}")` : ""} — the AI still has its earlier chat as context. Starting something new? Click <span className="font-black">New Project</span>.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={startNewProject}
+                  className="px-3 py-1.5 bg-[#fbbf24] text-black rounded-md text-[10px] font-black uppercase tracking-widest hover:bg-[#fbbf24]/80 transition-all flex items-center gap-1.5"
+                >
+                  <RefreshCw className="w-3 h-3" /> New Project
+                </button>
+                <button
+                  onClick={() => setShowRestoreNotice(false)}
+                  className="px-3 py-1.5 border border-[#fbbf24]/40 text-[#fbbf24] rounded-md text-[10px] font-black uppercase tracking-widest hover:bg-[#fbbf24]/10 transition-all"
+                >
+                  Keep working
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <main className="flex-1 flex overflow-hidden relative">
         {/* Sidebar Navigation */}
@@ -1882,14 +1935,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                 </div>
               </div>
 
-              <div className="mt-10 pt-8 border-t border-border flex justify-between items-center gap-4">
-                <button
-                  onClick={startNewProject}
-                  title="Clear the current story, chat & deliverables (keeps your provider, keys & favourites)"
-                  className="px-4 py-2.5 border border-[#f43f5e]/30 text-[#f43f5e] rounded-lg text-[10px] font-black uppercase tracking-[0.2em] hover:bg-[#f43f5e]/10 hover:border-[#f43f5e]/50 transition-all flex items-center gap-2"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" /> New Project
-                </button>
+              <div className="mt-10 pt-8 border-t border-border flex justify-end">
                 <button
                   onClick={() => setShowSettings(false)}
                   className="px-8 py-2.5 bg-accent text-black rounded-lg text-xs font-black uppercase tracking-[0.2em] hover:bg-white transition-all shadow-xl shadow-accent/20"
