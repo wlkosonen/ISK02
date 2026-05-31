@@ -1163,6 +1163,31 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
     triggerToast(`✓ Captured to package: ${label}`, "ui-to-ai");
   };
 
+  // Start fresh: wipe the story, chat and captured deliverables, but KEEP the
+  // provider, API keys and favourites so testing/new stories don't re-enter them.
+  const startNewProject = () => {
+    if (!window.confirm("Start a new project? This clears the current story, chat, and captured deliverables. Your provider, API keys, and favourite models are kept.")) return;
+    setState(s => ({
+      ...DEFAULT_STATE,
+      aiProvider: s.aiProvider,
+      modelSettings: s.modelSettings,
+    }));
+    setLastSyncedState({
+      mode: null, heatLevel: 1, isDMOnly: false, concept: "", settingType: "", tone: "",
+      artStyle: "Anime/VN Style", imageService: "Midjourney",
+      palette: ["#1a1a24", "#f8f8f8", "#14b8a6", "#f43f5e", "#fbbf24"],
+      aestheticMode: "Structured", groundingRules: "", title: "",
+      tokenBudgetMin: 7000, tokenBudgetMax: 10000, budgetTierMode: false,
+      capOverrides: { promptPlot: false, guidelines: false, reminders: false, characters: false },
+      step: 0
+    });
+    setResponseTruncated(false);
+    setReadyToAdvance(false);
+    setShowSettings(false);
+    try { window.sessionStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+    triggerToast("New project started — your provider, keys & favourites were kept.", "info");
+  };
+
   // SNAPSHOT: instant, no AI call. Saves a full human-readable backup of the
   // session — the deskstate parameters AND the entire collaboration transcript.
   const saveSnapshot = () => {
@@ -1857,8 +1882,15 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                 </div>
               </div>
 
-              <div className="mt-10 pt-8 border-t border-border flex justify-end">
-                <button 
+              <div className="mt-10 pt-8 border-t border-border flex justify-between items-center gap-4">
+                <button
+                  onClick={startNewProject}
+                  title="Clear the current story, chat & deliverables (keeps your provider, keys & favourites)"
+                  className="px-4 py-2.5 border border-[#f43f5e]/30 text-[#f43f5e] rounded-lg text-[10px] font-black uppercase tracking-[0.2em] hover:bg-[#f43f5e]/10 hover:border-[#f43f5e]/50 transition-all flex items-center gap-2"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" /> New Project
+                </button>
+                <button
                   onClick={() => setShowSettings(false)}
                   className="px-8 py-2.5 bg-accent text-black rounded-lg text-xs font-black uppercase tracking-[0.2em] hover:bg-white transition-all shadow-xl shadow-accent/20"
                 >
