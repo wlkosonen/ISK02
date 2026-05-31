@@ -83,11 +83,12 @@ const STEPS = [
   "World Grounding",
   "Title & Summary",
   "Plot Card",
+  "Character Sheets",
   "Scenarios",
   "Prompt Plot",
-  "Character Sheets",
+  "Guidelines",
+  "Reminders",
   "First Message",
-  "Guidelines & Reminders",
   "Image Prompts",
   "Compliance & Assembly"
 ];
@@ -167,13 +168,14 @@ Follow the pipeline build order rigorously. Do not skip or combine steps unless 
 - STEP 6 (World Grounding): Establish the rules using DO NOT / INSTEAD framework. Pair every prohibition with a replacement behavior.
 - STEP 7 (Title & Summary): Propose 3 titles. Write one 20-word Plot Summary + 20-word character summaries.
 - STEP 8 (Plot Card): Code the Plot Card HTML cleanly.
-- STEP 9 (Scenarios): Design 2-3 scenario entry points (Witness, Eavesdropper, Stumbler) and the 9 Three-Act Hooks.
-- STEP 10 (Prompt Plot): Output the Performer instructions + include the Architect Protocol block verbatim.
-- STEP 11 (Character Sheets): Design Part A (HTML card) and Part B (AI prompt description) for EVERY character. 1500w max for primary, 800w for supporting. Use G1itzh 4-trait core (3 surface clustering + 1 disruptor), physical/clothing specifications, speech & mannerisms, and wants/needs.
-- STEP 12 (First Message): Write the authored openings for each scenario (300-500w).
-- STEP 13 (Guidelines & Reminders): 15+ Guidelines (with DO NOT / INSTEAD patterns & Social Web map) + 10 Reminders (starting with the North Star emotional target).
-- STEP 14 (Image Prompts): Portrait + Cover + Title Edit + Cover Video + 10 Emotion Edits per character + Location prompts.
-- STEP 15 (Compliance & Assembly): Final compilation of all blocks.
+- STEP 9 (Character Sheets): Design Part A (HTML card) and Part B (AI prompt description) for EVERY character. 1500w max for primary, 800w for supporting. Use G1itzh 4-trait core (3 surface clustering + 1 disruptor), physical/clothing specifications, speech & mannerisms, and wants/needs.
+- STEP 10 (Scenarios): Design 2-3 scenario entry points (Witness, Eavesdropper, Stumbler) and the 9 Three-Act Hooks.
+- STEP 11 (Prompt Plot): Output the Performer instructions + include the Architect Protocol block verbatim.
+- STEP 12 (Guidelines): 15+ Guidelines detailing positive directives and negative constraints. **Guidelines MUST integrate the DO NOT/INSTEAD rulesets defined in World Grounding**.
+- STEP 13 (Reminders): 10+ prioritized Reminders (starting with the North Star emotional target).
+- STEP 14 (First Message): Write the authored openings for each scenario (300-500w).
+- STEP 15 (Image Prompts): Portrait + Cover + Title Edit + Cover Video + 10 Emotion Edits per character + Location prompts.
+- STEP 16 (Compliance & Assembly): Final compilation of all blocks.
 
 ================================================================================
 COOPERATIVE AUTO-ADVANCE PROTOCOL
@@ -222,6 +224,37 @@ export default function App() {
     window.addEventListener('resize', checkScreen);
     return () => window.removeEventListener('resize', checkScreen);
   }, []);
+
+  const [lastSyncedState, setLastSyncedState] = useState({
+    mode: null as Mode | null,
+    heatLevel: 1 as HeatLevel,
+    isDMOnly: false,
+    concept: "",
+    settingType: "",
+    tone: "",
+    artStyle: "Anime/VN Style",
+    imageService: "Midjourney",
+    palette: ["#1a1a24", "#f8f8f8", "#14b8a6", "#f43f5e", "#fbbf24"],
+    aestheticMode: "Structured" as "Literary" | "Structured" | "Chaos",
+    groundingRules: "",
+    title: "",
+    step: 0
+  });
+
+  const [toast, setToast] = useState<{ message: string; type: "ai-to-ui" | "ui-to-ai" | "info" } | null>(null);
+
+  const triggerToast = (message: string, type: "ai-to-ui" | "ui-to-ai" | "info") => {
+    setToast({ message, type });
+  };
+
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => {
+        setToast(null);
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
 
   const [state, setState] = useState<StoryState>({
     step: 0,
@@ -379,6 +412,70 @@ export default function App() {
 
   const isInterfaceMode = state.step >= 6;
 
+  const isSyncNeeded = 
+    state.mode !== lastSyncedState.mode ||
+    state.heatLevel !== lastSyncedState.heatLevel ||
+    state.isDMOnly !== lastSyncedState.isDMOnly ||
+    state.concept !== lastSyncedState.concept ||
+    state.settingType !== lastSyncedState.settingType ||
+    state.tone !== lastSyncedState.tone ||
+    state.artStyle !== lastSyncedState.artStyle ||
+    state.palette.join(",") !== lastSyncedState.palette.join(",") ||
+    state.aestheticMode !== lastSyncedState.aestheticMode ||
+    state.groundingRules !== lastSyncedState.groundingRules ||
+    state.title !== lastSyncedState.title ||
+    state.step !== lastSyncedState.step;
+
+  const syncDeskstateToAI = () => {
+    const updatedFields: string[] = [];
+    if (state.mode !== lastSyncedState.mode) updatedFields.push(`Mode: ${state.mode || "None"}`);
+    if (state.heatLevel !== lastSyncedState.heatLevel) updatedFields.push(`Heat: ${state.heatLevel}`);
+    if (state.isDMOnly !== lastSyncedState.isDMOnly) updatedFields.push(`Trace Strategy: ${state.isDMOnly ? "Dungeon_Mind" : "Full_Story_Package"}`);
+    if (state.concept !== lastSyncedState.concept) updatedFields.push(`Narrative Seed modified`);
+    if (state.settingType !== lastSyncedState.settingType) updatedFields.push(`Setting: ${state.settingType || "None"}`);
+    if (state.tone !== lastSyncedState.tone) updatedFields.push(`Tone: ${state.tone || "None"}`);
+    if (state.artStyle !== lastSyncedState.artStyle) updatedFields.push(`Style: ${state.artStyle}`);
+    if (state.palette.join(",") !== lastSyncedState.palette.join(",")) updatedFields.push(`Visual Palette updated`);
+    if (state.aestheticMode !== lastSyncedState.aestheticMode) updatedFields.push(`Aesthetic Mode: ${state.aestheticMode}`);
+    if (state.groundingRules !== lastSyncedState.groundingRules) updatedFields.push(`Grounding Rules modified`);
+    if (state.title !== lastSyncedState.title) updatedFields.push(`Title: ${state.title || "Untitled"}`);
+    if (state.step !== lastSyncedState.step) updatedFields.push(`Moved to Step: ${state.step + 1} (${STEPS[state.step]})`);
+
+    setLastSyncedState({
+      mode: state.mode,
+      heatLevel: state.heatLevel,
+      isDMOnly: state.isDMOnly,
+      concept: state.concept,
+      settingType: state.settingType,
+      tone: state.tone,
+      artStyle: state.artStyle,
+      palette: [...state.palette],
+      aestheticMode: state.aestheticMode,
+      groundingRules: state.groundingRules,
+      title: state.title,
+      step: state.step
+    });
+
+    triggerToast(`Workspace parameters synced to collaborator!`, "ui-to-ai");
+
+    const syncPrompt = `[SYSTEM ACTION - MANUAL STATE SYNCED]
+The user updated the workspace deskstate. Here are the current parameters in real-time:
+- Active Step: Step ${state.step + 1} ("${STEPS[state.step]}")
+- Narrative Mode: ${state.mode || "Pending Selection"} (${state.isDMOnly ? "Dungeon Mind Trace" : "Full Story Package"})
+- Thermal Heat Level: ${state.heatLevel}/5
+- Setting Type Classification: ${state.settingType || "Not established"}
+- Architectural Tone: ${state.tone || "Not established"}
+- Visual Art Style: ${state.artStyle} (${state.aestheticMode} approach)
+- Chromatic HEX Palette: [${state.palette.join(', ')}]
+- Narrative Premise Seed: "${state.concept || "(Empty)"}"
+- Reality Protocols: "${state.groundingRules || "(None)"}"
+- Draft Title: "${state.title || "Untitled"}"
+
+Please acknowledge these updated options, explicitly address the modified parameters (${updatedFields.length > 0 ? updatedFields.join(', ') : 'no key differences'}), and guide the creator forward on Step ${state.step + 1} ("${STEPS[state.step]}").`;
+
+    askAssistant(syncPrompt);
+  };
+
   const nextStep = () => setState(prev => ({ ...prev, step: Math.min(prev.step + 1, STEPS.length - 1) }));
   const prevStep = () => setState(prev => ({ ...prev, step: Math.max(prev.step - 1, 0) }));
 
@@ -417,6 +514,28 @@ CURRENT WORKSHOP DESKSTATE (COLLABORATOR SYNC CONTEXT)
 - Reality Protocols / Grounding Rules: 
 ${state.groundingRules || "No strict rules established yet."}
 
+================================================================================
+REAL-TIME UI SYNCHRONIZATION COMMANDS
+================================================================================
+You have direct, two-way control over the workshop UI. Whenever you want to suggest, lock in, or update a setting so the user sees it immediately on their screen, include any of the following tags anywhere in your response. The engine will parse them out and update the React State in real-time, preventing the user from needing to copy-paste:
+
+✦ [SET_MODE: SFW] or [SET_MODE: NSFW]
+✦ [SET_HEAT: <1-5>]
+✦ [SET_SETTING: <Setting Name>] (e.g., [SET_SETTING: Fantasy / High Fantasy] or [SET_SETTING: Isekai] or [SET_SETTING: Post-Apocalyptic / Survival])
+✦ [SET_TITLE: <Title Text>]
+✦ [SET_CONCEPT: <Concept Text>]
+✦ [SET_TONE: <Tone Text>]
+✦ [SET_RULES: <Grounding Rules Text>]
+✦ [SET_PALETTE: #HEX1, #HEX2, #HEX3, #HEX4, #HEX5]
+✦ [SET_AESTHETIC: Literary] or [SET_AESTHETIC: Structured] or [SET_AESTHETIC: Chaos]
+✦ [SET_ART_STYLE: <Style>] (e.g., [SET_ART_STYLE: Classic Oil Painting])
+
+Example use in your reply:
+"We've locked in our visual identity! Let me update the palette and system approach:
+[SET_PALETTE: #0C0F12, #E2E8F0, #14B8A6, #F43F5E, #E2E8F0]
+[SET_AESTHETIC: Structured]
+What do you think of this visual approach?"
+
 DIAGNOSTIC WORKSHOP RESPONSE MANDATE:
 1. Actively guide and collaborate with the user *exclusively* on the deliverables for the CURRENT STEP: "${STEPS[state.step]}". Use discussion, suggestions, and drafts.
 2. DO NOT perform the story, write character dialogue, or introduce simulated turns like "What do you do, Hunter?". You are the co-author, not the player!
@@ -433,11 +552,97 @@ DIAGNOSTIC WORKSHOP RESPONSE MANDATE:
       
       if (data.text) {
         const assistantMessage: Message = { role: "assistant", content: data.text };
-        setState(s => ({
-          ...s,
-          assistantHistory: [...s.assistantHistory, assistantMessage],
-          isAssistantLoading: false
-        }));
+        
+        // Match tag functions for AI-to-UI Sync in real-time
+        const updates: any = {};
+        const toastMsgs: string[] = [];
+
+        const modeMatch = data.text.match(/\[SET_MODE:\s*(SFW|NSFW)\]/i);
+        if (modeMatch) {
+          updates.mode = modeMatch[1].toUpperCase() as Mode;
+          toastMsgs.push(`Mode: ${updates.mode}`);
+        }
+
+        const heatMatch = data.text.match(/\[SET_HEAT:\s*([1-5])\]/i);
+        if (heatMatch) {
+          updates.heatLevel = parseInt(heatMatch[1], 10) as HeatLevel;
+          toastMsgs.push(`Heat: ${updates.heatLevel}/5`);
+        }
+
+        const titleMatch = data.text.match(/\[SET_TITLE:\s*([^\]\n]+)\]/i);
+        if (titleMatch) {
+          updates.title = titleMatch[1].trim();
+          toastMsgs.push(`Title: "${updates.title}"`);
+        }
+
+        const conceptMatch = data.text.match(/\[SET_CONCEPT:\s*([^\]]+)\]/i);
+        if (conceptMatch) {
+          updates.concept = conceptMatch[1].trim();
+          toastMsgs.push("Premise Concept");
+        }
+
+        const settingMatch = data.text.match(/\[SET_SETTING:\s*([^\]\n]+)\]/i);
+        if (settingMatch) {
+          updates.settingType = settingMatch[1].trim();
+          toastMsgs.push(`Setting: ${updates.settingType}`);
+        }
+
+        const toneMatch = data.text.match(/\[SET_TONE:\s*([^\]\n]+)\]/i);
+        if (toneMatch) {
+          updates.tone = toneMatch[1].trim();
+          toastMsgs.push(`Tone: ${updates.tone}`);
+        }
+
+        const rulesMatch = data.text.match(/\[SET_RULES:\s*([^\]]+)\]/i);
+        if (rulesMatch) {
+          updates.groundingRules = rulesMatch[1].trim();
+          toastMsgs.push("Reality Protocols");
+        }
+
+        const aestheticMatch = data.text.match(/\[SET_AESTHETIC:\s*(Literary|Structured|Chaos)\]/i);
+        if (aestheticMatch) {
+          const modeVal = aestheticMatch[1].trim();
+          updates.aestheticMode = (modeVal.charAt(0).toUpperCase() + modeVal.slice(1).toLowerCase()) as any;
+          toastMsgs.push(`Aesthetic: ${updates.aestheticMode}`);
+        }
+
+        const artStyleMatch = data.text.match(/\[SET_ART_STYLE:\s*([^\]\n]+)\]/i);
+        if (artStyleMatch) {
+          updates.artStyle = artStyleMatch[1].trim();
+          toastMsgs.push(`Art Style: ${updates.artStyle}`);
+        }
+
+        const paletteMatch = data.text.match(/\[SET_PALETTE:\s*([^\]]+)\]/i);
+        if (paletteMatch) {
+          const colors = paletteMatch[1].split(",").map((c: string) => c.trim()).filter((c: string) => c.startsWith("#") && (c.length === 7 || c.length === 4));
+          if (colors.length >= 3) {
+            updates.palette = colors;
+            toastMsgs.push("Palette Config");
+          }
+        }
+
+        setState(s => {
+          const nextState = {
+            ...s,
+            ...updates,
+            assistantHistory: [...s.assistantHistory, assistantMessage],
+            isAssistantLoading: false
+          };
+
+          // Update lastSyncedState for the values that were just updated by the AI,
+          // so we don't trigger the manual unsynced banner warnings
+          setLastSyncedState(ls => ({
+            ...ls,
+            ...updates,
+            step: s.step
+          }));
+
+          return nextState;
+        });
+
+        if (toastMsgs.length > 0) {
+          triggerToast(`Matrix updated parameters: ${toastMsgs.join(", ")}`, "ai-to-ui");
+        }
 
         // Detect Auto-advance trigger
         if (data.text.includes("[SYNC_PROCEED]")) {
@@ -522,9 +727,9 @@ DIAGNOSTIC WORKSHOP RESPONSE MANDATE:
               animate={{ x: 0 }}
               exit={{ x: -300 }}
               transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className={`fixed inset-y-0 left-0 w-72 border-r border-border bg-header/95 backdrop-blur-xl lg:backdrop-blur-none lg:bg-header/40 lg:relative lg:flex flex-col p-6 overflow-y-auto z-[60] lg:z-40 ${isSidebarOpen ? 'flex' : 'hidden lg:flex'}`}
+              className={`fixed inset-y-0 left-0 w-72 border-r border-border bg-header/95 backdrop-blur-xl lg:backdrop-blur-none lg:bg-header/40 lg:relative lg:flex flex-col p-6 overflow-hidden z-[60] lg:z-40 ${isSidebarOpen ? 'flex' : 'hidden lg:flex'}`}
             >
-              <div className="flex items-center justify-between lg:hidden mb-8">
+              <div className="flex items-center justify-between lg:hidden mb-8 shrink-0">
                 <div className="flex items-center gap-2">
                   <BookOpen className="w-4 h-4 text-accent" />
                   <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-accent">Navigation</h2>
@@ -537,8 +742,10 @@ DIAGNOSTIC WORKSHOP RESPONSE MANDATE:
                   <X className="w-5 h-5" />
                 </button>
               </div>
-              <div className="space-y-1.5 font-sans">
-                <h2 className="text-[10px] font-bold text-label uppercase tracking-[0.3em] mb-4 hidden lg:block">Pipeline Workflow</h2>
+              
+              <h2 className="text-[10px] font-bold text-label uppercase tracking-[0.3em] mb-4 hidden lg:block shrink-0">Pipeline Workflow</h2>
+
+              <div className="flex-1 overflow-y-auto space-y-1.5 custom-scrollbar pr-1 mb-4">
                 {STEPS.map((step, idx) => (
                   <button
                     key={step}
@@ -562,6 +769,12 @@ DIAGNOSTIC WORKSHOP RESPONSE MANDATE:
                   </button>
                 ))}
               </div>
+
+              {isInterfaceMode && (
+                <div className="border-t border-border/40 pt-4 mt-auto shrink-0">
+                  <StatusMonitor state={state} />
+                </div>
+              )}
             </motion.nav>
           )}
         </AnimatePresence>
@@ -590,7 +803,7 @@ DIAGNOSTIC WORKSHOP RESPONSE MANDATE:
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.2 }}
               >
-                {renderStep(state, setState, nextStep, askAssistant, setHoverHeatLevel, hoverHeatLevel)}
+                {renderStep(state, setState, nextStep, askAssistant, setHoverHeatLevel, hoverHeatLevel, isSyncNeeded, syncDeskstateToAI)}
               </motion.div>
             </AnimatePresence>
           </div>
@@ -651,18 +864,16 @@ DIAGNOSTIC WORKSHOP RESPONSE MANDATE:
                 />
               )}
 
-              {isInterfaceMode ? (
-                <StatusMonitor state={state} />
-              ) : (
-                <CollaboratorChat 
-                  state={state} 
-                  setState={setState} 
-                  askAssistant={askAssistant} 
-                  setIsChatOpen={setIsChatOpen}
-                  isDetached={isChatDetached}
-                  setIsDetached={setIsChatDetached}
-                />
-              )}
+              <CollaboratorChat 
+                state={state} 
+                setState={setState} 
+                askAssistant={askAssistant} 
+                setIsChatOpen={setIsChatOpen}
+                isDetached={isChatDetached}
+                setIsDetached={setIsChatDetached}
+                isSyncNeeded={isSyncNeeded}
+                syncDeskstateToAI={syncDeskstateToAI}
+              />
               {isChatDetached && (
                 <div 
                   className="absolute bottom-0 right-0 w-6 h-6 cursor-nwse-resize group flex items-center justify-center"
@@ -1058,17 +1269,53 @@ DIAGNOSTIC WORKSHOP RESPONSE MANDATE:
           </div>
         )}
       </AnimatePresence>
+
+      {/* Real-time sync notifications */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 30, scale: 0.95 }}
+            onClick={() => setToast(null)}
+            className={`fixed bottom-6 right-6 z-[120] max-w-sm p-4 rounded-xl border shadow-2xl backdrop-blur-md flex items-start gap-3 cursor-pointer transition-all hover:scale-[1.02] ${
+              toast.type === "ai-to-ui"
+                ? "bg-accent/10 border-accent/30 text-accent shadow-accent/10"
+                : toast.type === "ui-to-ai"
+                ? "bg-[#10b981]/10 border-[#10b981]/30 text-[#10b981] shadow-[#10b981]/10"
+                : "bg-card border-border text-text-main"
+            }`}
+          >
+            <div className={`p-2 rounded-lg ${
+              toast.type === "ai-to-ui" ? "bg-accent/10" : toast.type === "ui-to-ai" ? "bg-[#10b981]/10" : "bg-white/5"
+            }`}>
+              <Sparkles className="w-4 h-4" />
+            </div>
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-widest opacity-60">
+                {toast.type === "ai-to-ui" ? "AI COLLABORATOR SYNC" : toast.type === "ui-to-ai" ? "DESKSTATE SYNCHRONIZED" : "SYSTEM MESSAGE"}
+              </p>
+              <p className="text-xs font-medium mt-1 leading-relaxed text-white">
+                {toast.message}
+              </p>
+              <span className="text-[8px] font-mono opacity-30 uppercase tracking-[0.2em] mt-2 block">Click to close</span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
 
-function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDetached, setIsDetached }: { 
+function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDetached, setIsDetached, isSyncNeeded, syncDeskstateToAI }: { 
   state: StoryState, 
   setState: React.Dispatch<React.SetStateAction<StoryState>>, 
   askAssistant: (p: string) => Promise<void>,
   setIsChatOpen: (o: boolean) => void,
   isDetached?: boolean,
-  setIsDetached?: (d: boolean) => void
+  setIsDetached?: (d: boolean) => void,
+  isSyncNeeded?: boolean,
+  syncDeskstateToAI?: () => void
 }) {
   return (
     <>
@@ -1080,7 +1327,12 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
             </div>
             <div>
               <h2 className="text-[10px] font-black uppercase tracking-[0.2em] text-accent">Collaborator_Chat</h2>
-              <span className="text-[9px] font-mono text-text-dim uppercase tracking-tighter">Sync Active</span>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <span className={`inline-block w-1.5 h-1.5 rounded-full ${isSyncNeeded ? "bg-[#fbbf24] animate-pulse" : "bg-[#10b981]"}`} />
+                <span className="text-[8px] font-mono text-text-dim uppercase tracking-tighter">
+                  {isSyncNeeded ? "Settings Changed" : "Synced"}
+                </span>
+              </div>
             </div>
           </div>
         )}
@@ -1137,7 +1389,7 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
                   <div className={`w-1.5 h-1.5 rounded-full ${m.role === "assistant" ? "bg-accent" : "bg-white"}`} />
                   <span className="text-[9px] uppercase font-bold tracking-widest">{m.role === "assistant" ? "Aether_Core" : "User_Node"}</span>
                 </div>
-                <p className="whitespace-pre-wrap break-all break-words">{m.content}</p>
+                <p className="whitespace-pre-wrap break-words">{m.content}</p>
               </div>
             </div>
           ))
@@ -1156,6 +1408,22 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
       </div>
       
       <div className="p-6 border-t border-border bg-[#18181b]/80 shrink-0">
+        {isSyncNeeded && syncDeskstateToAI && (
+          <button 
+            onClick={syncDeskstateToAI}
+            className="mb-3 w-full py-2 px-3 bg-[#fbbf24]/10 hover:bg-[#fbbf24]/20 border border-[#fbbf24]/20 hover:border-[#fbbf24]/40 rounded-lg flex items-center justify-between text-left transition-all active:scale-[0.98] group"
+          >
+            <div className="flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-[#fbbf24] animate-pulse shrink-0" />
+              <span className="text-[10px] font-black uppercase tracking-wider text-[#fbbf24] truncate">
+                ✦ UI settings out of sync
+              </span>
+            </div>
+            <span className="text-[8px] font-bold text-white uppercase bg-[#fbbf24]/30 px-1.5 py-0.5 rounded font-mono group-hover:bg-[#fbbf24]/50 transition-colors shrink-0">
+              Sync ↺
+            </span>
+          </button>
+        )}
         <ChatInput onSend={askAssistant} isLoading={state.isAssistantLoading} />
         
         <div className="grid grid-cols-2 gap-3 mt-4">
@@ -1171,19 +1439,34 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
   );
 }
 
-function MainInterfaceChat({ state, askAssistant, preview }: { state: StoryState, askAssistant: (p: string) => Promise<void>, preview?: React.ReactNode }) {
+function MainInterfaceChat({ state, askAssistant, preview, isSyncNeeded, syncDeskstateToAI }: { 
+  state: StoryState, 
+  askAssistant: (p: string) => Promise<void>, 
+  preview?: React.ReactNode,
+  isSyncNeeded?: boolean,
+  syncDeskstateToAI?: () => void
+}) {
   return (
     <div className="flex flex-col gap-8 w-full">
       {preview && <div className="w-full">{preview}</div>}
       
       <div className="bg-card border border-border rounded-3xl shadow-2xl flex flex-col h-[600px] overflow-hidden">
-        <div className="p-6 border-b border-border bg-header/40 flex items-center gap-4">
-          <div className="p-2 bg-accent/10 rounded-lg">
-            <Terminal className="w-4 h-4 text-accent" />
+        <div className="p-6 border-b border-border bg-header/40 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className="p-2 bg-accent/10 rounded-lg">
+              <Terminal className="w-4 h-4 text-accent" />
+            </div>
+            <div>
+              <h3 className="text-xs font-black uppercase tracking-widest text-accent">Interface_Link Active</h3>
+              <p className="text-[10px] text-text-dim uppercase tracking-tighter">Collaborative Pipeline Stream</p>
+            </div>
           </div>
-          <div>
-            <h3 className="text-xs font-black uppercase tracking-widest text-accent">Interface_Link Active</h3>
-            <p className="text-[10px] text-text-dim uppercase tracking-tighter">Collaborative Pipeline Stream</p>
+          
+          <div className="flex items-center gap-2">
+            <span className={`inline-block w-2 h-2 rounded-full ${isSyncNeeded ? "bg-[#fbbf24] animate-pulse" : "bg-[#10b981]"}`} />
+            <span className="text-[9px] font-mono text-text-dim uppercase tracking-widest">
+              {isSyncNeeded ? "Sync Outdated" : "System Swarmed & Synced"}
+            </span>
           </div>
         </div>
 
@@ -1206,7 +1489,7 @@ function MainInterfaceChat({ state, askAssistant, preview }: { state: StoryState
                     <div className={`w-1 h-1 rounded-full ${m.role === "assistant" ? "bg-accent" : "bg-white"}`} />
                     <span className="text-[9px] uppercase font-bold tracking-[0.2em]">{m.role === "assistant" ? "Aether_Core" : "User_Node"}</span>
                   </div>
-                  <p className="whitespace-pre-wrap break-all break-words">{m.content}</p>
+                  <p className="whitespace-pre-wrap break-words">{m.content}</p>
                 </div>
               </div>
             ))
@@ -1225,6 +1508,22 @@ function MainInterfaceChat({ state, askAssistant, preview }: { state: StoryState
         </div>
 
         <div className="p-8 border-t border-border bg-header/20">
+          {isSyncNeeded && syncDeskstateToAI && (
+            <button 
+              onClick={syncDeskstateToAI}
+              className="mb-4 w-full py-3 px-4 bg-[#fbbf24]/10 hover:bg-[#fbbf24]/20 border border-[#fbbf24]/20 hover:border-[#fbbf24]/40 rounded-xl flex items-center justify-between text-left transition-all active:scale-[0.99] group shadow-[0_0_15px_rgba(251,191,36,0.05)] animate-pulse"
+            >
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-[#fbbf24] shrink-0" />
+                <span className="text-xs font-black uppercase tracking-widest text-[#fbbf24]">
+                  ✦ UI workspace settings changed
+                </span>
+              </div>
+              <span className="text-[10px] font-black text-white uppercase bg-[#fbbf24]/30 px-3 py-1 rounded font-mono group-hover:bg-[#fbbf24]/50 transition-colors">
+                PUSH CURRENT STATE TO COLLABORATOR ↺
+              </span>
+            </button>
+          )}
           <ChatInput onSend={askAssistant} isLoading={state.isAssistantLoading} variant="large" />
         </div>
       </div>
@@ -1233,101 +1532,112 @@ function MainInterfaceChat({ state, askAssistant, preview }: { state: StoryState
 }
 
 function StatusMonitor({ state }: { state: StoryState }) {
+  const [isOpen, setIsOpen] = React.useState(false);
+
   return (
-    <div className="flex flex-col h-full bg-[#18181b]">
-      <div className="p-6 border-b border-border bg-header/60 flex items-center gap-3 shrink-0">
-        <div className="p-2 bg-accent/20 rounded-lg">
-          <Zap className="w-4 h-4 text-accent" />
+    <div className="border border-border bg-[#131316]/95 rounded-2xl overflow-hidden transition-all duration-300 shadow-xl">
+      <button 
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full px-4 py-3 bg-white/5 hover:bg-white/10 flex items-center justify-between text-left border-b border-border transition-colors cursor-pointer"
+      >
+        <div className="flex items-center gap-2">
+          <Zap className={`w-3.5 h-3.5 text-accent ${isOpen ? 'animate-pulse' : ''}`} />
+          <span className="text-[10px] font-black uppercase tracking-wider text-accent">Telemetry_Feed</span>
         </div>
-        <div>
-          <h2 className="text-[10px] font-black uppercase tracking-[0.2em] text-accent">Status_Monitor</h2>
-          <span className="text-[9px] font-mono text-text-dim uppercase tracking-tighter">Telemetry Feed</span>
+        <div className="flex items-center gap-1.5 font-mono text-[8px] font-bold">
+          <span className="inline-block w-1 h-1 rounded-full bg-[#10b981] animate-pulse" />
+          <span className="text-text-dim uppercase tracking-widest">{isOpen ? "CLOSE" : "OPEN"}</span>
         </div>
-      </div>
+      </button>
 
-      <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar">
-        {/* Core Calibration */}
-        <section className="space-y-4">
-          <h3 className="text-[9px] uppercase font-black tracking-[0.3em] text-label flex items-center gap-2">
-            <div className="w-2 h-[1px] bg-accent" /> Core_Tuning
-          </h3>
-          <div className="space-y-2">
-            <div className="flex justify-between items-center text-[11px] p-3 rounded-lg border border-border bg-bg/50">
-              <span className="text-text-dim uppercase tracking-widest">Mode</span>
-              <span className={`font-black ${state.mode === 'NSFW' ? 'text-red-400' : 'text-accent'}`}>{state.mode || "PENDING"}</span>
-            </div>
-            {state.mode === 'NSFW' && (
-              <div className="flex justify-between items-center text-[11px] p-3 rounded-lg border border-border bg-bg/50">
-                <span className="text-text-dim uppercase tracking-widest">Heat_Level</span>
-                <span className="font-black text-red-500 font-mono">{state.heatLevel}</span>
+      {isOpen ? (
+        <div className="p-4 space-y-4 max-h-[320px] overflow-y-auto scrollbar-thin scrollbar-thumb-border text-[10px] leading-relaxed">
+          {/* Core Tuning */}
+          <section className="space-y-2">
+            <h3 className="text-[8px] uppercase font-black tracking-[0.2em] text-label flex items-center gap-1.5">
+              <div className="w-1.5 h-[1px] bg-accent" /> Core_Tuning
+            </h3>
+            <div className="grid grid-cols-2 gap-2 text-[10px]">
+              <div className="p-2 rounded border border-border bg-bg/50 flex flex-col">
+                <span className="text-text-dim uppercase tracking-widest text-[7px] mb-0.5">Mode</span>
+                <span className={`font-black uppercase ${state.mode === 'NSFW' ? 'text-red-400' : 'text-accent'}`}>{state.mode || "PENDING"}</span>
               </div>
-            )}
-            <div className="flex justify-between items-center text-[11px] p-3 rounded-lg border border-border bg-bg/50">
-              <span className="text-text-dim uppercase tracking-widest">Aesthetic</span>
-              <span className="font-bold text-text-main truncate max-w-[120px]">{state.artStyle}</span>
+              {state.mode === 'NSFW' && (
+                <div className="p-2 rounded border border-border bg-bg/50 flex flex-col">
+                  <span className="text-text-dim uppercase tracking-widest text-[7px] mb-0.5">Heat_Level</span>
+                  <span className="font-mono font-black text-red-500">{state.heatLevel}/5</span>
+                </div>
+              )}
+              <div className="p-2 rounded border border-border bg-bg/50 col-span-2 flex flex-col">
+                <span className="text-text-dim uppercase tracking-widest text-[7px] mb-0.5">Aesthetic_Style</span>
+                <span className="font-bold text-text-main truncate">{state.artStyle}</span>
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
 
-        {/* Narrative Anchor */}
-        <section className="space-y-4">
-          <h3 className="text-[9px] uppercase font-black tracking-[0.3em] text-label flex items-center gap-2">
-            <div className="w-2 h-[1px] bg-accent" /> Narrative_Anchor
-          </h3>
-          <div className="p-4 rounded-xl border border-border bg-bg text-[11px] space-y-3 leading-relaxed">
-            <div>
-              <span className="text-[8px] font-black uppercase text-accent/60 block mb-1">Tone</span>
-              <p className="text-text-main font-medium italic">"{state.tone || 'Not Defined'}"</p>
+          {/* Narrative Anchor */}
+          <section className="space-y-2">
+            <h3 className="text-[8px] uppercase font-black tracking-[0.2em] text-label flex items-center gap-1.5">
+              <div className="w-1.5 h-[1px] bg-accent" /> Narrative_Anchor
+            </h3>
+            <div className="p-3 rounded-xl border border-border bg-bg text-[10px] space-y-2 leading-relaxed">
+              <div>
+                <span className="text-[7px] font-black uppercase text-accent/60 block mb-0.5">Tone</span>
+                <p className="text-text-main font-semibold italic">"{state.tone || 'Not Defined'}"</p>
+              </div>
+              <div>
+                <span className="text-[7px] font-black uppercase text-accent/60 block mb-0.5">Concept Summary</span>
+                <p className="text-text-dim line-clamp-3 leading-normal">{state.concept || 'Awaiting ingest...'}</p>
+              </div>
             </div>
-            <div>
-              <span className="text-[8px] font-black uppercase text-accent/60 block mb-1">Concept Summary</span>
-              <p className="text-text-dim line-clamp-4">{state.concept || 'Awaiting ingest...'}</p>
+          </section>
+
+          {/* Palette Registry */}
+          <section className="space-y-2">
+            <h3 className="text-[8px] uppercase font-black tracking-[0.2em] text-label flex items-center gap-1.5">
+              <div className="w-1.5 h-[1px] bg-accent" /> Chromatic_Registry
+            </h3>
+            <div className="flex gap-1 h-4">
+              {state.palette.map((c, i) => (
+                <div key={i} className="flex-1 rounded border border-white/5" style={{ backgroundColor: c }} title={c} />
+              ))}
             </div>
-          </div>
-        </section>
+          </section>
 
-        {/* Palette Check */}
-        <section className="space-y-4">
-          <h3 className="text-[9px] uppercase font-black tracking-[0.3em] text-label flex items-center gap-2">
-            <div className="w-2 h-[1px] bg-accent" /> Chromatic_Registry
-          </h3>
-          <div className="flex gap-1.5 h-10">
-            {state.palette.map((c, i) => (
-              <div key={i} className="flex-1 rounded-md border border-white/5" style={{ backgroundColor: c }} title={c} />
-            ))}
-          </div>
-        </section>
-
-        {/* Pipeline Progress */}
-        <section className="space-y-4">
-          <h3 className="text-[9px] uppercase font-black tracking-[0.3em] text-label flex items-center gap-2">
-            <div className="w-2 h-[1px] bg-accent" /> Pipeline_Progress
-          </h3>
-          <div className="space-y-3">
-             <div className="h-1.5 w-full bg-border rounded-full overflow-hidden">
+          {/* Pipeline Progress */}
+          <section className="space-y-2">
+            <h3 className="text-[8px] uppercase font-black tracking-[0.2em] text-label flex items-center gap-1.5">
+              <div className="w-1.5 h-[1px] bg-accent" /> Pipeline_Progress
+            </h3>
+            <div className="space-y-2">
+              <div className="h-1 w-full bg-border rounded-full overflow-hidden">
                 <div 
                   className="h-full bg-accent transition-all duration-1000 ease-out shadow-[0_0_10px_rgba(20,184,166,0.5)]" 
                   style={{ width: `${(state.step / (STEPS.length - 1)) * 100}%` }}
                 />
-             </div>
-             <div className="flex justify-between text-[8px] font-mono text-label uppercase tracking-widest font-black">
+              </div>
+              <div className="flex justify-between text-[7px] font-mono text-label uppercase tracking-widest font-black">
                 <span>Ingest</span>
                 <span>Assembly</span>
-             </div>
-          </div>
-        </section>
-      </div>
-
-      <div className="p-6 border-t border-border bg-[#18181b]/80 shrink-0">
-        <div className="p-4 rounded-xl border border-dashed border-accent/20 bg-accent/5">
-          <p className="text-[10px] text-accent font-black uppercase tracking-widest leading-relaxed">
-            [STATUS: SYSTEM_SYNC_ESTABLISHED]
-          </p>
-          <p className="text-[9px] text-text-dim mt-1 italic">
-            LLM is currently calibrating narrative weights based on established parameters.
-          </p>
+              </div>
+            </div>
+          </section>
         </div>
-      </div>
+      ) : (
+        /* Collapsed minimal row */
+        <div className="px-4 py-3 flex justify-between items-center text-[9px] font-mono text-text-dim bg-white/[0.01]">
+          <div className="flex items-center gap-1">
+            <span className="text-accent/60 font-bold">MODE:</span>
+            <span className={`font-black uppercase ${state.mode === 'NSFW' ? 'text-red-400' : 'text-accent'}`}>{state.mode || "PENDING"}</span>
+          </div>
+          <div className="flex items-center gap-1 overflow-hidden">
+            <span className="text-accent/60 font-bold">STYLE:</span>
+            <span className="text-text-main font-semibold truncate max-w-[80px]" title={state.artStyle}>
+              {state.artStyle.replace(" Style", "").replace("/VN", "")}
+            </span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1382,7 +1692,166 @@ function ChatScrollAnchor({ history, isLoading }: { history: any[], isLoading?: 
   return <div ref={anchorRef} className="h-px w-full shrink-0" />;
 }
 
-function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAction<StoryState>>, next: () => void, askAssistant: (p: string) => Promise<void>, setHoverHeatLevel?: (lvl: HeatLevel | null) => void, hoverHeatLevel?: HeatLevel | null) {
+function LockedStepsSummary({ state }: { state: StoryState }) {
+  const rules = state.groundingRules || "";
+  const lines = rules.split('\n').filter(l => l.trim().length > 0);
+  const parsedRules: { protocol?: string; type: "DO_NOT" | "INSTEAD" | "OTHER"; text: string }[] = [];
+  
+  lines.forEach(line => {
+    const protocolMatch = line.match(/^\[?(PROTOCOL_\d+|RULE_\d+|LAW_\d+)?\]?\s*(.*)$/i);
+    const protocol = protocolMatch ? protocolMatch[1] : undefined;
+    const bodyField = protocolMatch ? protocolMatch[2] : line;
+    
+    if (bodyField.toUpperCase().includes("DO NOT")) {
+      parsedRules.push({
+        protocol,
+        type: "DO_NOT",
+        text: bodyField.replace(/DO NOT/i, "").trim().replace(/^:\s*/, "")
+      });
+    } else if (bodyField.toUpperCase().includes("INSTEAD")) {
+      parsedRules.push({
+        protocol,
+        type: "INSTEAD",
+        text: bodyField.replace(/INSTEAD/i, "").trim().replace(/^:\s*/, "")
+      });
+    } else {
+      parsedRules.push({
+        protocol,
+        type: "OTHER",
+        text: bodyField.trim()
+      });
+    }
+  });
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-header/40 border border-border/60 p-6 rounded-3xl space-y-4 shadow-xl">
+        <div className="flex items-center justify-between border-b border-border/40 pb-4">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-accent animate-pulse" />
+            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-accent">Aether_Integration_Matrix</span>
+          </div>
+          <span className="inline-flex items-center gap-1 text-[8px] font-mono font-bold uppercase text-[#10b981] bg-[#10b981]/10 px-2.5 py-1 rounded-full border border-[#10b981]/20">
+            <span className="w-1.5 h-1.5 rounded-full bg-[#10b981] animate-pulse" />
+            Integrity_Calibrated
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Bento Cell 1: Project Identity */}
+          <div className="p-4 rounded-2xl bg-white/[0.01] border border-border/40 flex flex-col justify-between hover:border-accent/10 transition-colors">
+            <div className="space-y-1">
+              <span className="text-[8px] font-mono font-black text-text-dim uppercase tracking-widest block">Primary_Stamp</span>
+              <h4 className="text-sm font-black uppercase tracking-tight text-text-main truncate" title={state.title || "Untitled Project"}>
+                {state.title || "Untitled Project"}
+              </h4>
+            </div>
+            <div className="flex gap-1.5 mt-3 flex-wrap">
+              <span className="text-[7px] font-bold bg-accent/10 border border-accent/20 text-accent px-1.5 py-0.5 rounded uppercase font-mono">
+                {state.settingType || "No Setting"}
+              </span>
+              <span className="text-[7px] font-bold bg-white/5 border border-white/5 text-text-muted px-1.5 py-0.5 rounded uppercase font-mono truncate max-w-[120px]">
+                {state.tone || "Neutral"}
+              </span>
+            </div>
+          </div>
+
+          {/* Bento Cell 2: Compliance Calibration */}
+          <div className="p-4 rounded-2xl bg-white/[0.01] border border-border/40 flex flex-col justify-between hover:border-accent/10 transition-colors">
+            <div className="space-y-1">
+              <span className="text-[8px] font-mono font-black text-text-dim uppercase tracking-widest block">Compliance_Mode</span>
+              <div className="flex items-center gap-1.5 mt-1">
+                <span className={`text-[8px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                  state.mode === 'NSFW' 
+                    ? 'bg-red-500/10 text-red-400 border border-red-500/20' 
+                    : 'bg-accent/10 text-accent border border-accent/20'
+                }`}>
+                  {state.mode || "PENDING"}
+                </span>
+                {state.mode === 'NSFW' && (
+                  <span className="text-[8px] font-mono font-bold text-red-400">
+                    HL::{state.heatLevel}/5
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-1 h-3 mt-3">
+              {state.palette && state.palette.map((c, i) => (
+                <div key={i} className="flex-1 h-full rounded border border-white/5" style={{ backgroundColor: c }} title={c} />
+              ))}
+            </div>
+          </div>
+
+          {/* Bento Cell 3: Persona Roster */}
+          <div className="p-4 rounded-2xl bg-white/[0.01] border border-border/40 flex flex-col justify-between hover:border-accent/10 transition-colors">
+            <div className="space-y-1">
+              <span className="text-[8px] font-mono font-black text-text-dim uppercase tracking-widest block">Persona_Registry</span>
+              <div className="text-xs text-text-main font-bold mt-1 max-h-[48px] overflow-hidden">
+                {state.characters && state.characters.length > 0 ? (
+                  <div className="flex flex-wrap gap-1">
+                    {state.characters.slice(0, 3).map((char, idx) => (
+                      <span key={idx} className="text-[7px] font-mono bg-white/5 px-1 py-0.5 rounded border border-white/5 uppercase truncate max-w-[70px]">
+                        {char.name || char}
+                      </span>
+                    ))}
+                    {state.characters.length > 3 && (
+                      <span className="text-[7px] font-mono bg-white/5 px-1 py-0.5 rounded text-accent">+{state.characters.length - 3}</span>
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex gap-1.5 pt-0.5">
+                    <span className="text-[7px] font-mono bg-white/5 px-1.5 py-0.5 rounded border border-white/5 uppercase text-accent/80">
+                      LYRA_VAHN
+                    </span>
+                    <span className="text-[7px] font-mono bg-white/5 px-1.5 py-0.5 rounded border border-white/5 uppercase text-text-dim">
+                      KAELEN_SHADOW
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+            <span className="text-[7px] font-mono font-semibold text-text-muted mt-2 tracking-tight block">
+              Total index Cast: {state.characters?.length || 2} registered
+            </span>
+          </div>
+        </div>
+
+        {/* Premise & Grounding Cell */}
+        {(state.concept || parsedRules.length > 0) && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+            {state.concept && (
+              <div className="p-4 rounded-xl bg-bg/20 border border-border/40 space-y-2">
+                <span className="text-[8px] font-mono font-black text-text-dim uppercase tracking-widest block">Ingested_Concept_Matrix</span>
+                <p className="text-[10px] leading-relaxed text-text-muted line-clamp-2 italic">
+                  "{state.concept}"
+                </p>
+              </div>
+            )}
+            {parsedRules.length > 0 && (
+              <div className="p-4 rounded-xl bg-bg/20 border border-border/40 space-y-2">
+                <span className="text-[8px] font-mono font-black text-text-dim uppercase tracking-widest block">Active_Grounding_Rulesets</span>
+                <div className="space-y-1">
+                  {parsedRules.slice(0, 2).map((rule, idx) => (
+                    <div key={idx} className="flex gap-1.5 items-center text-[10px]">
+                      <span className={`text-[6px] font-black px-1 rounded uppercase shrink-0 ${
+                        rule.type === 'DO_NOT' ? 'bg-red-400/10 text-red-400' : 'bg-emerald-400/10 text-emerald-400'
+                      }`}>
+                        {rule.type}
+                      </span>
+                      <span className="text-text-muted font-mono truncate text-[9px]">{rule.text}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAction<StoryState>>, next: () => void, askAssistant: (p: string) => Promise<void>, setHoverHeatLevel?: (lvl: HeatLevel | null) => void, hoverHeatLevel?: HeatLevel | null, isSyncNeeded?: boolean, syncDeskstateToAI?: () => void) {
   const HEAT_DESCRIPTIONS = {
     1: "Slow Burn / Tension Only",
     2: "Mild Intimacy / Suggestive",
@@ -2008,34 +2477,30 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
         <div className="space-y-10">
           <div className="space-y-4">
             <h2 className="text-4xl font-black uppercase tracking-tighter">Identity_Stamp</h2>
-            <p className="text-text-muted font-medium">Finalize the project name and narrative summary through the interface link.</p>
+            <p className="text-text-muted font-medium text-sm">Finalize the project name and narrative summary of the domain.</p>
           </div>
           
-          <MainInterfaceChat 
-            state={state} 
-            askAssistant={askAssistant} 
-            preview={
-              <div className="space-y-12 bg-card/30 border border-border p-8 rounded-3xl">
-                <div className="space-y-3">
-                  <label className="text-[10px] uppercase tracking-[0.2em] font-black text-accent ml-2">Story_Title</label>
-                  <input 
-                    type="text"
-                    value={state.title}
-                    onChange={(e) => setState(s => ({ ...s, title: e.target.value }))}
-                    placeholder="e.g. THE FALL OF AETHERIA"
-                    className="w-full bg-card border border-border rounded-xl p-5 text-2xl font-black uppercase tracking-tighter focus:border-accent focus:outline-none transition-all"
-                  />
-                </div>
-                <div className="space-y-3">
-                  <label className="text-[10px] uppercase tracking-[0.2em] font-black text-accent ml-2">Narrative_Summary</label>
-                  <textarea 
-                    className="w-full h-48 bg-card border border-border rounded-xl p-6 font-serif text-lg leading-relaxed focus:border-accent transition-all resize-none shadow-inner"
-                    placeholder="A recursive loop of betrayal set against the backdrop of a dying star..."
-                  />
-                </div>
-              </div>
-            }
-          />
+          <div className="space-y-12 bg-card/30 border border-border p-8 rounded-3xl">
+            <div className="space-y-3">
+              <label className="text-[10px] uppercase tracking-[0.2em] font-black text-accent ml-2">Story_Title</label>
+              <input 
+                type="text"
+                value={state.title}
+                onChange={(e) => setState(s => ({ ...s, title: e.target.value }))}
+                placeholder="e.g. THE FALL OF AETHERIA"
+                className="w-full bg-card border border-border rounded-xl p-5 text-2xl font-black uppercase tracking-tighter focus:border-accent focus:outline-none transition-all"
+              />
+            </div>
+            <div className="space-y-3">
+              <label className="text-[10px] uppercase tracking-[0.2em] font-black text-accent ml-2">Narrative_Summary</label>
+              <textarea 
+                className="w-full h-48 bg-card border border-border rounded-xl p-6 font-serif text-lg leading-relaxed focus:border-accent transition-all resize-none shadow-inner"
+                value={state.concept}
+                onChange={(e) => setState(s => ({ ...s, concept: e.target.value }))}
+                placeholder="A recursive loop of betrayal set against the backdrop of a dying star..."
+              />
+            </div>
+          </div>
         </div>
       );
 
@@ -2045,78 +2510,72 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
           <div className="flex justify-between items-end">
             <div className="space-y-4">
               <h2 className="text-4xl font-black uppercase tracking-tighter">Manifest_Card</h2>
-              <p className="text-text-muted font-medium">Visualizing the story core via dynamic Aether_Interface.</p>
+              <p className="text-text-muted font-medium text-sm">Visualizing the story core. Calibrate and adjust elements freely.</p>
             </div>
             <div className="flex gap-4">
-               <button 
-                  onClick={() => askAssistant("Generate the Plot Analysis for the Manifest Card.")}
-                  className="px-6 py-2 bg-accent/20 border border-accent/40 text-accent rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-accent/30 transition-all flex items-center gap-2"
-               >
-                 <Zap className="w-3 h-3" /> SYNC_PIPELINE
-               </button>
+              <button 
+                onClick={() => askAssistant("Generate the Plot Analysis for the Manifest Card.")}
+                className="px-6 py-2 bg-accent/20 border border-accent/40 text-accent rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-accent/30 transition-all flex items-center gap-2"
+              >
+                <Zap className="w-3 h-3" /> SYNC_PIPELINE
+              </button>
             </div>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             <div className="lg:col-span-2">
-              <MainInterfaceChat 
-                state={state} 
-                askAssistant={askAssistant} 
-                preview={
-                  <div 
-                    className={`aspect-[16/9] w-full border rounded-3xl shadow-2xl flex items-center justify-center relative overflow-hidden group transition-all duration-700 ${
-                      state.aestheticMode === "Literary" ? "font-serif border-accent/20" : 
-                      state.aestheticMode === "Chaos" ? "skew-x-1 -rotate-1 border-accent/40" : 
-                      "font-sans border-white/10"
-                    }`}
-                    style={{ backgroundColor: state.palette[0] }}
-                  >
-                    <div 
-                      className={`absolute inset-0 opacity-20 ${state.aestheticMode === 'Chaos' ? 'animate-pulse' : ''}`} 
-                      style={{ background: `linear-gradient(135deg, ${state.palette[2]} 0%, transparent 100%)` }} 
-                    />
-                    
-                    {state.aestheticMode === "Literary" && (
-                      <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: `radial-gradient(${state.palette[1]}22 1px, transparent 1px)`, backgroundSize: '20px 20px' }} />
-                    )}
+              <div 
+                className={`aspect-[16/9] w-full border rounded-3xl shadow-2xl flex items-center justify-center relative overflow-hidden group transition-all duration-700 ${
+                  state.aestheticMode === "Literary" ? "font-serif border-accent/20" : 
+                  state.aestheticMode === "Chaos" ? "skew-x-1 -rotate-1 border-accent/40" : 
+                  "font-sans border-white/10"
+                }`}
+                style={{ backgroundColor: state.palette[0] || "#18181b" }}
+              >
+                <div 
+                  className={`absolute inset-0 opacity-20 ${state.aestheticMode === 'Chaos' ? 'animate-pulse' : ''}`} 
+                  style={{ background: `linear-gradient(135deg, ${state.palette[2] || "#14b8a6"} 0%, transparent 100%)` }} 
+                />
+                
+                {state.aestheticMode === "Literary" && (
+                  <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: `radial-gradient(${(state.palette[1] || "#ffffff")}22 1px, transparent 1px)`, backgroundSize: '20px 20px' }} />
+                )}
 
-                    <div className={`text-center p-12 relative z-10 space-y-6 ${state.aestheticMode === "Literary" ? "max-w-xl" : ""}`}>
-                      <div className="absolute top-8 left-8 flex gap-4 opacity-0 group-hover:opacity-100 transition-opacity">
-                         <div className="px-3 py-1 bg-black/40 border border-white/10 rounded font-mono text-[7px] text-accent tracking-[0.2em]">HL::0${state.heatLevel}</div>
-                         <div className="px-3 py-1 bg-black/40 border border-white/10 rounded font-mono text-[7px] text-accent tracking-[0.2em]">MD::{state.mode || "PEND"}</div>
-                      </div>
-                      
-                      <div 
-                        className={`rounded-full mx-auto flex items-center justify-center relative transition-all duration-500 ${
-                          state.aestheticMode === "Literary" ? "w-16 h-16" : "w-20 h-20"
-                        }`}
-                        style={{ backgroundColor: `${state.palette[2]}33` }}
-                      >
-                        <Layout className="w-10 h-10" style={{ color: state.palette[2] }} />
-                        <div className="absolute inset-0 border-2 rounded-full animate-ping opacity-20" style={{ borderColor: state.palette[2] }} />
-                      </div>
-                      <div className="space-y-2">
-                        <h3 
-                          className={`font-black tracking-tighter uppercase transition-all ${
-                            state.aestheticMode === "Literary" ? "text-2xl italic tracking-normal" : "text-3xl"
-                          }`} 
-                          style={{ color: state.palette[1] }}
-                        >
-                          {state.title || "UNTITLED_MANIFEST"}
-                        </h3>
-                        <p className="text-sm font-mono tracking-widest uppercase" style={{ color: `${state.palette[1]}99` }}>{state.settingType || "AWAITING_SETTING"}</p>
-                      </div>
-                      <div className="h-px w-32 mx-auto" style={{ backgroundColor: `${state.palette[2]}66` }} />
-                      
-                      {state.aestheticMode === "Structured" && (
-                         <div className="grid grid-cols-3 gap-2 opacity-40">
-                            {[1,2,3].map(i => <div key={i} className="h-1 bg-accent/20 rounded" />)}
-                         </div>
-                      )}
-                    </div>
+                <div className={`text-center p-12 relative z-10 space-y-6 ${state.aestheticMode === "Literary" ? "max-w-xl" : ""}`}>
+                  <div className="absolute top-8 left-8 flex gap-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                     <div className="px-3 py-1 bg-black/40 border border-white/10 rounded font-mono text-[7px] text-accent tracking-[0.2em]">HL::0${state.heatLevel}</div>
+                     <div className="px-3 py-1 bg-black/40 border border-white/10 rounded font-mono text-[7px] text-accent tracking-[0.2em]">MD::{state.mode || "PEND"}</div>
                   </div>
-                }
-              />
+                  
+                  <div 
+                    className={`rounded-full mx-auto flex items-center justify-center relative transition-all duration-500 ${
+                      state.aestheticMode === "Literary" ? "w-16 h-16" : "w-20 h-20"
+                    }`}
+                    style={{ backgroundColor: `${(state.palette[2] || "#14b8a6")}33` }}
+                  >
+                    <Layout className="w-10 h-10" style={{ color: state.palette[2] || "#14b8a6" }} />
+                    <div className="absolute inset-0 border-2 rounded-full animate-ping opacity-20" style={{ borderColor: state.palette[2] || "#14b8a6" }} />
+                  </div>
+                  <div className="space-y-2">
+                    <h3 
+                      className={`font-black tracking-tighter uppercase transition-all ${
+                        state.aestheticMode === "Literary" ? "text-2xl italic tracking-normal" : "text-3xl"
+                      }`} 
+                      style={{ color: state.palette[1] || "#ffffff" }}
+                    >
+                      {state.title || "UNTITLED_MANIFEST"}
+                    </h3>
+                    <p className="text-xs font-mono tracking-widest uppercase" style={{ color: `${(state.palette[1] || "#ffffff")}99` }}>{state.settingType || "AWAITING_SETTING"}</p>
+                  </div>
+                  <div className="h-px w-32 mx-auto" style={{ backgroundColor: `${(state.palette[2] || "#14b8a6")}66` }} />
+                  
+                  {state.aestheticMode === "Structured" && (
+                     <div className="grid grid-cols-3 gap-2 opacity-40">
+                        {[1,2,3].map(i => <div key={i} className="h-1 bg-accent/20 rounded" />)}
+                     </div>
+                  )}
+                </div>
+              </div>
             </div>
             
             <div className="space-y-8 bg-card border border-border p-8 rounded-3xl h-fit sticky top-8">
@@ -2176,113 +2635,391 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
         </div>
       );
 
-    case 10: // Character Sheets
+    case 8: // Character Sheets
       return (
         <div className="space-y-10">
           <div className="flex justify-between items-end">
             <div className="space-y-4">
               <h2 className="text-4xl font-black uppercase tracking-tighter">Persona_Matrices</h2>
-              <p className="text-text-muted font-medium">Define the core cast through the technical 6.1 framework.</p>
+              <p className="text-text-muted font-medium text-sm">Define the core cast through the technical 6.1 framework.</p>
             </div>
           </div>
 
           <div className="grid grid-cols-1 gap-8">
-             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {[
-                  { 
-                    name: "LYRA_VAHN", 
-                    role: "PROTAGONIST", 
-                    origin: "Prime_Earth", 
-                    status: "Calibrating",
-                    stats: { resonance: "88.4%", stability: "High", thermal: "0.2" },
-                    tags: ["Technomancer", "Outcast", "Legacy"]
-                  },
-                  { 
-                    name: "KAELEN_SHADOW", 
-                    role: "ANTAGONIST", 
-                    origin: "Aetheria", 
-                    status: "Stable",
-                    stats: { resonance: "94.1%", stability: "Fractured", thermal: "0.8" },
-                    tags: ["Void-Touched", "Nobility", "Zealot"]
-                  }
-                ].map((char, i) => (
-                  <div key={i} className="bg-card border border-border p-8 rounded-3xl relative overflow-hidden group hover:border-accent/40 transition-all">
-                    <div className="absolute top-0 left-0 w-1.5 h-full bg-accent opacity-40 group-hover:opacity-100 transition-opacity" />
-                    
-                    <div className="flex justify-between items-start mb-8">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                           <div className="w-1.5 h-1.5 bg-accent rounded-full shadow-[0_0_8px_rgba(20,184,166,0.5)]" />
-                           <span className="text-[9px] font-black uppercase text-accent tracking-[0.3em]">{char.role}</span>
-                        </div>
-                        <h4 className="text-2xl font-black tracking-tighter uppercase">{char.name}</h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {[
+                { 
+                  name: "LYRA_VAHN", 
+                  role: "PROTAGONIST", 
+                  origin: "Prime_Earth", 
+                  status: "Calibrating",
+                  stats: { resonance: "88.4%", stability: "High", thermal: "0.2" },
+                  tags: ["Technomancer", "Outcast", "Legacy"]
+                },
+                { 
+                  name: "KAELEN_SHADOW", 
+                  role: "ANTAGONIST", 
+                  origin: "Aetheria", 
+                  status: "Stable",
+                  stats: { resonance: "94.1%", stability: "Fractured", thermal: "0.8" },
+                  tags: ["Void-Touched", "Nobility", "Zealot"]
+                }
+              ].map((char, i) => (
+                <div key={i} className="bg-card border border-border p-8 rounded-3xl relative overflow-hidden group hover:border-accent/40 transition-all">
+                  <div className="absolute top-0 left-0 w-1.5 h-full bg-accent opacity-40 group-hover:opacity-100 transition-opacity" />
+                  
+                  <div className="flex justify-between items-start mb-8">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                         <div className="w-1.5 h-1.5 bg-accent rounded-full shadow-[0_0_8px_rgba(20,184,166,0.5)]" />
+                         <span className="text-[9px] font-black uppercase text-accent tracking-[0.3em]">{char.role}</span>
                       </div>
-                      <div className="px-3 py-1.5 bg-header border border-border rounded-lg flex items-center gap-3">
-                        <div className={`w-1.5 h-1.5 rounded-full ${char.status === 'Calibrating' ? 'bg-yellow-400 animate-pulse' : 'bg-accent'}`} />
-                        <span className="text-[8px] font-mono font-bold uppercase tracking-widest">{char.status}</span>
-                      </div>
+                      <h4 className="text-2xl font-black tracking-tighter uppercase">{char.name}</h4>
                     </div>
-
-                    <div className="grid grid-cols-3 gap-4 mb-8">
-                       {Object.entries(char.stats).map(([key, val]) => (
-                         <div key={key} className="space-y-1 bg-header/40 p-3 rounded-xl border border-border/50">
-                            <div className="text-[7px] font-black uppercase tracking-widest text-text-dim">{key}</div>
-                            <div className="text-[10px] font-mono font-bold text-text-main">{val}</div>
-                         </div>
-                       ))}
-                    </div>
-
-                    <div className="flex flex-wrap gap-2">
-                       {char.tags.map(tag => (
-                         <span key={tag} className="px-2.5 py-1 bg-white/5 border border-white/5 rounded-full text-[8px] font-bold uppercase tracking-widest text-text-muted">
-                           {tag}
-                         </span>
-                       ))}
-                    </div>
-
-                    <div className="mt-8 pt-6 border-t border-border/50 flex justify-between items-center opacity-0 group-hover:opacity-100 transition-opacity">
-                       <span className="text-[8px] font-mono text-text-dim">UID::persona_${char.name.toLowerCase()}</span>
-                       <button className="text-[8px] font-black uppercase tracking-widest text-accent hover:underline">Edit_Profile</button>
+                    <div className="px-3 py-1.5 bg-header border border-border rounded-lg flex items-center gap-3">
+                      <div className={`w-1.5 h-1.5 rounded-full ${char.status === 'Calibrating' ? 'bg-yellow-400 animate-pulse' : 'bg-accent'}`} />
+                      <span className="text-[8px] font-mono font-bold uppercase tracking-widest">{char.status}</span>
                     </div>
                   </div>
-                ))}
-             </div>
 
-             <MainInterfaceChat 
-              state={state} 
-              askAssistant={askAssistant} 
-              preview={
-                <div className="p-10 bg-header/20 border border-border rounded-3xl border-dashed flex flex-col items-center justify-center text-center space-y-4">
-                  <div className="w-16 h-16 bg-accent/10 rounded-full flex items-center justify-center">
-                    <Users className="w-8 h-8 text-accent opacity-40" />
+                  <div className="grid grid-cols-3 gap-4 mb-8">
+                     {Object.entries(char.stats).map(([key, val]) => (
+                       <div key={key} className="space-y-1 bg-header/40 p-3 rounded-xl border border-border/50">
+                          <div className="text-[7px] font-black uppercase tracking-widest text-text-dim">{key}</div>
+                          <div className="text-[10px] font-mono font-bold text-text-main">{val}</div>
+                       </div>
+                     ))}
                   </div>
-                  <div className="space-y-2">
-                    <h3 className="text-sm font-black uppercase tracking-[0.3em]">Construct_New_Persona</h3>
-                    <p className="text-xs text-text-dim max-w-sm">Use the interface link below to define attributes, backstory, and world-resonance for your characters.</p>
+
+                  <div className="flex flex-wrap gap-2">
+                     {char.tags.map(tag => (
+                       <span key={tag} className="px-2.5 py-1 bg-white/5 border border-white/5 rounded-full text-[8px] font-bold uppercase tracking-widest text-text-muted">
+                         {tag}
+                       </span>
+                     ))}
                   </div>
-                  <button className="px-6 py-2 bg-accent/20 border border-accent/40 text-accent rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-accent/30 transition-all">
-                    INIT_PERSONA_SYNC
-                  </button>
+
+                  <div className="mt-8 pt-6 border-t border-border/50 flex justify-between items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                     <span className="text-[8px] font-mono text-text-dim">UID::persona_${char.name.toLowerCase()}</span>
+                     <button className="text-[8px] font-black uppercase tracking-widest text-accent hover:underline">Edit_Profile</button>
+                  </div>
                 </div>
-              }
-             />
+              ))}
+            </div>
+
+            <div className="p-10 bg-header/20 border border-border rounded-3xl border-dashed flex flex-col items-center justify-center text-center space-y-4">
+              <div className="w-16 h-16 bg-accent/10 rounded-full flex items-center justify-center">
+                <Users className="w-8 h-8 text-accent opacity-40" />
+              </div>
+              <div className="space-y-2">
+                <h3 className="text-sm font-black uppercase tracking-[0.3em]">Construct_New_Persona</h3>
+                <p className="text-xs text-text-dim max-w-sm">Use the pipeline chat on the sideline to define attributes, backstory, and world-resonance for your characters.</p>
+              </div>
+              <button 
+                onClick={() => askAssistant("Let's construct a new character sheet persona.")}
+                className="px-6 py-2 bg-accent/20 border border-accent/40 text-accent rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-accent/30 transition-all font-mono"
+              >
+                INIT_PERSONA_SYNC
+              </button>
+            </div>
           </div>
         </div>
       );
 
-    case 8: // Scenarios
-    case 9: // Prompt Plot
-    case 11: // First Message
-    case 12: // Guidelines & Reminders
-    case 13: // Image Prompts
-    case 14: // Compliance & Assembly
+    case 11: { // Guidelines
+      // Helper to parse rules
+      const rules = state.groundingRules || "";
+      const lines = rules.split('\n').filter(l => l.trim().length > 0);
+      const parsedRules: { protocol?: string; type: "DO_NOT" | "INSTEAD" | "OTHER"; text: string }[] = [];
+      
+      lines.forEach(line => {
+        const protocolMatch = line.match(/^\[?(PROTOCOL_\d+|RULE_\d+|LAW_\d+)?\]?\s*(.*)$/i);
+        const protocol = protocolMatch ? protocolMatch[1] : undefined;
+        const bodyField = protocolMatch ? protocolMatch[2] : line;
+        
+        if (bodyField.toUpperCase().includes("DO NOT")) {
+          parsedRules.push({
+            protocol,
+            type: "DO_NOT",
+            text: bodyField.replace(/DO NOT/i, "").trim().replace(/^:\s*/, "")
+          });
+        } else if (bodyField.toUpperCase().includes("INSTEAD")) {
+          parsedRules.push({
+            protocol,
+            type: "INSTEAD",
+            text: bodyField.replace(/INSTEAD/i, "").trim().replace(/^:\s*/, "")
+          });
+        } else {
+          parsedRules.push({
+            protocol,
+            type: "OTHER",
+            text: bodyField.trim()
+          });
+        }
+      });
+
       return (
-        <div className="space-y-10">
-          <div className="space-y-4">
-            <h2 className="text-4xl font-black uppercase tracking-tighter">{STEPS[state.step].replace(/ /g, '_')}</h2>
-            <p className="text-text-muted font-medium italic">"Architecture for this module is currently in standby. Use the direct log to collaborate with the AI."</p>
+        <div className="space-y-12 py-6 font-sans">
+          {/* Header */}
+          <div className="space-y-2">
+            <h2 className="text-4xl font-black uppercase tracking-tighter flex items-center gap-3">
+              Aether_Guidelines <span className="text-xs bg-accent/20 text-accent px-2.5 py-1 rounded font-mono uppercase tracking-widest">v2.4</span>
+            </h2>
+            <p className="text-text-muted font-medium text-sm">
+              Define the hard narrative boundaries, character-pacing standards, and structural constraints for the Performer LLM.
+            </p>
           </div>
-          <MainInterfaceChat state={state} askAssistant={askAssistant} />
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            {/* Left side: Re-injected Grounding Rules */}
+            <div className="space-y-6">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Cpu className="w-4 h-4 text-accent animate-pulse" />
+                  <span className="text-xs font-black uppercase tracking-widest text-text-main">
+                    Injected_Grounding_Rules
+                  </span>
+                </div>
+                <span className="text-[8px] bg-red-400/10 border border-red-500/20 text-red-400 font-mono px-2 py-0.5 rounded">
+                  ACTIVE_INHERITANCE
+                </span>
+              </div>
+
+              <div className="bg-card/40 border border-border p-6 rounded-3xl space-y-4 shadow-2xl">
+                <p className="text-[10px] text-text-muted leading-relaxed">
+                  The <span className="text-accent font-bold font-mono">DO_NOT / INSTEAD</span> rulesets defined in your World Grounding map are integrated directly below. These serve as narrative constraints for the generative pipeline.
+                </p>
+
+                {parsedRules.length === 0 ? (
+                  <div className="p-8 border border-dashed border-white/5 rounded-2xl text-center space-y-2">
+                    <AlertTriangle className="w-6 h-6 text-text-dim mx-auto opacity-30" />
+                    <p className="text-[10px] uppercase font-mono text-text-dim tracking-widest">No active grounding rulesets detected</p>
+                    <p className="text-[9px] text-text-muted">Return to World Grounding to initialize reality laws.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3 max-h-[400px] overflow-y-auto pr-1 cs-scrollbar">
+                    {parsedRules.map((rule, idx) => (
+                      <div 
+                        key={idx} 
+                        className={`p-4 rounded-xl border text-xs leading-relaxed transition-all ${
+                          rule.type === "DO_NOT"
+                            ? "border-red-500/10 bg-red-500/[0.02] hover:bg-red-500/[0.04]"
+                            : rule.type === "INSTEAD"
+                            ? "border-emerald-500/10 bg-emerald-500/[0.02] hover:bg-emerald-500/[0.04]"
+                            : "border-border/30 bg-bg/20"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+                          {rule.protocol && (
+                            <span className="text-[7px] font-mono font-bold bg-white/5 px-1 py-0.5 rounded opacity-60">
+                              {rule.protocol}
+                            </span>
+                          )}
+                          <span className={`text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded ${
+                            rule.type === "DO_NOT"
+                              ? "bg-red-400/20 text-red-400"
+                              : rule.type === "INSTEAD"
+                              ? "bg-emerald-400/20 text-emerald-400"
+                              : "bg-white/10 text-text-muted"
+                          }`}>
+                            {rule.type === "DO_NOT" ? "DO_NOT" : rule.type === "INSTEAD" ? "INSTEAD" : "PROTOCOL"}
+                          </span>
+                        </div>
+                        <p className="text-text-main font-mono italic text-[11px] leading-relaxed">
+                          {rule.text}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Right side: Guidelines Suggestions */}
+            <div className="space-y-6">
+              <div className="flex items-center gap-2">
+                <FileText className="w-4 h-4 text-accent" />
+                <span className="text-xs font-black uppercase tracking-widest text-text-main">
+                  Pacing & Social Alignment
+                </span>
+              </div>
+
+              <div className="bg-card hover:border-accent/30 transition-colors border border-border p-6 rounded-3xl space-y-6 shadow-2xl">
+                <div>
+                  <h4 className="text-[10px] font-black text-accent uppercase tracking-wider mb-2">Social Web & Social Map Protocols</h4>
+                  <p className="text-xs text-text-dim leading-relaxed">
+                    Guidelines dictate how the AI should pace interactions, reveal secrets, and respect the social constraints of the characters.
+                  </p>
+                </div>
+
+                <div className="space-y-3 text-[11px]">
+                  <div className="p-3 bg-white/[0.02] border border-border/40 rounded-xl space-y-1">
+                    <span className="text-[8px] font-black uppercase text-accent/60 font-mono">PACING CONTRACT</span>
+                    <p className="text-text-main leading-relaxed">
+                      "NEVER skip romantic tension or character awkwardness. Build dialogue depth by highlighting underlying micro-interactions before emotional resolution."
+                    </p>
+                  </div>
+                  <div className="p-3 bg-white/[0.02] border border-border/40 rounded-xl space-y-1">
+                    <span className="text-[8px] font-black uppercase text-accent/60 font-mono">SOCIAL MAP ALIGNMENT</span>
+                    <p className="text-text-main leading-relaxed">
+                      "Respect the social hierarchy of characters. Secret feelings, loyalty divides, and historical grudges should govern AI responses and scene developments."
+                    </p>
+                  </div>
+                </div>
+
+                <div className="pt-2">
+                  <span className="text-[8px] font-mono text-text-muted uppercase tracking-widest block mb-1">PROMPT STRUCTURE:</span>
+                  <div className="bg-bg/40 border border-border/40 font-mono text-[9px] p-3 rounded-lg leading-relaxed text-text-muted">
+                    "Under Guidelines Step, refine the 15+ interactive prompt parameters. Collaborate with building blocks inside the link stream below."
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    case 12: { // Reminders
+      return (
+        <div className="space-y-12 py-6 font-sans">
+          {/* Header */}
+          <div className="space-y-2">
+            <h2 className="text-4xl font-black uppercase tracking-tighter flex items-center gap-3">
+              Aether_Reminders <span className="text-xs bg-accent/20 text-accent px-2.5 py-1 rounded font-mono uppercase tracking-widest">v1.8</span>
+            </h2>
+            <p className="text-text-muted font-medium text-sm">
+              Construct high-intensity, prioritized reminders to prevent the Performer LLM from defaulting, breaking formatting, or self-narrating.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            {/* North Star Target */}
+            <div className="bg-card border border-border p-6 rounded-3xl relative overflow-hidden flex flex-col justify-between h-[240px] shadow-2xl">
+              <div className="absolute top-0 right-0 p-6 opacity-5">
+                <Compass className="w-24 h-24 text-accent" />
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Compass className="w-4 h-4 text-accent" />
+                  <span className="text-[10px] font-black uppercase tracking-widest text-[#fbbf24]">
+                    North_Star_Target
+                  </span>
+                </div>
+                <p className="text-xs text-text-dim leading-relaxed">
+                  Every reminder is calibrated against this central psychological compass, ensuring the AI maintains output resonance.
+                </p>
+              </div>
+
+              <div className="p-4 bg-[#fbbf24]/5 border border-[#fbbf24]/20 rounded-xl">
+                <span className="text-[8px] font-mono font-bold uppercase text-[#fbbf24] tracking-widest block mb-1">
+                  CURRENT MANDATE TONE
+                </span>
+                <p className="text-sm font-black text-white italic truncate" title={state.tone || "Not yet defined"}>
+                  "{state.tone || "AWAITING INTAKE..."}"
+                </p>
+              </div>
+            </div>
+
+            {/* Middle and Right: Reminders Cards */}
+            <div className="lg:col-span-2 bg-card border border-border p-6 rounded-3xl space-y-6 shadow-2xl">
+              <div className="flex items-center gap-2">
+                <ShieldAlert className="w-4 h-4 text-accent" />
+                <span className="text-xs font-black uppercase tracking-widest text-text-main">
+                  AI Output Safeguards (10+ Required)
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-mono">
+                <div className="p-4 bg-white/[0.01] border border-border/45 rounded-xl leading-relaxed hover:bg-white/[0.02] hover:border-accent/20 transition-all">
+                  <span className="text-[8px] font-black text-red-400 bg-red-400/10 px-1 py-0.5 rounded uppercase tracking-widest block w-fit mb-2">#01 PRIMARY RULE</span>
+                  <span className="text-text-main">NEVER narrate, speak, or take decisions for the Creator/Player character.</span>
+                </div>
+                <div className="p-4 bg-white/[0.01] border border-border/45 rounded-xl leading-relaxed hover:bg-white/[0.02] hover:border-accent/20 transition-all">
+                  <span className="text-[8px] font-black text-accent bg-accent/10 px-1 py-0.5 rounded uppercase tracking-widest block w-fit mb-2">#02 OUTPUT FORMAT</span>
+                  <span className="text-text-main">Always output character dialogue in high-contrast clean blocks with custom aesthetic colors.</span>
+                </div>
+                <div className="p-4 bg-white/[0.01] border border-border/45 rounded-xl leading-relaxed hover:bg-white/[0.02] hover:border-accent/20 transition-all">
+                  <span className="text-[8px] font-black text-accent bg-accent/10 px-1 py-0.5 rounded uppercase tracking-widest block w-fit mb-2">#03 WRITING STYLE</span>
+                  <span className="text-text-main">Avoid purple prose, cliché metaphors, and romantic generalizations.</span>
+                </div>
+                <div className="p-4 bg-white/[0.01] border border-border/45 rounded-xl leading-relaxed hover:bg-white/[0.02] hover:border-accent/20 transition-all">
+                  <span className="text-[8px] font-black text-accent bg-accent/10 px-1 py-0.5 rounded uppercase tracking-widest block w-fit mb-2">#04 EXPLICIT BOUNDS</span>
+                  <span className="text-text-main">Strictly adhere to the designated Heat Level limits {state.mode === 'NSFW' ? `(${state.heatLevel}/5)` : '(SFW Only)'} under all conditions.</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    case 9: // Scenarios
+    case 10: // Prompt Plot
+    case 13: // First Message
+    case 14: // Image Prompts
+    case 15: // Compliance & Assembly
+      return (
+        <div className="space-y-12 py-6 font-sans">
+          {/* Header */}
+          <div className="space-y-2">
+            <h2 className="text-4xl font-black uppercase tracking-tighter flex items-center gap-3">
+              {STEPS[state.step].replace(/ /g, '_')} <span className="text-xs bg-accent/20 text-accent px-2.5 py-1 rounded font-mono uppercase tracking-widest">AETHER_STREAM</span>
+            </h2>
+            <p className="text-text-muted font-medium text-sm">
+              {state.step === 9 ? "Design scenario triggers (Witness, Eavesdropper, Stumbler) and three-act narrative hooks." :
+               state.step === 10 ? "Output performer instructions and inject the verbatim Architect Protocol sequence." :
+               state.step === 13 ? "Establish high-impact entry narrative lines and authored openings for all cast segments." :
+               state.step === 14 ? "Generate style-compliant visual prompt triggers and portrait schemas for the engine." :
+               "Execute compliance matrix and build the unified compiled master prompt payload."}
+            </p>
+          </div>
+
+          {/* Locked-in Decisions Summary Panel */}
+          <LockedStepsSummary state={state} />
+
+          {/* Prompt / Interactivity Guideline Card for the Active Step */}
+          <div className="bg-card hover:border-accent/30 border border-border p-8 rounded-3xl relative overflow-hidden flex flex-col md:flex-row gap-6 items-center shadow-2xl transition-colors">
+            <div className="w-16 h-16 bg-accent/10 rounded-full flex items-center justify-center shrink-0">
+              {state.step === 9 ? <BookOpen className="w-8 h-8 text-accent opacity-80" /> :
+               state.step === 10 ? <Cpu className="w-8 h-8 text-accent opacity-80 animate-pulse" /> :
+               state.step === 13 ? <MessageSquare className="w-8 h-8 text-accent opacity-80" /> :
+               state.step === 14 ? <ImageIcon className="w-8 h-8 text-accent opacity-80" /> :
+               <Sparkles className="w-8 h-8 text-accent opacity-80 animate-bounce" />}
+            </div>
+            <div className="space-y-2 text-center md:text-left flex-1">
+              <span className="text-[8px] font-mono font-black text-accent uppercase tracking-[0.3em] block">
+                SIDELINE_COMMUNICATION_PROTOCOL :: ACTIVE
+              </span>
+              <h3 className="text-lg font-black uppercase tracking-tight">
+                {state.step === 9 ? "Orchestrate Playable Scenarios" :
+                 state.step === 10 ? "Formulate the Prompt Plot" :
+                 state.step === 13 ? "Script Dynamic Authored Openings" :
+                 state.step === 14 ? "Calibrate Image Prompts" :
+                 "Execute Final Master Build"}
+              </h3>
+              <p className="text-xs text-text-dim leading-relaxed max-w-2xl">
+                {state.step === 9 ? "Use the Collaborator Chat on your right sideline to direct scenario generation. Prompt the AI: 'Construct scenario openings for Lyra' to get styled hooks immediately." :
+                 state.step === 10 ? "Send 'Generate performant instructions for prompt map' in the sideline chat to assemble verbatim continuity protocols." :
+                 state.step === 13 ? "Instruct the AI on the right sideline: 'Write opening monologue lines for Kaelen Shadow' to draft dialogue buffers." :
+                 state.step === 14 ? "Calibrate stable diffusion seeds and descriptions: 'Draft location portrait triggers' on the sideline chat." :
+                 "The entire prompt matrix is fully prepped. Type 'Compile final master build payload' on your right sideline to package and preview."}
+              </p>
+            </div>
+            <button 
+              onClick={() => {
+                const query = state.step === 9 ? "Suggest dynamic scenario hooks matching our locked tone." :
+                              state.step === 10 ? "Structure the prompt plot instructions and include Architect Protocols." :
+                              state.step === 13 ? "Draft opening first message templates based on our premises." :
+                              state.step === 14 ? "Build detailed stable diffusion image prompts for our main cast." :
+                              "Assemble and print the finalized prompt payload for copying.";
+                askAssistant(query);
+              }}
+              className="px-6 py-3 bg-accent border border-accent text-black font-black text-[10px] uppercase tracking-widest rounded-xl hover:bg-transparent hover:text-accent transition-all shrink-0 active:scale-95"
+            >
+              TRIGGER_COHESION
+            </button>
+          </div>
         </div>
       );
 
