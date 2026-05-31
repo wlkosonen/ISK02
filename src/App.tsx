@@ -30,7 +30,10 @@ import {
   Cpu,
   ShieldAlert,
   Compass,
-  HelpCircle
+  HelpCircle,
+  RefreshCw,
+  Eye,
+  EyeOff
 } from "lucide-react";
 
 // --- Types ---
@@ -66,6 +69,8 @@ interface StoryState {
     temperature: number;
     maxTokens: number;
     ollamaBaseUrl?: string;
+    geminiApiKey?: string;
+    anthropicApiKey?: string;
   };
 }
 
@@ -170,8 +175,137 @@ export default function App() {
       model: "gemini-3-flash-preview",
       temperature: 1.0,
       maxTokens: 4096,
+      geminiApiKey: "",
+      anthropicApiKey: "",
     },
   });
+
+  const [localOllamaModels, setLocalOllamaModels] = useState<string[]>([]);
+  const [ollamaError, setOllamaError] = useState<string | null>(null);
+  const [isFetchingModels, setIsFetchingModels] = useState(false);
+  const [showGeminiKey, setShowGeminiKey] = useState(false);
+  const [showAnthropicKey, setShowAnthropicKey] = useState(false);
+
+  // Fetch initial configuration from server to get correct OLLAMA_BASE_URL default
+  useEffect(() => {
+    async function fetchConfig() {
+      try {
+        const res = await fetch("/api/config");
+        if (res.ok) {
+          const config = await res.json();
+          if (config.ollamaBaseUrl) {
+            setState(s => ({
+              ...s,
+              modelSettings: {
+                ...s.modelSettings,
+                ollamaBaseUrl: s.modelSettings.ollamaBaseUrl || config.ollamaBaseUrl
+              }
+            }));
+          }
+        }
+      } catch (err) {
+        console.warn("Could not fetch server config:", err);
+      }
+    }
+    fetchConfig();
+  }, []);
+
+  // Fetch Ollama models whenever Provider is Ollama or the base URL is changed
+  useEffect(() => {
+    if (state.aiProvider !== "ollama") return;
+
+    const controller = new AbortController();
+    let isMounted = true;
+
+    async function fetchModels() {
+      setIsFetchingModels(true);
+      setOllamaError(null);
+      const url = state.modelSettings.ollamaBaseUrl || "http://localhost:11434";
+      try {
+        let fetchedModels: string[] = [];
+        let success = false;
+        
+        // Try server-side proxy fetch first
+        try {
+          const res = await fetch(`/api/ollama/models?url=${encodeURIComponent(url)}`, {
+            signal: controller.signal
+          });
+          if (res.ok) {
+            const data = await res.json();
+            fetchedModels = data.models || [];
+            success = true;
+          } else {
+            const errorData = await res.json().catch(() => ({}));
+            console.info("Server proxy for Ollama model-fetch returned status:", res.status, errorData);
+          }
+        } catch (srvErr) {
+          console.info("Server proxy for Ollama model-fetch failed. Trying client-side fallback...");
+        }
+
+        // If server-side proxy failed, try direct browser-side fetch to local Ollama (CORS needs to be allowed)
+        if (!success) {
+          let directUrl = url;
+          if (directUrl.includes("host.docker.internal")) {
+            directUrl = directUrl.replace("host.docker.internal", "localhost");
+          }
+          const directRes = await fetch(`${directUrl}/api/tags`, {
+            signal: controller.signal
+          });
+          if (directRes.ok) {
+            const data = await directRes.json();
+            fetchedModels = (data.models || []).map((m: any) => m.name);
+            success = true;
+          } else {
+            throw new Error(`Could not connect to Ollama at ${url}. Please verify that Ollama is running ('ollama serve') and accessible.`);
+          }
+        }
+
+        if (isMounted && success) {
+          setLocalOllamaModels(fetchedModels);
+          setOllamaError(null);
+          
+          // If the currently selected model is NOT in the list of local models, 
+          // and we have local models available, auto-select the first one.
+          if (fetchedModels.length > 0) {
+            const currentModel = state.modelSettings.model;
+            // Match with or without tag
+            const hasExactModel = fetchedModels.some((m: string) => m.toLowerCase() === currentModel.toLowerCase());
+            const hasTaglessModel = fetchedModels.some((m: string) => m.split(":")[0]?.toLowerCase() === currentModel.toLowerCase());
+            
+            if (!hasExactModel && !hasTaglessModel) {
+              setState(s => ({
+                ...s,
+                modelSettings: {
+                  ...s.modelSettings,
+                  model: fetchedModels[0]
+                }
+              }));
+            }
+          }
+        }
+      } catch (err: any) {
+        if (err.name !== "AbortError" && isMounted) {
+          console.info("Error fetching Ollama models:", err);
+          setOllamaError(err.message || "Failed to connect to local Ollama daemon");
+          setLocalOllamaModels([]);
+        }
+      } finally {
+        if (isMounted) {
+          setIsFetchingModels(false);
+        }
+      }
+    }
+
+    const timeoutId = setTimeout(() => {
+      fetchModels();
+    }, 500);
+
+    return () => {
+      isMounted = false;
+      controller.abort();
+      clearTimeout(timeoutId);
+    };
+  }, [state.aiProvider, state.modelSettings.ollamaBaseUrl]);
 
   const isInterfaceMode = state.step >= 6;
 
@@ -645,27 +779,160 @@ ${state.groundingRules || "No strict rules established yet."}`
                   </div>
                 )}
 
+                {/* Gemini API Key Override */}
+                {state.aiProvider === "gemini" && (
+                  <div className="p-5 border border-accent/20 bg-accent/5 rounded-2xl space-y-4 font-sans">
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <label className="text-[10px] uppercase tracking-[0.2em] font-black text-accent">Gemini API Key (Local Override)</label>
+                        <span className="text-[8px] font-mono text-text-dim">Optional</span>
+                      </div>
+                      <div className="relative flex items-center">
+                        <input 
+                          type={showGeminiKey ? "text" : "password"}
+                          value={state.modelSettings.geminiApiKey || ""}
+                          onChange={(e) => setState(s => ({
+                            ...s,
+                            modelSettings: { ...s.modelSettings, geminiApiKey: e.target.value }
+                          }))}
+                          className="w-full bg-header/60 border border-border rounded-lg p-2 pr-9 font-mono text-xs text-text-main focus:border-accent focus:outline-none"
+                          placeholder="AI Studio API Key (e.g. AIzaSy...)"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowGeminiKey(v => !v)}
+                          className="absolute right-2.5 p-1 text-text-dim hover:text-text-main transition-colors"
+                        >
+                          {showGeminiKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                      <p className="text-[9px] text-text-dim leading-normal">
+                        💡 Key is processed server-side so it is never exposed in the browser's developer console. Leave empty to use server environment variable default.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Anthropic API Key Override */}
+                {state.aiProvider === "anthropic" && (
+                  <div className="p-5 border border-accent/20 bg-accent/5 rounded-2xl space-y-4 font-sans">
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <label className="text-[10px] uppercase tracking-[0.2em] font-black text-accent">Anthropic API Key (Local Override)</label>
+                        <span className="text-[8px] font-mono text-text-dim">Optional</span>
+                      </div>
+                      <div className="relative flex items-center">
+                        <input 
+                          type={showAnthropicKey ? "text" : "password"}
+                          value={state.modelSettings.anthropicApiKey || ""}
+                          onChange={(e) => setState(s => ({
+                            ...s,
+                            modelSettings: { ...s.modelSettings, anthropicApiKey: e.target.value }
+                          }))}
+                          className="w-full bg-header/60 border border-border rounded-lg p-2 pr-9 font-mono text-xs text-text-main focus:border-accent focus:outline-none"
+                          placeholder="Claude API Key (e.g. sk-ant-sid...)"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowAnthropicKey(v => !v)}
+                          className="absolute right-2.5 p-1 text-text-dim hover:text-text-main transition-colors"
+                        >
+                          {showAnthropicKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                      <p className="text-[9px] text-text-dim leading-normal">
+                        💡 Key is processed server-side so it is never exposed in the browser's developer console. Leave empty to use server environment variable default.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 {/* Model Selection */}
                 <div className="space-y-4">
                   <label className="text-[10px] uppercase tracking-[0.3em] font-black text-label block">Target_Model</label>
-                  <div className="grid grid-cols-1 gap-2">
-                    {PROVIDERS[state.aiProvider].models.map((m) => (
-                      <button
-                        key={m}
-                        onClick={() => setState(s => ({ 
-                          ...s, 
-                          modelSettings: { ...s.modelSettings, model: m }
-                        }))}
-                        className={`p-3 rounded-lg border text-[11px] font-mono text-left transition-all ${
-                          state.modelSettings.model === m 
-                            ? "border-accent bg-accent/5 text-accent" 
-                            : "border-border bg-bg text-text-dim hover:bg-white/5 hover:text-text-muted"
-                        }`}
-                      >
-                        {m}
-                      </button>
-                    ))}
-                  </div>
+                  
+                  {state.aiProvider === "ollama" ? (
+                    <div className="space-y-3">
+                      {isFetchingModels && (
+                        <div className="text-xs font-mono text-accent flex items-center gap-2 py-2 animate-pulse">
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          Scanning local Ollama daemon...
+                        </div>
+                      )}
+                      
+                      {ollamaError && (
+                        <div className="p-3 border border-red-500/10 bg-red-500/5 text-red-500 rounded-lg text-[10px] leading-relaxed space-y-1 font-sans">
+                          <p className="font-bold flex items-center gap-1.5 text-red-400">
+                            ⚠️ Connection Issue
+                          </p>
+                          <p className="font-mono text-[9px] bg-black/30 p-1.5 rounded">{ollamaError}</p>
+                          <p className="font-sans text-[9px] text-text-dim">
+                            Verify Ollama is running and CORS is allowed (<code className="bg-black/20 px-1 rounded">OLLAMA_ORIGINS="*"</code>). Below is a dynamic list if connected, or default options.
+                          </p>
+                        </div>
+                      )}
+                      
+                      {localOllamaModels.length > 0 ? (
+                        <div className="grid grid-cols-1 gap-2 max-h-[180px] overflow-y-auto custom-scrollbar pr-1">
+                          {localOllamaModels.map((m) => (
+                            <button
+                              key={m}
+                              onClick={() => setState(s => ({ 
+                                ...s, 
+                                modelSettings: { ...s.modelSettings, model: m }
+                              }))}
+                              className={`p-3 rounded-lg border text-[11px] font-mono text-left transition-all flex items-center justify-between ${
+                                state.modelSettings.model === m 
+                                  ? "border-accent bg-accent/5 text-accent" 
+                                  : "border-border bg-bg text-text-muted hover:bg-white/5 hover:text-text-main"
+                              }`}
+                            >
+                              <span>{m}</span>
+                              <span className="text-[8px] bg-accent/15 text-accent px-1.5 py-0.5 rounded uppercase font-bold tracking-widest font-sans">Installed</span>
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 gap-2">
+                          {PROVIDERS[state.aiProvider].models.map((m) => (
+                            <button
+                              key={m}
+                              onClick={() => setState(s => ({ 
+                                ...s, 
+                                modelSettings: { ...s.modelSettings, model: m }
+                              }))}
+                              className={`p-3 rounded-lg border text-[11px] font-mono text-left transition-all ${
+                                state.modelSettings.model === m 
+                                  ? "border-accent bg-accent/5 text-accent" 
+                                  : "border-border bg-bg text-text-dim hover:bg-white/5 hover:text-text-muted"
+                              }`}
+                            >
+                              {m}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-2">
+                      {PROVIDERS[state.aiProvider].models.map((m) => (
+                        <button
+                          key={m}
+                          onClick={() => setState(s => ({ 
+                            ...s, 
+                            modelSettings: { ...s.modelSettings, model: m }
+                          }))}
+                          className={`p-3 rounded-lg border text-[11px] font-mono text-left transition-all ${
+                            state.modelSettings.model === m 
+                              ? "border-accent bg-accent/5 text-accent" 
+                              : "border-border bg-bg text-text-dim hover:bg-white/5 hover:text-text-muted"
+                          }`}
+                        >
+                          {m}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* Parameters */}

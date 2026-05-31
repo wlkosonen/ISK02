@@ -25,6 +25,43 @@ async function startServer() {
 
   app.use(express.json());
 
+  // Configuration endpoint to expose server-side environment defaults
+  app.get("/api/config", (req, res) => {
+    res.json({
+      ollamaBaseUrl: process.env.OLLAMA_BASE_URL || "http://localhost:11434"
+    });
+  });
+
+  // Endpoint to fetch available models from local Ollama instance
+  app.get("/api/ollama/models", async (req, res) => {
+    let ollamaUrl = (req.query.url as string)?.trim() || process.env.OLLAMA_BASE_URL?.trim() || "http://localhost:11434";
+    if (ollamaUrl.endsWith("/")) {
+      ollamaUrl = ollamaUrl.slice(0, -1);
+    }
+
+    try {
+      console.log(`Checking local Ollama models on: ${ollamaUrl}/api/tags`);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000); // 4 second timeout for local lookup
+
+      const response = await fetch(`${ollamaUrl}/api/tags`, {
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`Ollama returned status ${response.status}`);
+      }
+
+      const data = await response.json() as any;
+      const models = (data.models || []).map((m: any) => m.name);
+      return res.json({ models });
+    } catch (err: any) {
+      console.info(`Could not connect to Ollama at ${ollamaUrl} to fetch models:`, err.message || err);
+      return res.status(500).json({ error: `Connection failed: ${err.message || err}` });
+    }
+  });
+
   // Unified API Route for AI assistance
   app.post("/api/assistant", async (req, res) => {
     try {
@@ -34,7 +71,7 @@ async function startServer() {
       const settings = modelSettings || {};
 
       if (aiProvider === "gemini") {
-        const apiKey = process.env.GEMINI_API_KEY;
+        const apiKey = settings.geminiApiKey?.trim() || process.env.GEMINI_API_KEY;
         if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY is not configured." });
 
         const ai = new GoogleGenAI({ 
@@ -69,7 +106,10 @@ async function startServer() {
       } 
       
       if (aiProvider === "anthropic") {
-        const anthropic = getAnthropic();
+        const anthropicApiKey = settings.anthropicApiKey?.trim() || process.env.ANTHROPIC_API_KEY;
+        if (!anthropicApiKey) return res.status(500).json({ error: "ANTHROPIC_API_KEY is not configured." });
+
+        const anthropic = new Anthropic({ apiKey: anthropicApiKey });
         
         // Convert history for Anthropic (expects strictly user/assistant alternating)
         const messages = (history || [])
@@ -131,7 +171,7 @@ async function startServer() {
           console.error("Anthropic failed completely. Falling back to Gemini:", anthropicErr);
           
           // Gemini fallback
-          const apiKey = process.env.GEMINI_API_KEY;
+          const apiKey = settings.geminiApiKey?.trim() || process.env.GEMINI_API_KEY;
           if (!apiKey) {
             throw new Error(`Anthropic error: ${anthropicErr.message || anthropicErr}. Additionally, GEMINI_API_KEY is not configured for fallback.`);
           }
