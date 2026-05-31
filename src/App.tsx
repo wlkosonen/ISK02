@@ -1445,7 +1445,7 @@ Rules:
           </div>
         </div>
         
-        <div className="hidden xs:flex gap-1 items-center">
+        <div className="hidden sm:flex gap-1 items-center">
           <div className="flex gap-1 mr-4">
             {STEPS.map((_, idx) => (
               <div 
