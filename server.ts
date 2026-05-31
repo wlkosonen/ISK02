@@ -205,7 +205,8 @@ async function startServer() {
 
           const text = result.text;
           if (!text) throw new Error("Empty response from Gemini");
-          return res.json({ text });
+          const truncated = (result as any)?.candidates?.[0]?.finishReason === "MAX_TOKENS";
+          return res.json({ text, truncated });
         } catch (geminiErr: any) {
           console.error("Gemini model call failed:", geminiErr);
           const errorDetail = geminiErr.message || JSON.stringify(geminiErr);
@@ -284,7 +285,8 @@ async function startServer() {
 
           const text = response.content[0].type === 'text' ? response.content[0].text : '';
           if (!text) throw new Error("Empty response from Anthropic");
-          return res.json({ text });
+          const truncated = response.stop_reason === "max_tokens";
+          return res.json({ text, truncated });
         } catch (anthropicErr: any) {
           console.error("Anthropic failed completely:", anthropicErr);
           
@@ -367,12 +369,13 @@ async function startServer() {
 
           const responseData = (await response.json()) as any;
           const text = responseData?.message?.content;
-          
+
           if (!text) {
             throw new Error(`No content from Ollama response: ${JSON.stringify(responseData)}`);
           }
 
-          return res.json({ text });
+          const truncated = responseData?.done_reason === "length";
+          return res.json({ text, truncated });
         } catch (ollamaErr: any) {
           console.error("Local Ollama bridge failed:", ollamaErr);
           return res.status(500).json({ 
@@ -438,7 +441,8 @@ async function startServer() {
             throw new Error(`No content from OpenRouter response: ${JSON.stringify(responseData)}`);
           }
 
-          return res.json({ text });
+          const truncated = responseData?.choices?.[0]?.finish_reason === "length";
+          return res.json({ text, truncated });
         } catch (orErr: any) {
           console.error("OpenRouter bridge failed:", orErr);
           return res.status(400).json({ error: orErr.message || String(orErr) });

@@ -480,6 +480,8 @@ export default function App() {
   // Soft advance-gate: armed when the AI signals the current step is complete
   // ([SYNC_PROCEED]). Prompts the user to advance, but never forces or blocks it.
   const [readyToAdvance, setReadyToAdvance] = useState(false);
+  // Set when the last response hit the Max_Tokens wall (finish reason = length).
+  const [responseTruncated, setResponseTruncated] = useState(false);
 
   // Disarm the gate whenever the step changes (advance / revert / sidebar jump).
   useEffect(() => { setReadyToAdvance(false); }, [state.step]);
@@ -776,6 +778,7 @@ Please acknowledge these updated options, explicitly address the modified parame
   const askAssistant = async (prompt: string) => {
     // A new turn supersedes any prior "step complete" signal until the AI re-confirms.
     setReadyToAdvance(false);
+    setResponseTruncated(false);
     // 1. Immediately update UI with user message and loading state
     const userMessage: Message = { role: "user", content: prompt };
     setState(s => ({
@@ -855,6 +858,15 @@ Rules:
 - When you revise a block, re-emit the FULL block wrapped again — the latest capture replaces the stored one.
 - One block per sentinel pair. Never nest.
 - The Prompt Plot, Guidelines, Reminders, Character descriptions (CHAR_DESC) and Player Persona count toward the token budget; keep them within the target.
+
+================================================================================
+LENGTH MANAGEMENT (AVOID TRUNCATION)
+================================================================================
+- Responses are capped by a Max_Tokens limit; if you exceed it your message is cut off mid-sentence.
+- Keep every captured <<<USCS_BLOCK>>> within the USCS §21 component caps (Prompt Plot ≤2500, Guidelines ≤3000, Reminders ≤800, each character description ≤1500 tokens) so it fits in ONE response. NEVER split a single captured block across two messages.
+- If a set is large, break it into multiple SMALLER captured blocks rather than one giant one (e.g. one CHAR_DESC per character, not all characters in one block).
+- If your conversational discussion (outside captured blocks) is genuinely long, split it into clearly labeled parts ("Part 1/N…") and continue the next part when the user asks.
+- If you are ever cut off, the user can ask you to continue; resume exactly where you stopped without repeating.
 `
         })
       });
@@ -972,6 +984,11 @@ Rules:
         if (data.text.includes("[SYNC_PROCEED]") && state.step < STEPS.length - 1) {
           setReadyToAdvance(true);
         }
+
+        // The response hit the token wall — surface a Continue affordance.
+        if (data.truncated) {
+          setResponseTruncated(true);
+        }
       } else {
         throw new Error("Empty response from matrix");
       }
@@ -983,6 +1000,12 @@ Rules:
         assistantHistory: [...s.assistantHistory, { role: "assistant", content: `ERROR_SIGNAL: ${error.message || "Unknown anomaly"}` }]
       }));
     }
+  };
+
+  // Resume a response that was cut off at the Max_Tokens wall.
+  const continueResponse = () => {
+    if (state.isAssistantLoading) return;
+    askAssistant("[CONTINUE] Your previous message was cut off at the token limit. Resume EXACTLY where you stopped — do not repeat anything already sent, just continue the text from the exact cut-off point. If you were mid-way through a <<<USCS_BLOCK>>>, finish that block and include its closing <<<END USCS_BLOCK>>> sentinel so it captures correctly.");
   };
 
   // EXPORT: compile the final ISK0 package as a MULTI-PART operation — one model
@@ -1382,6 +1405,8 @@ Rules:
                 onManualCapture={manualCapture}
                 readyToAdvance={readyToAdvance}
                 onAdvance={nextStep}
+                responseTruncated={responseTruncated}
+                onContinue={continueResponse}
               />
               {isChatDetached && (
                 <div 
@@ -1868,7 +1893,7 @@ Rules:
   );
 }
 
-function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDetached, setIsDetached, isSyncNeeded, syncDeskstateToAI, onExport, onSnapshot, isExporting, exportProgress, onManualCapture, readyToAdvance, onAdvance }: {
+function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDetached, setIsDetached, isSyncNeeded, syncDeskstateToAI, onExport, onSnapshot, isExporting, exportProgress, onManualCapture, readyToAdvance, onAdvance, responseTruncated, onContinue }: {
   state: StoryState,
   setState: React.Dispatch<React.SetStateAction<StoryState>>,
   askAssistant: (p: string) => Promise<void>,
@@ -1883,7 +1908,9 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
   exportProgress?: string,
   onManualCapture?: (key: SingleSlotKey, content: string) => void,
   readyToAdvance?: boolean,
-  onAdvance?: () => void
+  onAdvance?: () => void,
+  responseTruncated?: boolean,
+  onContinue?: () => void
 }) {
   return (
     <>
@@ -1987,6 +2014,22 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
       </div>
       
       <div className="p-6 border-t border-border bg-[#18181b]/80 shrink-0">
+        {responseTruncated && onContinue && (
+          <button
+            onClick={onContinue}
+            disabled={state.isAssistantLoading}
+            title="The last response hit the Max_Tokens limit. Continue it, or raise Max_Tokens in Settings."
+            className="mb-3 w-full py-2.5 px-3 bg-[#fbbf24]/10 hover:bg-[#fbbf24]/20 border border-[#fbbf24]/30 rounded-lg flex items-center justify-between text-left transition-all active:scale-[0.98] disabled:opacity-50"
+          >
+            <div className="flex items-center gap-1.5 min-w-0">
+              <AlertTriangle className="w-3.5 h-3.5 text-[#fbbf24] shrink-0" />
+              <span className="text-[10px] font-black uppercase tracking-wider text-[#fbbf24] truncate">
+                Cut off at token limit
+              </span>
+            </div>
+            <span className="text-[8px] font-bold text-black uppercase bg-[#fbbf24] px-2 py-1 rounded font-mono shrink-0">Continue →</span>
+          </button>
+        )}
         {readyToAdvance && onAdvance && state.step < STEPS.length - 1 && (
           <button
             onClick={onAdvance}
