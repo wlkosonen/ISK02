@@ -20,6 +20,29 @@ function getAnthropic() {
   return anthropicClient;
 }
 
+// SSRF guard for the Ollama proxy. On a public deploy the server must not be
+// usable to fetch arbitrary URLs (e.g. cloud metadata endpoints). Allow only
+// loopback / private-LAN targets, which is all a real Ollama setup needs. A
+// trusted self-host can opt out with OLLAMA_ALLOW_ANY=true.
+function isPrivateOrLocalHost(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (h === "localhost" || h === "host.docker.internal" || h === "::1") return true;
+  const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (m) {
+    const a = parseInt(m[1], 10), b = parseInt(m[2], 10);
+    if (a === 127) return true;                       // loopback
+    if (a === 10) return true;                         // 10.0.0.0/8
+    if (a === 192 && b === 168) return true;           // 192.168.0.0/16
+    if (a === 172 && b >= 16 && b <= 31) return true;  // 172.16.0.0/12
+    return false;                                      // public, 169.254.x metadata, etc.
+  }
+  return false; // non-literal hostnames are not allowed by default
+}
+function ollamaUrlAllowed(rawUrl: string): boolean {
+  if (process.env.OLLAMA_ALLOW_ANY === "true") return true;
+  try { return isPrivateOrLocalHost(new URL(rawUrl).hostname); } catch { return false; }
+}
+
 async function startServer() {
   const app = express();
   // Docker (NODE_ENV=production) listens on 3000 inside the container, which
@@ -105,6 +128,10 @@ async function startServer() {
     let ollamaUrl = (req.query.url as string)?.trim() || process.env.OLLAMA_BASE_URL?.trim() || "http://localhost:11434";
     if (ollamaUrl.endsWith("/")) {
       ollamaUrl = ollamaUrl.slice(0, -1);
+    }
+
+    if (!ollamaUrlAllowed(ollamaUrl)) {
+      return res.status(400).json({ error: "Ollama URL must be a local or private-network address." });
     }
 
     try {
@@ -291,7 +318,11 @@ async function startServer() {
         if (ollamaUrl.endsWith("/")) {
           ollamaUrl = ollamaUrl.slice(0, -1);
         }
-        
+
+        if (!ollamaUrlAllowed(ollamaUrl)) {
+          return res.status(400).json({ error: "Ollama URL must be a local or private-network address (set OLLAMA_ALLOW_ANY=true to override on a trusted self-host)." });
+        }
+
         const modelName = settings.model || "llama3";
 
         // Format history for Ollama /api/chat

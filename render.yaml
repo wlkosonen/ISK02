@@ -1,0 +1,21 @@
+# Render Blueprint — public, bring-your-own-key deploy.
+# On render.com: New → Blueprint → connect this repo. Render builds the
+# Dockerfile and serves the app at a public URL, auto-redeploying on every push.
+#
+# IMPORTANT: do NOT add GEMINI_API_KEY / ANTHROPIC_API_KEY / OPENROUTER_API_KEY
+# here for a PUBLIC instance — leave them empty so each visitor supplies their
+# own key in Settings (otherwise strangers spend your credits).
+services:
+  - type: web
+    name: aether-core-uscs
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /api/config
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # The server reads process.env.PORT automatically; Render sets it.
+      # Ollama does not exist in the cloud, so the Ollama provider is inert here;
+      # the SSRF guard stays on (do NOT set OLLAMA_ALLOW_ANY on a public box).
