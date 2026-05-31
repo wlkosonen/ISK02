@@ -46,6 +46,46 @@ interface Message {
   content: string;
 }
 
+// Captured story-package deliverables. The five "counting" fields (promptPlot,
+// guidelines, reminders, playerPersona, characters[].desc) are what USCS §21.1
+// counts toward the 20k platform ceiling. The rest are part of the export but
+// do NOT count toward the budget.
+interface CharacterDeliverable {
+  name: string;
+  desc: string;   // Part B — AI prompt description (COUNTS toward budget)
+  card: string;   // Part A — HTML card (does NOT count)
+}
+interface Deliverables {
+  titleSummary: string;
+  plotCard: string;
+  promptPlot: string;
+  guidelines: string;
+  reminders: string;
+  playerPersona: string;
+  scenarios: string;
+  imagePrompts: string;
+  characters: CharacterDeliverable[];
+}
+
+const EMPTY_DELIVERABLES: Deliverables = {
+  titleSummary: "", plotCard: "", promptPlot: "", guidelines: "",
+  reminders: "", playerPersona: "", scenarios: "", imagePrompts: "", characters: []
+};
+
+// Single-value slots that can be captured manually from a chat message (fallback
+// for when the AI forgets the sentinels). Character blocks rely on AI tagging.
+type SingleSlotKey = "titleSummary" | "plotCard" | "promptPlot" | "guidelines" | "reminders" | "playerPersona" | "scenarios" | "imagePrompts";
+const CAPTURE_SLOTS: { key: SingleSlotKey; label: string }[] = [
+  { key: "titleSummary", label: "Title & Summary" },
+  { key: "plotCard", label: "Plot Card" },
+  { key: "promptPlot", label: "Prompt Plot" },
+  { key: "guidelines", label: "Guidelines" },
+  { key: "reminders", label: "Reminders" },
+  { key: "playerPersona", label: "Player Persona" },
+  { key: "scenarios", label: "Scenarios" },
+  { key: "imagePrompts", label: "Image Prompts" },
+];
+
 interface StoryState {
   step: number;
   mode: Mode | null;
@@ -60,10 +100,14 @@ interface StoryState {
   aestheticMode: "Literary" | "Structured" | "Chaos";
   groundingRules: string;
   title: string;
+  tokenBudgetMin: number;
+  tokenBudgetMax: number;
+  budgetTierMode: boolean;
+  deliverables: Deliverables;
   characters: any[];
   assistantHistory: Message[];
   isAssistantLoading: boolean;
-  aiProvider: "gemini" | "anthropic" | "ollama";
+  aiProvider: "gemini" | "anthropic" | "ollama" | "openrouter";
   modelSettings: {
     model: string;
     temperature: number;
@@ -71,6 +115,7 @@ interface StoryState {
     ollamaBaseUrl?: string;
     geminiApiKey?: string;
     anthropicApiKey?: string;
+    openRouterApiKey?: string;
   };
 }
 
@@ -96,7 +141,8 @@ const STEPS = [
 const PROVIDERS = {
   gemini: {
     name: "Google Gemini",
-    models: ["gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite"],
+    // Fallback list only — the live model list is fetched from the API when a key is set.
+    models: ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
   },
   anthropic: {
     name: "Anthropic Claude",
@@ -105,6 +151,19 @@ const PROVIDERS = {
   ollama: {
     name: "Local Ollama",
     models: ["llama3", "gemma2", "mistral", "phi3", "deepseek-coder"],
+  },
+  openrouter: {
+    name: "OpenRouter",
+    // Fallback list only — the full live list (300+ models) is fetched from
+    // openrouter.ai/api/v1/models. Models tagged ":free" cost nothing.
+    models: [
+      "deepseek/deepseek-chat-v3-0324:free",
+      "google/gemini-2.0-flash-exp:free",
+      "meta-llama/llama-3.3-70b-instruct:free",
+      "anthropic/claude-3.5-sonnet",
+      "openai/gpt-4o-mini",
+      "x-ai/grok-2-1212",
+    ],
   }
 };
 
@@ -128,78 +187,185 @@ const ART_STYLE_TEMPLATES = [
   "Minimalist Vector"
 ];
 
-const USCS_SYSTEM_PROMPT = `================================================================================
-ISK0 / ISEKAI ZERO — ULTIMATE STORY CREATION SYSTEM v6.1 PIPELINE ENGINE
-================================================================================
-You are the under-the-hood Modus Operandi for this story creation workshop.
-You function exclusively as a professional story architecture compiler and creative collaborator. 
-Your role is to guide the creator step-by-step through the structured USCS v6.1 pipeline to build a complete, highly polished, copy-paste-ready story package.
-
-================================================================================
-CRITICAL WORKSHOP CORE DIRECTIVE — NEVER VIOLATE
-================================================================================
-✦ YOU ARE ONLY CO-WRITING AND ARCHITECTING. YOU WILL NOT ROLEPLAY AS A CHARACTER.
-✦ You are NEVER speaking as any character, simulating an interactive dialogue, or performing the scene.
-✦ You are working at the META LEVEL. The story is the product. You are not a participant in it.
-✦ Every block of text, narrative, or guidelines you generate is CRAFT OUTPUT (design documents, instructions, template code) intended to be executed by a SEPARATE AI model later.
-✦ DO NOT JUMP TO NARRATING THE GAME FOR THE USER. When the user selects or inputs something, always discuss the structural choice, provide suggestions, refine drafts of the technical documents, and guide them through the current step.
-
-================================================================================
-THE TWO SEPARATE LAYERS
-================================================================================
-1. THE WORKSHOP LAYER:
-   - Your direct dialog with the Creator. "Direct collaboration" mode.
-   - Direct, helpful, professional language. Use "we" and "let's" to develop ideas, suggest options, ask for feedback, and refine structures.
-2. THE TEMPLATE LAYER:
-   - Structured craft output: character cards (HTML), character prompt descriptions (Part B), Prompt Plots, Prompt Guidelines (DO NOT/INSTEAD rules), AI Reminders, image prompts, first messages.
-   - These must be written in the third person FOR a different, performer AI system to execute later. 
-   - Never write self-instructions. Never mix these layers.
-
-================================================================================
-USCS PIPELINE - THE 15 WORKSHOP BUILD STEPS
-================================================================================
-Follow the pipeline build order rigorously. Do not skip or combine steps unless requested. Focus entirely on the current Step defined in the app state.
-
-- STEP 1 (Mode Selection): Mode Selection (SFW vs. NSFW). Locked with appropriate Heat Level (1-5).
-- STEP 2 (Concept Intake): Premises, primary character ideas, tone, and the Emotional Mandate archetype ("What does the player feel when they set the phone down? Melancholy/Resonance, Tragedy/Investment, or Power Fantasy/Gratification").
-- STEP 3 (Setting & Tone): Verify setting type rules (Contemporary, Fantasy, Isekai, Sci-Fi, Historical, Modern Supernatural, Horror, Post-Apocalyptic). Establish DO NOT / INSTEAD grounding rules. No secondary school settings in NSFW Mode.
-- STEP 4 (Art Style Profile): Establish art style (Literary, Structured, or Chaos aesthetic), image generation syntax, and theme.
-- STEP 5 (Palette & Identity): Formalize 4-5 hex colors for HTML visuals.
-- STEP 6 (World Grounding): Establish the rules using DO NOT / INSTEAD framework. Pair every prohibition with a replacement behavior.
-- STEP 7 (Title & Summary): Propose 3 titles. Write one 20-word Plot Summary + 20-word character summaries.
-- STEP 8 (Plot Card): Code the Plot Card HTML cleanly.
-- STEP 9 (Character Sheets): Design Part A (HTML card) and Part B (AI prompt description) for EVERY character. 1500w max for primary, 800w for supporting. Use G1itzh 4-trait core (3 surface clustering + 1 disruptor), physical/clothing specifications, speech & mannerisms, and wants/needs.
-- STEP 10 (Scenarios): Design 2-3 scenario entry points (Witness, Eavesdropper, Stumbler) and the 9 Three-Act Hooks.
-- STEP 11 (Prompt Plot): Output the Performer instructions + include the Architect Protocol block verbatim.
-- STEP 12 (Guidelines): 15+ Guidelines detailing positive directives and negative constraints. **Guidelines MUST integrate the DO NOT/INSTEAD rulesets defined in World Grounding**.
-- STEP 13 (Reminders): 10+ prioritized Reminders (starting with the North Star emotional target).
-- STEP 14 (First Message): Write the authored openings for each scenario (300-500w).
-- STEP 15 (Image Prompts): Portrait + Cover + Title Edit + Cover Video + 10 Emotion Edits per character + Location prompts.
-- STEP 16 (Compliance & Assembly): Final compilation of all blocks.
-
-================================================================================
-COOPERATIVE AUTO-ADVANCE PROTOCOL
-================================================================================
-When you and the creator have fully finalized the deliverables of the current step and it is technically complete and locked in according to the manual rules:
-- YOU MUST APPEND the exact token [SYNC_PROCEED] at the very end of your response.
-- This token acts as a trigger to physically advance the UI to the next module. 
-- Do not append [SYNC_PROCEED] until the current block is completely polished and agreed upon.
-
-================================================================================
-NAMING PROTOCOL & LLM GRAVITY WELL OVERRIDE
-================================================================================
-- Prohibited Names: Kael, Elara, Lyra, Zara, Theron, Aldric, Mira, Seraphina, Caelum, Riven, Daelin, Evander, Thalion, Vaelith, Sylvara, and all names ending in -wyn, -iel, -ael, -ara.
-- Every name must have a documented cultural/linguistic origin and etymological reasoning.
-
-================================================================================
-HTML & CARD DESIGN RULES
-================================================================================
-- Inline style attributes only (no <style> blocks or CSS classes). No <html> or <body> containers.
-- All containers with padding/border must use 'box-sizing: border-box;'.
-- Use No-Background Border Frame for images to prevent mobile subpixel hair-lines. Max width: 300px.
-`;
+// NOTE: The USCS v6.1 system prompt is no longer embedded in the client.
+// The server (uscs.ts) loads the unaltered master document (docs/USCS_v6.1.txt)
+// and injects the always-on core directive + only the verbatim slice for the
+// CURRENT step. The client supplies the dynamic deskstate + [SET_*] sync protocol
+// (see askAssistant below). This keeps each request lean while giving the model
+// the full-depth specification instead of a watered-down summary.
 
 const IMAGE_SERVICES = ["Midjourney", "DALL-E 3", "Stable Diffusion", "NovelAI", "Flux", "Other"];
+
+// Target size for the AI INSTRUCTION PACKAGE (Prompt Plot + Guidelines + Reminders
+// + Character AI descriptions + Player Persona). Per USCS §21.1 the platform ceiling
+// is 20k tokens for this package; HTML cards and image/location prompts do NOT count.
+const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; tier?: boolean }[] = [
+  { label: "Budget", min: 4000, max: 7000, hint: "Free/budget models · stays under the 'complex narrative' tag", tier: true },
+  { label: "Standard", min: 7000, max: 10000, hint: "~1–2 characters · quality-first" },
+  { label: "Rich", min: 10000, max: 15000, hint: "~3–4 characters · gains the 'complex narrative' tag" },
+  { label: "Max", min: 15000, max: 20000, hint: "~5–6 characters · near the 20k platform ceiling" },
+];
+
+// Version of THIS app (the Aether_Core tool), distinct from the USCS framework
+// version it implements. Bump this when you ship changes.
+const APP_VERSION = "0.1.0";
+// Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
+const USCS_VERSION = "6.1";
+
+// --- Session persistence ---
+// Story state, chat history and typed API keys survive a page reload (per tab).
+const STORAGE_KEY = "aether_core_state_v1";
+
+const DEFAULT_STATE: StoryState = {
+  step: 0,
+  mode: null,
+  heatLevel: 1,
+  isDMOnly: false,
+  concept: "",
+  settingType: "",
+  tone: "",
+  artStyle: "Anime/VN Style",
+  imageService: "Midjourney",
+  palette: ["#1a1a24", "#f8f8f8", "#14b8a6", "#f43f5e", "#fbbf24"],
+  aestheticMode: "Structured",
+  groundingRules: "",
+  title: "",
+  tokenBudgetMin: 7000,
+  tokenBudgetMax: 10000,
+  budgetTierMode: false,
+  deliverables: EMPTY_DELIVERABLES,
+  characters: [],
+  assistantHistory: [],
+  isAssistantLoading: false,
+  aiProvider: "gemini",
+  modelSettings: {
+    model: "gemini-2.5-flash",
+    temperature: 1.0,
+    maxTokens: 4096,
+    geminiApiKey: "",
+    anthropicApiKey: "",
+    openRouterApiKey: "",
+  },
+};
+
+function loadInitialState(): StoryState {
+  if (typeof window === "undefined") return DEFAULT_STATE;
+  try {
+    const raw = window.sessionStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return {
+        ...DEFAULT_STATE,
+        ...parsed,
+        // Never restore a transient "loading" flag from a previous session.
+        isAssistantLoading: false,
+        modelSettings: { ...DEFAULT_STATE.modelSettings, ...(parsed.modelSettings || {}) },
+        deliverables: { ...EMPTY_DELIVERABLES, ...(parsed.deliverables || {}) },
+      };
+    }
+  } catch (err) {
+    console.warn("Could not restore saved workshop state:", err);
+  }
+  return DEFAULT_STATE;
+}
+
+// Per-model output-token ceilings, so the Max_Tokens slider can't exceed what a
+// model actually accepts (e.g. Claude 3 Opus / Haiku cap at 4096).
+function getModelTokenCeiling(_provider: string, model: string): number {
+  // Claude 3 Opus / Haiku cap output at 4096 — whether called natively or via
+  // OpenRouter (e.g. "anthropic/claude-3-opus"). Everything else: 8192.
+  if (/claude-3-opus/.test(model) || /claude-3-haiku/.test(model)) return 4096;
+  return 8192;
+}
+
+// Strip the real-time UI-sync tags ([SET_*], [SYNC_PROCEED]) from exported text.
+function stripSyncTags(text: string): string {
+  return text.replace(/\[(?:SET_[A-Z_]+:[^\]]*|SYNC_PROCEED)\]/gi, "").trim();
+}
+
+// Rough token estimate (~4 chars/token). Used for the budget gauge — applied to
+// the captured deliverables only, so it reflects the real package, not chat.
+function estimateTokens(text: string): number {
+  return Math.round((text || "").length / 4);
+}
+
+const DELIVERABLE_LABELS: Record<string, string> = {
+  TITLE_SUMMARY: "Title & Summary", PLOT_CARD: "Plot Card", PROMPT_PLOT: "Prompt Plot",
+  GUIDELINES: "Guidelines", REMINDERS: "Reminders", PLAYER_PERSONA: "Player Persona",
+  SCENARIOS: "Scenarios", IMAGE_PROMPTS: "Image Prompts",
+};
+
+// Parse <<<USCS_BLOCK TYPE>>> … <<<END USCS_BLOCK>>> sentinels out of an assistant
+// message: capture the latest version of each block into the package, and return
+// the message text with the marker lines removed (the block content stays visible).
+const BLOCK_RE = /<<<USCS_BLOCK\s+([A-Z_]+)(?::\s*([^>\n]+?))?\s*>>>[ \t]*\r?\n?([\s\S]*?)\r?\n?[ \t]*<<<END USCS_BLOCK>>>/g;
+
+function captureDeliverables(text: string, current: Deliverables): { next: Deliverables; captured: string[]; cleaned: string } {
+  const next: Deliverables = { ...current, characters: current.characters.map(c => ({ ...c })) };
+  const captured: string[] = [];
+  let m: RegExpExecArray | null;
+  BLOCK_RE.lastIndex = 0;
+  while ((m = BLOCK_RE.exec(text)) !== null) {
+    const type = m[1].toUpperCase();
+    const name = (m[2] || "").trim();
+    const content = (m[3] || "").trim();
+    if (!content) continue;
+
+    if (type === "CHAR_DESC" || type === "CHAR_CARD") {
+      if (!name) continue;
+      let ch = next.characters.find(c => c.name.toLowerCase() === name.toLowerCase());
+      if (!ch) { ch = { name, desc: "", card: "" }; next.characters.push(ch); }
+      if (type === "CHAR_DESC") { ch.desc = content; captured.push(`${name} (description)`); }
+      else { ch.card = content; captured.push(`${name} (card)`); }
+      continue;
+    }
+
+    switch (type) {
+      case "TITLE_SUMMARY": next.titleSummary = content; break;
+      case "PLOT_CARD": next.plotCard = content; break;
+      case "PROMPT_PLOT": next.promptPlot = content; break;
+      case "GUIDELINES": next.guidelines = content; break;
+      case "REMINDERS": next.reminders = content; break;
+      case "PLAYER_PERSONA": next.playerPersona = content; break;
+      case "SCENARIOS": next.scenarios = content; break;
+      case "IMAGE_PROMPTS": next.imagePrompts = content; break;
+      default: continue;
+    }
+    captured.push(DELIVERABLE_LABELS[type] || type);
+  }
+
+  // Remove only the sentinel marker lines for display; keep the block content.
+  const cleaned = text
+    .replace(/^[ \t]*<<<USCS_BLOCK[^>]*>>>[ \t]*\r?\n?/gm, "")
+    .replace(/^[ \t]*<<<END USCS_BLOCK>>>[ \t]*\r?\n?/gm, "")
+    .trim();
+
+  return { next, captured, cleaned };
+}
+
+// Tokens that count toward the USCS §21.1 platform ceiling.
+function countingPackageTokens(d: Deliverables): number {
+  const counted = [d.promptPlot, d.guidelines, d.reminders, d.playerPersona, ...d.characters.map(c => c.desc)]
+    .filter(Boolean).join("\n");
+  return estimateTokens(counted);
+}
+
+function sanitizeFilename(name: string): string {
+  return (name || "ISK0_Story").trim().replace(/[^\w\- ]+/g, "").replace(/\s+/g, "_").slice(0, 60) || "ISK0_Story";
+}
+
+// Trigger a browser download of a plain-text file.
+function downloadTextFile(filename: string, content: string) {
+  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 
 // --- Components ---
 
@@ -238,6 +404,9 @@ export default function App() {
     aestheticMode: "Structured" as "Literary" | "Structured" | "Chaos",
     groundingRules: "",
     title: "",
+    tokenBudgetMin: 7000,
+    tokenBudgetMax: 10000,
+    budgetTierMode: false,
     step: 0
   });
 
@@ -256,38 +425,37 @@ export default function App() {
     }
   }, [toast]);
 
-  const [state, setState] = useState<StoryState>({
-    step: 0,
-    mode: null,
-    heatLevel: 1,
-    isDMOnly: false,
-    concept: "",
-    settingType: "",
-    tone: "",
-    artStyle: "Anime/VN Style",
-    imageService: "Midjourney",
-    palette: ["#1a1a24", "#f8f8f8", "#14b8a6", "#f43f5e", "#fbbf24"],
-    aestheticMode: "Structured",
-    groundingRules: "",
-    title: "",
-    characters: [],
-    assistantHistory: [],
-    isAssistantLoading: false,
-    aiProvider: "gemini",
-    modelSettings: {
-      model: "gemini-3-flash-preview",
-      temperature: 1.0,
-      maxTokens: 4096,
-      geminiApiKey: "",
-      anthropicApiKey: "",
-    },
-  });
+  const [state, setState] = useState<StoryState>(loadInitialState);
+
+  // Persist the workshop to sessionStorage on every change (minus the transient
+  // loading flag) so a reload doesn't wipe story progress, chat, or typed keys.
+  useEffect(() => {
+    try {
+      const { isAssistantLoading, ...persistable } = state;
+      window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(persistable));
+    } catch (err) {
+      console.warn("Could not persist workshop state:", err);
+    }
+  }, [state]);
 
   const [localOllamaModels, setLocalOllamaModels] = useState<string[]>([]);
   const [ollamaError, setOllamaError] = useState<string | null>(null);
   const [isFetchingModels, setIsFetchingModels] = useState(false);
   const [showGeminiKey, setShowGeminiKey] = useState(false);
   const [showAnthropicKey, setShowAnthropicKey] = useState(false);
+  const [showOpenRouterKey, setShowOpenRouterKey] = useState(false);
+  const [remoteModels, setRemoteModels] = useState<string[]>([]);
+  const [isFetchingRemoteModels, setIsFetchingRemoteModels] = useState(false);
+  const [remoteModelError, setRemoteModelError] = useState<string | null>(null);
+  const [modelFilter, setModelFilter] = useState("");
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState("");
+  // Soft advance-gate: armed when the AI signals the current step is complete
+  // ([SYNC_PROCEED]). Prompts the user to advance, but never forces or blocks it.
+  const [readyToAdvance, setReadyToAdvance] = useState(false);
+
+  // Disarm the gate whenever the step changes (advance / revert / sidebar jump).
+  useEffect(() => { setReadyToAdvance(false); }, [state.step]);
 
   // Fetch initial configuration from server to get correct OLLAMA_BASE_URL default
   useEffect(() => {
@@ -410,9 +578,64 @@ export default function App() {
     };
   }, [state.aiProvider, state.modelSettings.ollamaBaseUrl]);
 
-  const isInterfaceMode = state.step >= 6;
+  // Fetch live, up-to-date model lists for hosted providers (Anthropic / Gemini).
+  useEffect(() => {
+    const HOSTED = ["anthropic", "gemini", "openrouter"];
+    if (!HOSTED.includes(state.aiProvider)) {
+      setRemoteModels([]);
+      setRemoteModelError(null);
+      return;
+    }
 
-  const isSyncNeeded = 
+    const provider = state.aiProvider;
+    const key = provider === "anthropic"
+      ? state.modelSettings.anthropicApiKey?.trim()
+      : provider === "gemini"
+      ? state.modelSettings.geminiApiKey?.trim()
+      : state.modelSettings.openRouterApiKey?.trim();
+
+    const controller = new AbortController();
+    let isMounted = true;
+
+    async function fetchRemoteModels() {
+      setIsFetchingRemoteModels(true);
+      setRemoteModelError(null);
+      try {
+        const q = new URLSearchParams({ provider });
+        if (key) q.set("key", key);
+        const res = await fetch(`/api/models?${q.toString()}`, { signal: controller.signal });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `Status ${res.status}`);
+        if (isMounted) setRemoteModels(data.models || []);
+      } catch (err: any) {
+        if (err.name !== "AbortError" && isMounted) {
+          setRemoteModelError(err.message || "Could not list models");
+          setRemoteModels([]);
+        }
+      } finally {
+        if (isMounted) setIsFetchingRemoteModels(false);
+      }
+    }
+
+    const timeoutId = setTimeout(fetchRemoteModels, 400);
+    return () => { isMounted = false; controller.abort(); clearTimeout(timeoutId); };
+  }, [state.aiProvider, state.modelSettings.anthropicApiKey, state.modelSettings.geminiApiKey, state.modelSettings.openRouterApiKey]);
+
+  // Keep Max_Tokens within the active model's real output ceiling.
+  useEffect(() => {
+    const ceiling = getModelTokenCeiling(state.aiProvider, state.modelSettings.model);
+    if (state.modelSettings.maxTokens > ceiling) {
+      setState(s => ({ ...s, modelSettings: { ...s.modelSettings, maxTokens: ceiling } }));
+    }
+  }, [state.aiProvider, state.modelSettings.model]);
+
+  const hostedModels = remoteModels.length > 0 ? remoteModels : PROVIDERS[state.aiProvider].models;
+  const visibleHostedModels = modelFilter.trim()
+    ? hostedModels.filter(m => m.toLowerCase().includes(modelFilter.trim().toLowerCase()))
+    : hostedModels;
+  const tokenCeiling = getModelTokenCeiling(state.aiProvider, state.modelSettings.model);
+
+  const isSyncNeeded =
     state.mode !== lastSyncedState.mode ||
     state.heatLevel !== lastSyncedState.heatLevel ||
     state.isDMOnly !== lastSyncedState.isDMOnly ||
@@ -424,7 +647,16 @@ export default function App() {
     state.aestheticMode !== lastSyncedState.aestheticMode ||
     state.groundingRules !== lastSyncedState.groundingRules ||
     state.title !== lastSyncedState.title ||
+    state.tokenBudgetMin !== lastSyncedState.tokenBudgetMin ||
+    state.tokenBudgetMax !== lastSyncedState.tokenBudgetMax ||
+    state.budgetTierMode !== lastSyncedState.budgetTierMode ||
     state.step !== lastSyncedState.step;
+
+  // Editing a deskstate field after the AI marked the step complete invalidates
+  // that "complete" signal, so disarm the gate until the AI re-confirms.
+  useEffect(() => {
+    if (isSyncNeeded) setReadyToAdvance(false);
+  }, [isSyncNeeded]);
 
   const syncDeskstateToAI = () => {
     const updatedFields: string[] = [];
@@ -439,6 +671,8 @@ export default function App() {
     if (state.aestheticMode !== lastSyncedState.aestheticMode) updatedFields.push(`Aesthetic Mode: ${state.aestheticMode}`);
     if (state.groundingRules !== lastSyncedState.groundingRules) updatedFields.push(`Grounding Rules modified`);
     if (state.title !== lastSyncedState.title) updatedFields.push(`Title: ${state.title || "Untitled"}`);
+    if (state.tokenBudgetMin !== lastSyncedState.tokenBudgetMin || state.tokenBudgetMax !== lastSyncedState.tokenBudgetMax) updatedFields.push(`Token Budget: ~${state.tokenBudgetMin / 1000}k–${state.tokenBudgetMax / 1000}k`);
+    if (state.budgetTierMode !== lastSyncedState.budgetTierMode) updatedFields.push(`Budget-Tier Mode: ${state.budgetTierMode ? "ON" : "OFF"}`);
     if (state.step !== lastSyncedState.step) updatedFields.push(`Moved to Step: ${state.step + 1} (${STEPS[state.step]})`);
 
     setLastSyncedState({
@@ -453,6 +687,9 @@ export default function App() {
       aestheticMode: state.aestheticMode,
       groundingRules: state.groundingRules,
       title: state.title,
+      tokenBudgetMin: state.tokenBudgetMin,
+      tokenBudgetMax: state.tokenBudgetMax,
+      budgetTierMode: state.budgetTierMode,
       step: state.step
     });
 
@@ -470,6 +707,7 @@ The user updated the workspace deskstate. Here are the current parameters in rea
 - Narrative Premise Seed: "${state.concept || "(Empty)"}"
 - Reality Protocols: "${state.groundingRules || "(None)"}"
 - Draft Title: "${state.title || "Untitled"}"
+- Target Instruction-Package Budget: ~${state.tokenBudgetMin / 1000}k–${state.tokenBudgetMax / 1000}k tokens (USCS §21.1 package: Prompt Plot + Guidelines + Reminders + Character AI descriptions; HTML/images excluded)${state.budgetTierMode ? " · BUDGET-TIER MODE ACTIVE (apply USCS §21 free-model optimizations)" : ""}
 
 Please acknowledge these updated options, explicitly address the modified parameters (${updatedFields.length > 0 ? updatedFields.join(', ') : 'no key differences'}), and guide the creator forward on Step ${state.step + 1} ("${STEPS[state.step]}").`;
 
@@ -480,12 +718,14 @@ Please acknowledge these updated options, explicitly address the modified parame
   const prevStep = () => setState(prev => ({ ...prev, step: Math.max(prev.step - 1, 0) }));
 
   const askAssistant = async (prompt: string) => {
+    // A new turn supersedes any prior "step complete" signal until the AI re-confirms.
+    setReadyToAdvance(false);
     // 1. Immediately update UI with user message and loading state
     const userMessage: Message = { role: "user", content: prompt };
-    setState(s => ({ 
-      ...s, 
+    setState(s => ({
+      ...s,
       assistantHistory: [...s.assistantHistory, userMessage],
-      isAssistantLoading: true 
+      isAssistantLoading: true
     }));
 
     try {
@@ -500,9 +740,8 @@ Please acknowledge these updated options, explicitly address the modified parame
             role: m.role === "assistant" ? "model" : "user",
             parts: [{ text: m.content }]
           })),
-          systemInstruction: `${USCS_SYSTEM_PROMPT}
-
-================================================================================
+          step: state.step,
+          systemInstruction: `================================================================================
 CURRENT WORKSHOP DESKSTATE (COLLABORATOR SYNC CONTEXT)
 ================================================================================
 - CURRENT STEP: ${STEPS[state.step]}
@@ -511,8 +750,10 @@ CURRENT WORKSHOP DESKSTATE (COLLABORATOR SYNC CONTEXT)
 - Setting: ${state.settingType || "Pending"}
 - Concept: ${state.concept || "Variable"}
 - Tone: ${state.tone || "Undefined"}
-- Reality Protocols / Grounding Rules: 
+- Reality Protocols / Grounding Rules:
 ${state.groundingRules || "No strict rules established yet."}
+- Target Instruction-Package Budget: ~${state.tokenBudgetMin / 1000}k–${state.tokenBudgetMax / 1000}k tokens. This counts ONLY the AI instruction package (Prompt Plot + Prompt Guidelines + AI Reminders + Character AI prompt descriptions + Player Persona), per USCS §21.1. HTML cards and image/location prompts do NOT count. Calibrate the depth and length of every deliverable to land the package within this range.${state.budgetTierMode ? `
+- BUDGET-TIER MODE: ACTIVE (story targets free/budget models such as DeepSeek/Ministral/GLM). Apply the USCS Section 21 budget-tier optimizations throughout: use concrete state-based triggers instead of session-number pacing; require a mandatory status block at the start of every response; add a worked example for any rule that contradicts a model's default training; enforce strict document separation (facts in Plot, behavior in Guidelines, non-negotiables in Reminders — never duplicated); and follow the §21 trim-priority order if over budget.` : ""}
 
 ================================================================================
 REAL-TIME UI SYNCHRONIZATION COMMANDS
@@ -540,6 +781,24 @@ DIAGNOSTIC WORKSHOP RESPONSE MANDATE:
 1. Actively guide and collaborate with the user *exclusively* on the deliverables for the CURRENT STEP: "${STEPS[state.step]}". Use discussion, suggestions, and drafts.
 2. DO NOT perform the story, write character dialogue, or introduce simulated turns like "What do you do, Hunter?". You are the co-author, not the player!
 3. If the step is fully complete and agreed, conclude your response with the token [SYNC_PROCEED] to advance the workspace.
+
+================================================================================
+DELIVERABLE CAPTURE PROTOCOL (MANDATORY)
+================================================================================
+Whenever you output a FINALIZED craft deliverable (not a draft you are still discussing), wrap it in capture sentinels so the workshop stores it in the structured story package and tracks its token budget. Use EXACTLY this format, each sentinel alone on its own line:
+
+<<<USCS_BLOCK TYPE>>>
+...the finished block, verbatim...
+<<<END USCS_BLOCK>>>
+
+TYPE is one of: TITLE_SUMMARY, PLOT_CARD, PROMPT_PLOT, GUIDELINES, REMINDERS, PLAYER_PERSONA, SCENARIOS, IMAGE_PROMPTS.
+For per-character blocks use a name suffix: "CHAR_DESC: <Character Name>" for the Part B AI prompt description, and "CHAR_CARD: <Character Name>" for the Part A HTML card.
+
+Rules:
+- Wrap ONLY finished blocks, never drafts under discussion. Keep your conversational explanation OUTSIDE the sentinels.
+- When you revise a block, re-emit the FULL block wrapped again — the latest capture replaces the stored one.
+- One block per sentinel pair. Never nest.
+- The Prompt Plot, Guidelines, Reminders, Character descriptions (CHAR_DESC) and Player Persona count toward the token budget; keep them within the target.
 `
         })
       });
@@ -551,11 +810,17 @@ DIAGNOSTIC WORKSHOP RESPONSE MANDATE:
       }
       
       if (data.text) {
-        const assistantMessage: Message = { role: "assistant", content: data.text };
-        
+        // Capture any finalized deliverable blocks into the structured package
+        // (and strip the sentinel markers from what we show in the chat).
+        const { next: capturedDeliverables, captured, cleaned } = captureDeliverables(data.text, state.deliverables);
+        // [SYNC_PROCEED] is a control signal (arms the advance-gate), not content.
+        const displayText = (cleaned || data.text).replace(/\[SYNC_PROCEED\]/gi, "").trim();
+        const assistantMessage: Message = { role: "assistant", content: displayText };
+
         // Match tag functions for AI-to-UI Sync in real-time
         const updates: any = {};
         const toastMsgs: string[] = [];
+        if (captured.length > 0) updates.deliverables = capturedDeliverables;
 
         const modeMatch = data.text.match(/\[SET_MODE:\s*(SFW|NSFW)\]/i);
         if (modeMatch) {
@@ -640,13 +905,16 @@ DIAGNOSTIC WORKSHOP RESPONSE MANDATE:
           return nextState;
         });
 
-        if (toastMsgs.length > 0) {
+        if (captured.length > 0) {
+          triggerToast(`✓ Captured to package: ${captured.join(", ")}`, "ai-to-ui");
+        } else if (toastMsgs.length > 0) {
           triggerToast(`Matrix updated parameters: ${toastMsgs.join(", ")}`, "ai-to-ui");
         }
 
-        // Detect Auto-advance trigger
-        if (data.text.includes("[SYNC_PROCEED]")) {
-          setTimeout(nextStep, 1500);
+        // The AI signals the step is complete — arm the soft advance-gate (prompt
+        // the user to continue) instead of auto-advancing.
+        if (data.text.includes("[SYNC_PROCEED]") && state.step < STEPS.length - 1) {
+          setReadyToAdvance(true);
         }
       } else {
         throw new Error("Empty response from matrix");
@@ -661,6 +929,171 @@ DIAGNOSTIC WORKSHOP RESPONSE MANDATE:
     }
   };
 
+  // EXPORT: compile the final ISK0 package as a MULTI-PART operation — one model
+  // call per deliverable (and one per character), so a 10–20k-token package is
+  // never squeezed into a single ~8k response. Each call reads the session as
+  // context but does NOT touch assistantHistory, so the chat stays clean.
+  const exportFinalPackage = async () => {
+    if (isExporting || state.assistantHistory.length === 0) return;
+    setIsExporting(true);
+
+    const baseHistory = state.assistantHistory.map(m => ({
+      role: m.role === "assistant" ? "model" : "user",
+      parts: [{ text: m.content }]
+    }));
+    const ceiling = getModelTokenCeiling(state.aiProvider, state.modelSettings.model);
+    const divider = (h: string) => `${"=".repeat(80)}\n${h}\n${"=".repeat(80)}`;
+
+    // One raw assistant call that returns clean text and never mutates the chat.
+    const callRaw = async (prompt: string, step: number): Promise<string> => {
+      const response = await fetch("/api/assistant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt,
+          provider: state.aiProvider,
+          modelSettings: { ...state.modelSettings, maxTokens: ceiling },
+          history: baseHistory,
+          step,
+          systemInstruction: `You are compiling one block of the final ISK0 deliverable package for direct file export (not shown in chat). Output ONLY the requested finished block, verbatim and in full (include raw HTML where applicable). No greetings, no commentary, no questions, no UI-sync tags.`
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
+      return stripSyncTags(data.text || "");
+    };
+
+    const sectionInstruction = (what: string) =>
+      `[EXPORT — MACHINE OUTPUT] Output ONLY ${what}, exactly as finalized in our session: verbatim, in full, raw HTML included where applicable. No greetings, no commentary, no questions, no [SET_*]/[SYNC_PROCEED] tags. If it was never built this session, output exactly "(not generated)" and nothing else.`;
+
+    const d = state.deliverables;
+    const parts: string[] = [];
+    const failures: string[] = [];
+    let regenerated = 0;
+
+    // Prefer the captured block. Only call the model if that slot is empty.
+    const getOrGen = async (heading: string, captured: string, step: number, what: string) => {
+      setExportProgress(heading);
+      if (captured && captured.trim()) {
+        parts.push(`${divider(heading)}\n\n${captured.trim()}`);
+        return;
+      }
+      regenerated++;
+      try {
+        const body = await callRaw(sectionInstruction(what), step);
+        parts.push(`${divider(heading)}\n\n${body || "(not generated)"}`);
+      } catch (err: any) {
+        failures.push(heading);
+        parts.push(`${divider(heading)}\n\n[EXPORT ERROR — this block could not be compiled: ${err.message || err}. Re-run the export to retry.]`);
+      }
+    };
+
+    try {
+      await getOrGen("TITLE & SUMMARY", d.titleSummary, 6, "the Title and the Plot Summary plus the per-character summaries");
+      await getOrGen("PLOT CARD", d.plotCard, 7, "the Plot Card as raw HTML, exactly as built");
+
+      // Character Sheets — prefer captured cards/descriptions; otherwise discover + regenerate per character.
+      setExportProgress("Character sheets");
+      let charBlock = "";
+      const capturedChars = d.characters.filter(c => c.card || c.desc);
+      if (capturedChars.length > 0) {
+        charBlock = capturedChars.map(c =>
+          `### ${c.name}\n\nPART A — CARD (HTML):\n${c.card || "(card not generated)"}\n\nPART B — AI DESCRIPTION:\n${c.desc || "(description not generated)"}`
+        ).join("\n\n");
+      } else {
+        regenerated++;
+        try {
+          const namesRaw = await callRaw(`[EXPORT] List ONLY the names of the characters that have a character sheet in this story — one name per line, nothing else. No numbering, no commentary. If there are none, output exactly "(none)".`, 8);
+          const names = namesRaw.split(/\r?\n/).map(s => s.replace(/^[\s\-*\d.)]+/, "").trim()).filter(s => s && !/^\(?none\)?$/i.test(s)).slice(0, 15);
+          if (names.length === 0) {
+            charBlock = await callRaw(sectionInstruction("ALL character sheets — Part A (HTML card) and Part B (AI prompt description) for every character, each in full"), 8);
+          } else {
+            const chunks: string[] = [];
+            for (let i = 0; i < names.length; i++) {
+              setExportProgress(`Character ${i + 1}/${names.length}: ${names[i]}`);
+              try {
+                const cs = await callRaw(`[EXPORT — MACHINE OUTPUT] Output the COMPLETE finalized character sheet for the character named "${names[i]}": Part A (the raw HTML card, verbatim) followed by Part B (the AI prompt description, in full). No commentary, no questions, no tags. If this character has no finished sheet, output exactly "(not generated)".`, 8);
+                chunks.push(`### ${names[i]}\n\n${cs || "(not generated)"}`);
+              } catch (err: any) {
+                failures.push(`Character: ${names[i]}`);
+                chunks.push(`### ${names[i]}\n\n[EXPORT ERROR: ${err.message || err}]`);
+              }
+            }
+            charBlock = chunks.join("\n\n");
+          }
+        } catch (err: any) {
+          failures.push("Character Sheets");
+          charBlock = `[EXPORT ERROR — character roster could not be read: ${err.message || err}]`;
+        }
+      }
+      parts.push(`${divider("CHARACTER SHEETS")}\n\n${charBlock}`);
+
+      await getOrGen("SCENARIOS — OPENING / FIRST MESSAGES", d.scenarios, 13, "every scenario's authored opening / first message, each one in full");
+      await getOrGen("PROMPT PLOT", d.promptPlot, 10, "the Prompt Plot performer instructions, including the Architect Protocol block verbatim");
+      await getOrGen("GUIDELINES", d.guidelines, 11, "the complete Prompt Guidelines rule list, every rule in full");
+      await getOrGen("REMINDERS", d.reminders, 12, "the complete AI Reminders list, in priority order");
+
+      const pkg = countingPackageTokens(d);
+      const pkgFmt = pkg >= 1000 ? `${(pkg / 1000).toFixed(1)}k` : `${pkg}`;
+      const header = `ISK0 STORY PACKAGE — "${state.title || "Untitled"}"\nGenerated: ${new Date().toLocaleString()}\nMode: ${state.mode || "—"} · Heat: ${state.heatLevel}/5 · Setting: ${state.settingType || "—"}\nInstruction-package size (§21.1 est.): ~${pkgFmt} tokens · Target: ${state.tokenBudgetMin / 1000}k–${state.tokenBudgetMax / 1000}k${pkg > state.tokenBudgetMax ? " · OVER BUDGET" : ""}`;
+      const fileBody = `${header}\n${"=".repeat(80)}\n\n${parts.join("\n\n\n")}\n`;
+      downloadTextFile(`${sanitizeFilename(state.title)}_ISK0_Package.txt`, fileBody);
+
+      if (failures.length > 0) {
+        triggerToast(`Exported with ${failures.length} block(s) failed (${failures.join(", ")}). Re-run to retry.`, "info");
+      } else if (regenerated === 0) {
+        triggerToast("Exported from captured package ✓ (instant, no AI calls)", "ai-to-ui");
+      } else {
+        triggerToast(`Final package exported ✓ (${regenerated} block(s) regenerated)`, "ai-to-ui");
+      }
+    } catch (err: any) {
+      console.error("Export failed:", err);
+      triggerToast(`Export failed: ${err.message || "unknown error"}`, "info");
+    } finally {
+      setExportProgress("");
+      setIsExporting(false);
+    }
+  };
+
+  // Manual capture fallback: assign a chat message's content to a package slot
+  // (used when the AI forgets the auto-capture sentinels).
+  const manualCapture = (key: SingleSlotKey, content: string) => {
+    const clean = stripSyncTags(content).trim();
+    if (!clean) return;
+    setState(s => ({ ...s, deliverables: { ...s.deliverables, [key]: clean } }));
+    const label = CAPTURE_SLOTS.find(slot => slot.key === key)?.label || key;
+    triggerToast(`✓ Captured to package: ${label}`, "ui-to-ai");
+  };
+
+  // SNAPSHOT: instant, no AI call. Saves a full human-readable backup of the
+  // session — the deskstate parameters AND the entire collaboration transcript.
+  const saveSnapshot = () => {
+    const ds = [
+      `Title:    ${state.title || "Untitled"}`,
+      `Mode:     ${state.mode || "—"} (${state.isDMOnly ? "Dungeon Mind" : "Full Story Package"})`,
+      `Heat:     ${state.heatLevel}/5`,
+      `Setting:  ${state.settingType || "—"}`,
+      `Tone:     ${state.tone || "—"}`,
+      `Aesthetic:${state.aestheticMode} · Art Style: ${state.artStyle}`,
+      `Palette:  ${state.palette.join(", ")}`,
+      `Concept:  ${state.concept || "—"}`,
+      `Grounding Rules:\n${state.groundingRules || "—"}`,
+      `Step:     ${state.step + 1} (${STEPS[state.step]})`,
+    ].join("\n");
+
+    const transcript = state.assistantHistory
+      .map(m => `${"-".repeat(80)}\n[${m.role === "assistant" ? "AETHER_CORE" : "USER"}]\n${m.content}`)
+      .join("\n\n");
+
+    const content =
+      `ISK0 / AETHER_CORE — SESSION SNAPSHOT\nGenerated: ${new Date().toLocaleString()}\n${"=".repeat(80)}\n\n` +
+      `DESKSTATE\n${"=".repeat(80)}\n${ds}\n\n` +
+      `FULL COLLABORATION TRANSCRIPT\n${"=".repeat(80)}\n\n${transcript || "(no messages yet)"}\n`;
+
+    downloadTextFile(`${sanitizeFilename(state.title)}_snapshot.txt`, content);
+    triggerToast("Snapshot saved ✓", "info");
+  };
+
   return (
     <div className="h-screen max-h-screen flex flex-col bg-bg technical-grid overflow-hidden">
       {/* Header */}
@@ -670,13 +1103,13 @@ DIAGNOSTIC WORKSHOP RESPONSE MANDATE:
             <div className="w-8 h-8 bg-accent rounded flex items-center justify-center text-black font-black shrink-0 shadow-[0_0_15px_rgba(20,184,166,0.2)]">A</div>
             <div className="hidden sm:block">
               <h1 className="text-base lg:text-lg font-bold tracking-tight uppercase leading-none">Aether_Core</h1>
-              <span className="text-[8px] lg:text-[10px] font-mono opacity-50 uppercase tracking-[0.2em]">Story Pipeline v6.1</span>
+              <span className="text-[8px] lg:text-[10px] font-mono opacity-50 uppercase tracking-[0.2em]">USCS v{USCS_VERSION}</span>
             </div>
           </div>
           <div className="h-4 w-[1px] bg-border hidden md:block"></div>
           <div className="hidden md:flex flex-col">
-            <span className="text-[10px] uppercase tracking-widest text-label">Project</span>
-            <span className="text-sm font-mono tracking-tighter">ISK0-FW-992</span>
+            <span className="text-[10px] uppercase tracking-widest text-label">Workshop</span>
+            <span className="text-sm font-mono tracking-tighter">Story Architect</span>
           </div>
         </div>
         <div className="flex gap-1.5 sm:gap-4 items-center">
@@ -707,12 +1140,18 @@ DIAGNOSTIC WORKSHOP RESPONSE MANDATE:
           
           <div className="h-4 w-[1px] bg-border hidden sm:block mx-1"></div>
 
-          <button 
+          <button
             onClick={nextStep}
             disabled={state.step === STEPS.length - 1 || (state.step === 0 && !state.mode)}
-            className="flex px-4 lg:px-6 py-2 bg-accent text-black rounded-lg items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] hover:bg-white active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed transition-all shadow-[0_0_20px_rgba(20,184,166,0.3)] z-50 border border-accent/50"
+            className={`flex px-4 lg:px-6 py-2 bg-accent text-black rounded-lg items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] hover:bg-white active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed transition-all z-50 border border-accent/50 ${
+              readyToAdvance
+                ? "ring-2 ring-accent ring-offset-2 ring-offset-header animate-pulse shadow-[0_0_28px_rgba(20,184,166,0.7)]"
+                : "shadow-[0_0_20px_rgba(20,184,166,0.3)]"
+            }`}
+            title={readyToAdvance ? "Step marked complete — click to lock in and continue" : undefined}
           >
-            <span>NEXT</span>
+            {readyToAdvance && <CheckCircle2 className="w-3.5 h-3.5" />}
+            <span>{readyToAdvance ? "LOCK IN" : "NEXT"}</span>
             <ChevronRight className="w-3 h-3 font-black" />
           </button>
         </div>
@@ -770,7 +1209,7 @@ DIAGNOSTIC WORKSHOP RESPONSE MANDATE:
                 ))}
               </div>
 
-              {isInterfaceMode && (
+              {state.step >= 1 && (
                 <div className="border-t border-border/40 pt-4 mt-auto shrink-0">
                   <StatusMonitor state={state} />
                 </div>
@@ -873,6 +1312,13 @@ DIAGNOSTIC WORKSHOP RESPONSE MANDATE:
                 setIsDetached={setIsChatDetached}
                 isSyncNeeded={isSyncNeeded}
                 syncDeskstateToAI={syncDeskstateToAI}
+                onExport={exportFinalPackage}
+                onSnapshot={saveSnapshot}
+                isExporting={isExporting}
+                exportProgress={exportProgress}
+                onManualCapture={manualCapture}
+                readyToAdvance={readyToAdvance}
+                onAdvance={nextStep}
               />
               {isChatDetached && (
                 <div 
@@ -932,8 +1378,7 @@ DIAGNOSTIC WORKSHOP RESPONSE MANDATE:
             <ChevronLeft className="w-3 h-3 lg:w-4 h-4" /> REVERT
           </button>
           <div className="hidden md:flex gap-6 uppercase tracking-widest font-bold text-[9px] text-text-dim">
-            <span>VERSION 6.1.0</span>
-            <span>KERNEL: FW-992</span>
+            <span>VERSION {APP_VERSION}</span>
           </div>
         </div>
         
@@ -993,19 +1438,22 @@ DIAGNOSTIC WORKSHOP RESPONSE MANDATE:
                 {/* Provider Selection */}
                 <div className="space-y-4">
                   <label className="text-[10px] uppercase tracking-[0.3em] font-black text-label block">AI_Provider</label>
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-2 gap-3">
                     {(Object.keys(PROVIDERS) as Array<keyof typeof PROVIDERS>).map((p) => (
                       <button
                         key={p}
-                        onClick={() => setState(s => ({ 
-                          ...s, 
+                        onClick={() => {
+                          setModelFilter("");
+                          setState(s => ({
+                          ...s,
                           aiProvider: p,
-                          modelSettings: { 
-                            ...s.modelSettings, 
+                          modelSettings: {
+                            ...s.modelSettings,
                             model: PROVIDERS[p].models[0],
                             ollamaBaseUrl: s.modelSettings.ollamaBaseUrl || "http://localhost:11434"
                           }
-                        }))}
+                        }));
+                        }}
                         className={`p-3 rounded-xl border text-xs font-bold tracking-tight transition-all text-center ${
                           state.aiProvider === p 
                             ? "border-accent bg-accent/10 text-accent font-black shadow-[0_0_12px_rgba(20,184,166,0.1)]" 
@@ -1128,6 +1576,40 @@ DIAGNOSTIC WORKSHOP RESPONSE MANDATE:
                   </div>
                 )}
 
+                {/* OpenRouter API Key Override */}
+                {state.aiProvider === "openrouter" && (
+                  <div className="p-5 border border-accent/20 bg-accent/5 rounded-2xl space-y-4 font-sans">
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <label className="text-[10px] uppercase tracking-[0.2em] font-black text-accent">OpenRouter API Key</label>
+                        <span className="text-[8px] font-mono text-text-dim">Required to chat</span>
+                      </div>
+                      <div className="relative flex items-center">
+                        <input
+                          type={showOpenRouterKey ? "text" : "password"}
+                          value={state.modelSettings.openRouterApiKey || ""}
+                          onChange={(e) => setState(s => ({
+                            ...s,
+                            modelSettings: { ...s.modelSettings, openRouterApiKey: e.target.value }
+                          }))}
+                          className="w-full bg-header/60 border border-border rounded-lg p-2 pr-9 font-mono text-xs text-text-main focus:border-accent focus:outline-none"
+                          placeholder="OpenRouter key (e.g. sk-or-v1-...)"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowOpenRouterKey(v => !v)}
+                          className="absolute right-2.5 p-1 text-text-dim hover:text-text-main transition-colors"
+                        >
+                          {showOpenRouterKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                      <p className="text-[9px] text-[#fbbf24]/90 font-medium leading-normal">
+                        💡 One free key at <code className="bg-black/30 px-1 py-0.5 rounded text-[8px] font-mono">openrouter.ai/keys</code> unlocks GPT, Claude, Gemini, Grok &amp; Llama through a single provider. Models tagged <span className="text-[#10b981] font-bold">:free</span> cost nothing (but are rate-limited).
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 {/* Model Selection */}
                 <div className="space-y-4">
                   <label className="text-[10px] uppercase tracking-[0.3em] font-black text-label block">Target_Model</label>
@@ -1195,23 +1677,53 @@ DIAGNOSTIC WORKSHOP RESPONSE MANDATE:
                       )}
                     </div>
                   ) : (
-                    <div className="grid grid-cols-1 gap-2">
-                      {PROVIDERS[state.aiProvider].models.map((m) => (
-                        <button
-                          key={m}
-                          onClick={() => setState(s => ({ 
-                            ...s, 
-                            modelSettings: { ...s.modelSettings, model: m }
-                          }))}
-                          className={`p-3 rounded-lg border text-[11px] font-mono text-left transition-all ${
-                            state.modelSettings.model === m 
-                              ? "border-accent bg-accent/5 text-accent" 
-                              : "border-border bg-bg text-text-dim hover:bg-white/5 hover:text-text-muted"
-                          }`}
-                        >
-                          {m}
-                        </button>
-                      ))}
+                    <div className="space-y-3">
+                      {isFetchingRemoteModels && (
+                        <div className="text-xs font-mono text-accent flex items-center gap-2 py-1 animate-pulse">
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          Fetching available models...
+                        </div>
+                      )}
+                      {remoteModelError && (
+                        <p className="text-[9px] font-sans text-[#fbbf24]/90 leading-normal">
+                          ⚠️ Couldn't fetch live models ({remoteModelError}). Showing known defaults — add a valid API key to load the current list.
+                        </p>
+                      )}
+                      {hostedModels.length > 12 && (
+                        <input
+                          type="text"
+                          value={modelFilter}
+                          onChange={(e) => setModelFilter(e.target.value)}
+                          className="w-full bg-header/60 border border-border rounded-lg p-2 font-mono text-xs text-text-main focus:border-accent focus:outline-none"
+                          placeholder={`Filter ${hostedModels.length} models... (try "free", "claude", "gpt", "grok")`}
+                        />
+                      )}
+                      <div className="grid grid-cols-1 gap-2 max-h-[220px] overflow-y-auto custom-scrollbar pr-1">
+                        {visibleHostedModels.length === 0 && (
+                          <p className="text-[10px] font-mono text-text-dim py-2">No models match "{modelFilter}".</p>
+                        )}
+                        {visibleHostedModels.map((m) => (
+                          <button
+                            key={m}
+                            onClick={() => setState(s => ({
+                              ...s,
+                              modelSettings: { ...s.modelSettings, model: m }
+                            }))}
+                            className={`p-3 rounded-lg border text-[11px] font-mono text-left transition-all flex items-center justify-between gap-2 ${
+                              state.modelSettings.model === m
+                                ? "border-accent bg-accent/5 text-accent"
+                                : "border-border bg-bg text-text-dim hover:bg-white/5 hover:text-text-muted"
+                            }`}
+                          >
+                            <span className="truncate">{m}</span>
+                            {m.endsWith(":free") ? (
+                              <span className="text-[8px] bg-[#10b981]/15 text-[#10b981] px-1.5 py-0.5 rounded uppercase font-bold tracking-widest font-sans shrink-0">Free</span>
+                            ) : remoteModels.length > 0 && (
+                              <span className="text-[8px] bg-accent/15 text-accent px-1.5 py-0.5 rounded uppercase font-bold tracking-widest font-sans shrink-0">Live</span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1239,20 +1751,21 @@ DIAGNOSTIC WORKSHOP RESPONSE MANDATE:
                   <div className="space-y-3">
                     <div className="flex justify-between items-center">
                       <label className="text-[10px] uppercase tracking-[0.2em] font-black text-label">Max_Tokens</label>
-                      <span className="text-[10px] font-mono text-accent">{state.modelSettings.maxTokens}</span>
+                      <span className="text-[10px] font-mono text-accent">{state.modelSettings.maxTokens} <span className="text-text-dim">/ {tokenCeiling}</span></span>
                     </div>
-                    <input 
+                    <input
                       type="range"
-                      min="256"
-                      max="8192"
+                      min="1024"
+                      max={tokenCeiling}
                       step="256"
-                      value={state.modelSettings.maxTokens}
+                      value={Math.min(state.modelSettings.maxTokens, tokenCeiling)}
                       onChange={(e) => setState(s => ({
                         ...s,
-                        modelSettings: { ...s.modelSettings, maxTokens: parseInt(e.target.value) }
+                        modelSettings: { ...s.modelSettings, maxTokens: Math.min(parseInt(e.target.value), tokenCeiling) }
                       }))}
                       className="w-full h-1 bg-border rounded-full appearance-none accent-accent cursor-pointer"
                     />
+                    <p className="text-[9px] text-text-dim leading-normal">Capped to the selected model's output limit. Higher values prevent long HTML cards / guideline sets from being truncated.</p>
                   </div>
                 </div>
               </div>
@@ -1307,15 +1820,22 @@ DIAGNOSTIC WORKSHOP RESPONSE MANDATE:
   );
 }
 
-function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDetached, setIsDetached, isSyncNeeded, syncDeskstateToAI }: { 
-  state: StoryState, 
-  setState: React.Dispatch<React.SetStateAction<StoryState>>, 
+function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDetached, setIsDetached, isSyncNeeded, syncDeskstateToAI, onExport, onSnapshot, isExporting, exportProgress, onManualCapture, readyToAdvance, onAdvance }: {
+  state: StoryState,
+  setState: React.Dispatch<React.SetStateAction<StoryState>>,
   askAssistant: (p: string) => Promise<void>,
   setIsChatOpen: (o: boolean) => void,
   isDetached?: boolean,
   setIsDetached?: (d: boolean) => void,
   isSyncNeeded?: boolean,
-  syncDeskstateToAI?: () => void
+  syncDeskstateToAI?: () => void,
+  onExport?: () => void,
+  onSnapshot?: () => void,
+  isExporting?: boolean,
+  exportProgress?: string,
+  onManualCapture?: (key: SingleSlotKey, content: string) => void,
+  readyToAdvance?: boolean,
+  onAdvance?: () => void
 }) {
   return (
     <>
@@ -1391,6 +1911,17 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
                 </div>
                 <p className="whitespace-pre-wrap break-words">{m.content}</p>
               </div>
+              {m.role === "assistant" && onManualCapture && !m.content.startsWith("ERROR_SIGNAL") && m.content.trim().length > 40 && (
+                <select
+                  value=""
+                  onChange={(e) => { if (e.target.value) onManualCapture(e.target.value as SingleSlotKey, m.content); }}
+                  title="Manually capture this message into a package slot (fallback if auto-capture missed it)"
+                  className="text-[8px] font-mono uppercase tracking-widest bg-bg border border-border rounded px-1.5 py-1 text-text-dim hover:text-text-main focus:outline-none focus:border-accent cursor-pointer"
+                >
+                  <option value="">📌 Capture as…</option>
+                  {CAPTURE_SLOTS.map(slot => <option key={slot.key} value={slot.key}>{slot.label}</option>)}
+                </select>
+              )}
             </div>
           ))
         )}
@@ -1408,8 +1939,24 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
       </div>
       
       <div className="p-6 border-t border-border bg-[#18181b]/80 shrink-0">
+        {readyToAdvance && onAdvance && state.step < STEPS.length - 1 && (
+          <button
+            onClick={onAdvance}
+            className="mb-3 w-full py-2.5 px-3 bg-accent/15 hover:bg-accent/25 border border-accent/40 rounded-lg flex items-center justify-between text-left transition-all active:scale-[0.98] group shadow-[0_0_18px_rgba(20,184,166,0.2)]"
+          >
+            <div className="flex items-center gap-1.5 min-w-0">
+              <CheckCircle2 className="w-3.5 h-3.5 text-accent shrink-0" />
+              <span className="text-[10px] font-black uppercase tracking-wider text-accent truncate">
+                Step complete — lock in &amp; continue
+              </span>
+            </div>
+            <span className="text-[8px] font-bold text-black uppercase bg-accent px-2 py-1 rounded font-mono shrink-0 flex items-center gap-1">
+              {STEPS[state.step + 1]} <ChevronRight className="w-2.5 h-2.5" />
+            </span>
+          </button>
+        )}
         {isSyncNeeded && syncDeskstateToAI && (
-          <button 
+          <button
             onClick={syncDeskstateToAI}
             className="mb-3 w-full py-2 px-3 bg-[#fbbf24]/10 hover:bg-[#fbbf24]/20 border border-[#fbbf24]/20 hover:border-[#fbbf24]/40 rounded-lg flex items-center justify-between text-left transition-all active:scale-[0.98] group"
           >
@@ -1426,12 +1973,32 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
         )}
         <ChatInput onSend={askAssistant} isLoading={state.isAssistantLoading} />
         
+        {isExporting && exportProgress && (
+          <div className="mt-4 flex items-center gap-2 text-[9px] font-mono text-accent uppercase tracking-widest animate-pulse">
+            <RefreshCw className="w-3 h-3 animate-spin shrink-0" />
+            <span className="truncate">Compiling · {exportProgress}</span>
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-3 mt-4">
-          <button className="py-2.5 bg-border/40 hover:bg-border/60 border border-border rounded-lg flex items-center justify-center gap-2 text-[9px] font-black uppercase tracking-widest transition-all">
+          <button
+            onClick={onSnapshot}
+            disabled={state.assistantHistory.length === 0}
+            title="Download a full backup of this session (deskstate + entire chat) as a .txt"
+            className="py-2.5 bg-border/40 hover:bg-border/60 border border-border rounded-lg flex items-center justify-center gap-2 text-[9px] font-black uppercase tracking-widest transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+          >
             <Save className="w-3 h-3" /> Snapshot
           </button>
-          <button className="py-2.5 bg-accent/10 hover:bg-accent/20 border border-accent/20 text-accent rounded-lg flex items-center justify-center gap-2 text-[9px] font-black uppercase tracking-widest transition-all">
-            <Download className="w-3 h-3" /> Export_Core
+          <button
+            onClick={onExport}
+            disabled={isExporting || state.assistantHistory.length === 0}
+            title="Compile the final ISK0 package (Title, Plot Card, Characters, Scenarios, Prompt Plot, Guidelines, Reminders) and download it as a clean .txt — no chat"
+            className="py-2.5 bg-accent/10 hover:bg-accent/20 border border-accent/20 text-accent rounded-lg flex items-center justify-center gap-2 text-[9px] font-black uppercase tracking-widest transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {isExporting ? (
+              <><RefreshCw className="w-3 h-3 animate-spin" /> Compiling…</>
+            ) : (
+              <><Download className="w-3 h-3" /> Export_Core</>
+            )}
           </button>
         </div>
       </div>
@@ -1534,9 +2101,19 @@ function MainInterfaceChat({ state, askAssistant, preview, isSyncNeeded, syncDes
 function StatusMonitor({ state }: { state: StoryState }) {
   const [isOpen, setIsOpen] = React.useState(false);
 
+  // Counts ONLY the captured §21.1 package blocks (Prompt Plot + Guidelines +
+  // Reminders + Player Persona + each character's AI description) — not workshop
+  // chatter or non-counting HTML/image blocks. ~4 chars/token estimate.
+  const estTokens = countingPackageTokens(state.deliverables);
+  const fmtK = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(n % 1000 === 0 ? 0 : 1)}k` : `${n}`);
+  const overBudget = estTokens > state.tokenBudgetMax;
+  const inRange = estTokens >= state.tokenBudgetMin && estTokens <= state.tokenBudgetMax;
+  const pctOfMax = Math.min(100, state.tokenBudgetMax > 0 ? (estTokens / state.tokenBudgetMax) * 100 : 0);
+  const barColor = overBudget ? "#f43f5e" : inRange ? "#14b8a6" : "#64748b";
+
   return (
     <div className="border border-border bg-[#131316]/95 rounded-2xl overflow-hidden transition-all duration-300 shadow-xl">
-      <button 
+      <button
         onClick={() => setIsOpen(!isOpen)}
         className="w-full px-4 py-3 bg-white/5 hover:bg-white/10 flex items-center justify-between text-left border-b border-border transition-colors cursor-pointer"
       >
@@ -1549,6 +2126,21 @@ function StatusMonitor({ state }: { state: StoryState }) {
           <span className="text-text-dim uppercase tracking-widest">{isOpen ? "CLOSE" : "OPEN"}</span>
         </div>
       </button>
+
+      {/* Always-visible Token Budget gauge — counts the captured §21 package blocks */}
+      <div className="px-4 py-2.5 border-b border-border bg-bg/40" title="Captured package size (Prompt Plot + Guidelines + Reminders + Player Persona + character AI descriptions) vs your target. ~4 chars/token estimate. HTML cards & image prompts excluded, per §21.1.">
+        <div className="flex items-center justify-between text-[8px] font-mono uppercase tracking-widest mb-1.5">
+          <span className="text-text-dim flex items-center gap-1">
+            <Cpu className="w-2.5 h-2.5" /> Package Budget{state.budgetTierMode && <span className="text-[#fbbf24] font-bold">· §21</span>}
+          </span>
+          <span className="font-black" style={{ color: barColor }}>
+            ≈{fmtK(estTokens)} <span className="text-text-dim font-normal">/ {fmtK(state.tokenBudgetMin)}–{fmtK(state.tokenBudgetMax)}</span>
+          </span>
+        </div>
+        <div className="h-1 w-full bg-border rounded-full overflow-hidden">
+          <div className="h-full transition-all duration-700 ease-out" style={{ width: `${pctOfMax}%`, backgroundColor: barColor }} />
+        </div>
+      </div>
 
       {isOpen ? (
         <div className="p-4 space-y-4 max-h-[320px] overflow-y-auto scrollbar-thin scrollbar-thumb-border text-[10px] leading-relaxed">
@@ -1600,6 +2192,46 @@ function StatusMonitor({ state }: { state: StoryState }) {
             <div className="flex gap-1 h-4">
               {state.palette.map((c, i) => (
                 <div key={i} className="flex-1 rounded border border-white/5" style={{ backgroundColor: c }} title={c} />
+              ))}
+            </div>
+          </section>
+
+          {/* Package Contents */}
+          <section className="space-y-2">
+            <h3 className="text-[8px] uppercase font-black tracking-[0.2em] text-label flex items-center gap-1.5">
+              <div className="w-1.5 h-[1px] bg-accent" /> Package_Contents
+            </h3>
+            <div className="rounded-xl border border-border bg-bg/50 divide-y divide-border/40">
+              {([
+                ["Title & Summary", state.deliverables.titleSummary, false],
+                ["Plot Card", state.deliverables.plotCard, false],
+                ["Prompt Plot", state.deliverables.promptPlot, true],
+                ["Guidelines", state.deliverables.guidelines, true],
+                ["Reminders", state.deliverables.reminders, true],
+                ["Player Persona", state.deliverables.playerPersona, true],
+                ["Scenarios", state.deliverables.scenarios, false],
+                ["Image Prompts", state.deliverables.imagePrompts, false],
+              ] as [string, string, boolean][]).map(([label, content, counts]) => (
+                <div key={label} className="flex items-center justify-between px-2.5 py-1.5 text-[9px]">
+                  <span className="flex items-center gap-1.5">
+                    <span className={`inline-block w-1.5 h-1.5 rounded-full ${content ? "bg-[#10b981]" : "bg-text-dim/30"}`} />
+                    <span className={content ? "text-text-main" : "text-text-dim"}>{label}</span>
+                    {!counts && <span className="text-[7px] text-text-dim/60 uppercase tracking-wide">(no count)</span>}
+                  </span>
+                  <span className="font-mono text-text-dim">
+                    {content ? (counts ? `${fmtK(estimateTokens(content))}t` : "✓") : "—"}
+                  </span>
+                </div>
+              ))}
+              {state.deliverables.characters.map((c) => (
+                <div key={c.name} className="flex items-center justify-between px-2.5 py-1.5 text-[9px]">
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    <span className={`inline-block w-1.5 h-1.5 rounded-full ${c.desc ? "bg-[#10b981]" : "bg-text-dim/30"}`} />
+                    <span className="text-text-main truncate">{c.name}</span>
+                    <span className="text-[7px] text-text-dim/60 uppercase tracking-wide">{c.card ? "card+desc" : c.desc ? "desc" : "card"}</span>
+                  </span>
+                  <span className="font-mono text-text-dim shrink-0">{c.desc ? `${fmtK(estimateTokens(c.desc))}t` : "✓"}</span>
+                </div>
               ))}
             </div>
           </section>
@@ -2015,7 +2647,7 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
                   >
                     Help me Refine
                   </button>
-                  <button 
+                  <button
                     onClick={() => askAssistant("Suggest 3 distinctive isekai twists for this concept.")}
                     className="px-4 py-2 bg-header border border-border text-text-muted rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-white/5 transition-all"
                   >
@@ -2023,6 +2655,102 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
                   </button>
                 </div>
               </div>
+            </div>
+
+            {/* Token Budget target (USCS §21) */}
+            <div className="p-6 border border-border bg-card rounded-2xl space-y-5">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div>
+                  <p className="text-[10px] font-black text-accent uppercase tracking-[0.3em] flex items-center gap-2">
+                    <Cpu className="w-3.5 h-3.5" /> Token Budget — Target Package Size
+                  </p>
+                  <p className="text-[11px] text-text-dim mt-1 leading-relaxed">
+                    Aim for the finished <span className="text-text-muted">AI instruction package</span> (Prompt Plot + Guidelines + Reminders + Character AI descriptions). HTML cards & image prompts don't count toward this. Platform ceiling: 20k.
+                  </p>
+                </div>
+                <span className="text-sm font-mono text-accent shrink-0 bg-accent/10 px-3 py-1.5 rounded-lg border border-accent/20">
+                  {state.tokenBudgetMin / 1000}k–{state.tokenBudgetMax / 1000}k
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {BUDGET_PRESETS.map((p) => {
+                  const active = state.tokenBudgetMin === p.min && state.tokenBudgetMax === p.max;
+                  return (
+                    <button
+                      key={p.label}
+                      onClick={() => setState(s => ({
+                        ...s,
+                        tokenBudgetMin: p.min,
+                        tokenBudgetMax: p.max,
+                        // The lowest tier auto-suggests Budget-Tier Mode ON (overridable below).
+                        budgetTierMode: p.tier ? true : s.budgetTierMode
+                      }))}
+                      title={p.hint}
+                      className={`p-3 rounded-xl border text-left transition-all ${
+                        active
+                          ? "border-accent bg-accent/10 text-accent shadow-[0_0_12px_rgba(20,184,166,0.1)]"
+                          : "border-border bg-bg text-text-dim hover:text-text-muted hover:border-text-dim"
+                      }`}
+                    >
+                      <span className="block text-xs font-black uppercase tracking-tight">{p.label}</span>
+                      <span className="block text-[9px] font-mono opacity-70 mt-0.5">{p.min / 1000}–{p.max / 1000}k</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Custom fine-tune sliders */}
+              <div className="space-y-3 pt-1">
+                <div className="flex items-center justify-between">
+                  <label className="text-[9px] uppercase tracking-[0.2em] font-black text-label">Fine-tune (min)</label>
+                  <span className="text-[10px] font-mono text-text-muted">{state.tokenBudgetMin / 1000}k</span>
+                </div>
+                <input
+                  type="range" min={2000} max={19500} step={500}
+                  value={state.tokenBudgetMin}
+                  onChange={(e) => {
+                    const v = parseInt(e.target.value);
+                    setState(s => ({ ...s, tokenBudgetMin: Math.min(v, s.tokenBudgetMax - 500) }));
+                  }}
+                  className="w-full h-1 bg-border rounded-full appearance-none accent-accent cursor-pointer"
+                />
+                <div className="flex items-center justify-between">
+                  <label className="text-[9px] uppercase tracking-[0.2em] font-black text-label">Fine-tune (max)</label>
+                  <span className="text-[10px] font-mono text-text-muted">{state.tokenBudgetMax / 1000}k</span>
+                </div>
+                <input
+                  type="range" min={2500} max={20000} step={500}
+                  value={state.tokenBudgetMax}
+                  onChange={(e) => {
+                    const v = parseInt(e.target.value);
+                    setState(s => ({ ...s, tokenBudgetMax: Math.max(v, s.tokenBudgetMin + 500) }));
+                  }}
+                  className="w-full h-1 bg-border rounded-full appearance-none accent-accent cursor-pointer"
+                />
+              </div>
+
+              {/* Budget-Tier Mode toggle */}
+              <button
+                onClick={() => setState(s => ({ ...s, budgetTierMode: !s.budgetTierMode }))}
+                className={`w-full p-3 rounded-xl border flex items-center justify-between gap-3 transition-all text-left ${
+                  state.budgetTierMode
+                    ? "border-[#fbbf24]/40 bg-[#fbbf24]/10"
+                    : "border-border bg-bg hover:border-text-dim"
+                }`}
+              >
+                <div className="min-w-0">
+                  <span className={`block text-[11px] font-black uppercase tracking-wider ${state.budgetTierMode ? "text-[#fbbf24]" : "text-text-muted"}`}>
+                    Budget-Tier Mode {state.budgetTierMode ? "· ON" : "· OFF"}
+                  </span>
+                  <span className="block text-[9px] text-text-dim mt-0.5 leading-snug">
+                    USCS §21 optimizations for free models (DeepSeek/Ministral/GLM): state-based triggers, mandatory status block, worked examples, strict document separation.
+                  </span>
+                </div>
+                <div className={`w-9 h-5 rounded-full shrink-0 relative transition-colors ${state.budgetTierMode ? "bg-[#fbbf24]" : "bg-border"}`}>
+                  <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${state.budgetTierMode ? "left-[18px]" : "left-0.5"}`} />
+                </div>
+              </button>
             </div>
           </div>
         </div>

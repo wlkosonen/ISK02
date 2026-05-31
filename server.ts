@@ -4,6 +4,7 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import Anthropic from "@anthropic-ai/sdk";
 import dotenv from "dotenv";
+import { buildStepContext, uscsLoaded } from "./uscs";
 
 dotenv.config();
 
@@ -21,15 +22,82 @@ function getAnthropic() {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  // Docker (NODE_ENV=production) listens on 3000 inside the container, which
+  // docker-compose maps to host 3010. Local dev also uses 3010 so the app is
+  // always reachable at localhost:3010 and never collides with Open WebUI on 3000.
+  // Override with the PORT env var if needed.
+  const PORT = Number(process.env.PORT) || (process.env.NODE_ENV === "production" ? 3000 : 3010);
 
   app.use(express.json());
 
   // Configuration endpoint to expose server-side environment defaults
   app.get("/api/config", (req, res) => {
     res.json({
-      ollamaBaseUrl: process.env.OLLAMA_BASE_URL || "http://localhost:11434"
+      ollamaBaseUrl: process.env.OLLAMA_BASE_URL || "http://localhost:11434",
+      uscsLoaded: uscsLoaded()
     });
+  });
+
+  // List currently-available models for a hosted provider, using the user's key
+  // (falls back to the server env key). Lets the UI show real, up-to-date models
+  // instead of a hardcoded list that drifts out of date.
+  app.get("/api/models", async (req, res) => {
+    const provider = (req.query.provider as string) || "gemini";
+    const key = (req.query.key as string)?.trim();
+
+    try {
+      if (provider === "anthropic") {
+        const apiKey = key || process.env.ANTHROPIC_API_KEY;
+        if (!apiKey) return res.status(400).json({ error: "No Anthropic API key available." });
+        const client = new Anthropic({ apiKey });
+        const list = await client.models.list({ limit: 100 });
+        const models = (list.data || []).map((m: any) => m.id);
+        return res.json({ models });
+      }
+
+      if (provider === "gemini") {
+        const apiKey = key || process.env.GEMINI_API_KEY;
+        if (!apiKey) return res.status(400).json({ error: "No Gemini API key available." });
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 6000);
+        const r = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}&pageSize=200`,
+          { signal: controller.signal }
+        );
+        clearTimeout(timeoutId);
+        if (!r.ok) throw new Error(`Gemini models list returned status ${r.status}`);
+        const data = (await r.json()) as any;
+        const models = (data.models || [])
+          .filter((m: any) => (m.supportedGenerationMethods || []).includes("generateContent"))
+          .map((m: any) => (m.name || "").replace(/^models\//, ""))
+          .filter(Boolean);
+        return res.json({ models });
+      }
+
+      if (provider === "openrouter") {
+        // OpenRouter's model list is public; the key is optional for listing.
+        const apiKey = key || process.env.OPENROUTER_API_KEY;
+        const headers: Record<string, string> = {};
+        if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 6000);
+        const r = await fetch("https://openrouter.ai/api/v1/models", { headers, signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (!r.ok) throw new Error(`OpenRouter models list returned status ${r.status}`);
+        const data = (await r.json()) as any;
+        const models = (data.data || [])
+          .map((m: any) => m.id)
+          .filter(Boolean)
+          // Surface free models first so they're easy to find.
+          .sort((a: string, b: string) => Number(b.endsWith(":free")) - Number(a.endsWith(":free")));
+        return res.json({ models });
+      }
+
+      return res.status(400).json({ error: "Model listing is not supported for this provider." });
+    } catch (err: any) {
+      console.info(`Could not list ${provider} models:`, err.message || err);
+      return res.status(500).json({ error: err.message || String(err) });
+    }
   });
 
   // Endpoint to fetch available models from local Ollama instance
@@ -65,10 +133,17 @@ async function startServer() {
   // Unified API Route for AI assistance
   app.post("/api/assistant", async (req, res) => {
     try {
-      const { prompt, history, systemInstruction, provider, modelSettings } = req.body;
-      
+      const { prompt, history, systemInstruction, provider, modelSettings, step } = req.body;
+
       const aiProvider = provider || "gemini";
       const settings = modelSettings || {};
+
+      // Assemble the system prompt server-side: the always-on USCS core directive
+      // plus ONLY the verbatim slice of the master document for the current step,
+      // followed by the client-supplied dynamic context (live deskstate + the
+      // real-time [SET_*] UI-sync command protocol).
+      const uscsContext = buildStepContext(typeof step === "number" ? step : 0);
+      const fullSystem = `${uscsContext}\n\n${systemInstruction || ""}`.trim();
 
       if (aiProvider === "gemini") {
         const apiKey = settings.geminiApiKey?.trim() || process.env.GEMINI_API_KEY;
@@ -80,7 +155,7 @@ async function startServer() {
             httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
           });
 
-          const modelName = settings.model || "gemini-3-flash-preview"; 
+          const modelName = settings.model || "gemini-2.5-flash";
           
           // Format history for generateContent
           const contents = (history || []).map((h: any) => ({
@@ -93,7 +168,7 @@ async function startServer() {
             model: modelName,
             contents: contents,
             config: {
-              systemInstruction: systemInstruction || "You are a professional creative writing collaborator.",
+              systemInstruction: fullSystem || "You are a professional creative writing collaborator.",
               temperature: settings.temperature ?? 1,
               topP: settings.topP,
               topK: settings.topK,
@@ -114,7 +189,7 @@ async function startServer() {
           } else if (errorDetail.includes("quota") || errorDetail.includes("limit exceeded") || errorDetail.includes("429")) {
             errorMsg = "Your Gemini API quota has been exceeded or rate limit hit. (Error 429: Rate Limit/Quota Exceeded)";
           } else if (errorDetail.includes("not found") || errorDetail.includes("model not found") || errorDetail.includes("404")) {
-            errorMsg = `The selected Gemini model '${settings.model || "gemini-3-flash-preview"}' was not found, or the API key lacks access. Check your Model Settings.`;
+            errorMsg = `The selected Gemini model '${settings.model || "gemini-2.5-flash"}' was not found, or the API key lacks access. Check your Model Settings.`;
           }
           
           return res.status(400).json({ error: errorMsg });
@@ -164,7 +239,7 @@ async function startServer() {
                 model: candidateModel,
                 max_tokens: settings.maxTokens || 4096,
                 temperature: settings.temperature ?? 1,
-                system: systemInstruction,
+                system: fullSystem,
                 messages: messages,
               });
               console.log(`Success with Anthropic model: ${candidateModel}`);
@@ -202,46 +277,10 @@ async function startServer() {
             errorMsg = `Anthropic API returned a 404 Model Not Found error for '${requestedModel}'. This is common with brand new Anthropic accounts or keys without funds (Anthropic restricts access to Claude models and throws 404 until you have topped up the account balance with a minimum deposit, e.g., $5). Code: ${statusCode}`;
           }
 
-          // Let's attempt Gemini fallback only if we have a key configured and ready
-          const apiKey = settings.geminiApiKey?.trim() || process.env.GEMINI_API_KEY;
-          if (apiKey) {
-            try {
-              console.log("Attempting automatic Gemini fallback...");
-              const ai = new GoogleGenAI({ 
-                apiKey,
-                httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
-              });
-
-              // Format history for generateContent
-              const contents = (history || []).map((h: any) => ({
-                role: h.role,
-                parts: h.parts
-              }));
-              contents.push({ role: "user", parts: [{ text: prompt }] });
-
-              const fallbackModel = "gemini-2.5-flash"; // Extremely fast and capable public model
-              const result = await ai.models.generateContent({
-                model: fallbackModel,
-                contents: contents,
-                config: {
-                  systemInstruction: systemInstruction || "You are a professional creative writing collaborator.",
-                  temperature: settings.temperature ?? 1,
-                  maxOutputTokens: settings.maxTokens || 2048,
-                }
-              });
-
-              const geminiText = result.text;
-              if (geminiText) {
-                const warningMessage = `⚠️ [SYSTEM NOTICE: ${errorMsg}. To ensure your creative flow in Aether_Core v6.1 is not interrupted, we have automatically routed this connection to Gemini-2.5-Flash.] ⚠️\n\n`;
-                return res.json({ text: warningMessage + geminiText });
-              }
-            } catch (fallbackErr: any) {
-              console.error("Gemini fallback also failed:", fallbackErr);
-              return res.status(400).json({ error: `${errorMsg}. Additionally, Gemini fallback failed: ${fallbackErr.message || fallbackErr}` });
-            }
-          }
-
-          // If no Gemini key for fallback, return the precise Anthropic error directly
+          // No silent provider switching. Return the precise Anthropic error so
+          // the user can act on it. (This previously rerouted to Gemini and
+          // injected a "[SYSTEM NOTICE …]" string into the story text, which
+          // could end up polluting exported deliverables — removed.)
           return res.status(400).json({ error: errorMsg });
         }
       }
@@ -259,8 +298,8 @@ async function startServer() {
         const messages = [];
         
         // Add system message if present
-        if (systemInstruction) {
-          messages.push({ role: "system", content: systemInstruction });
+        if (fullSystem) {
+          messages.push({ role: "system", content: fullSystem });
         }
 
         // Add history
@@ -308,6 +347,70 @@ async function startServer() {
           return res.status(500).json({ 
             error: `Could not connect to Ollama at ${ollamaUrl}. Error details: ${ollamaErr.message || ollamaErr}. Please verify that Ollama is running ('ollama serve') and accessible from the container.` 
           });
+        }
+      }
+
+      if (aiProvider === "openrouter") {
+        const apiKey = settings.openRouterApiKey?.trim() || process.env.OPENROUTER_API_KEY;
+        if (!apiKey) return res.status(500).json({ error: "OpenRouter API key is not configured. Add a free key from openrouter.ai/keys in the Model Settings menu." });
+
+        const modelName = settings.model || "deepseek/deepseek-chat-v3-0324:free";
+
+        // OpenRouter uses the OpenAI chat-completions shape.
+        const messages: any[] = [];
+        if (fullSystem) messages.push({ role: "system", content: fullSystem });
+        (history || []).forEach((h: any) => {
+          messages.push({
+            role: h.role === "model" ? "assistant" : "user",
+            content: h.parts[0]?.text || ""
+          });
+        });
+        messages.push({ role: "user", content: prompt });
+
+        try {
+          console.log(`Forwarding request to OpenRouter with model ${modelName}`);
+          const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${apiKey}`,
+              // Optional attribution headers used by OpenRouter for app ranking.
+              "HTTP-Referer": process.env.APP_URL || "http://localhost:3000",
+              "X-Title": "Aether_Core USCS"
+            },
+            body: JSON.stringify({
+              model: modelName,
+              messages,
+              temperature: settings.temperature ?? 1,
+              max_tokens: settings.maxTokens || 4096,
+              stream: false
+            })
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            let msg = `OpenRouter returned status ${response.status}: ${errorText || response.statusText}`;
+            if (response.status === 401) {
+              msg = "Your OpenRouter API key is invalid or missing. Get a free key at openrouter.ai/keys and add it in Model Settings.";
+            } else if (response.status === 402) {
+              msg = `The model '${modelName}' requires credits your OpenRouter account doesn't have. Pick a model tagged ':free', or add credits at openrouter.ai.`;
+            } else if (response.status === 429) {
+              msg = "OpenRouter rate limit reached (free models are rate-limited). Wait a moment, or switch to another model.";
+            }
+            throw new Error(msg);
+          }
+
+          const responseData = (await response.json()) as any;
+          const text = responseData?.choices?.[0]?.message?.content;
+
+          if (!text) {
+            throw new Error(`No content from OpenRouter response: ${JSON.stringify(responseData)}`);
+          }
+
+          return res.json({ text });
+        } catch (orErr: any) {
+          console.error("OpenRouter bridge failed:", orErr);
+          return res.status(400).json({ error: orErr.message || String(orErr) });
         }
       }
 
