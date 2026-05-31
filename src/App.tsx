@@ -387,7 +387,7 @@ ${state.groundingRules || "No strict rules established yet."}`
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-bg technical-grid">
+    <div className="h-screen max-h-screen flex flex-col bg-bg technical-grid overflow-hidden">
       {/* Header */}
       <header className="border-b border-border bg-header/80 backdrop-blur-md px-4 py-3 lg:px-6 lg:py-4 flex justify-between items-center z-50">
         <div className="flex items-center gap-4 lg:gap-6">
@@ -557,7 +557,7 @@ ${state.groundingRules || "No strict rules established yet."}`
               }}
               exit={{ x: "100%" }}
               transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className={`${isChatDetached ? 'overflow-hidden flex flex-col' : 'fixed inset-y-0 right-0 border-l border-border bg-[#18181b] flex flex-col z-[70] xl:z-40 h-full'} ${isChatOpen ? 'flex' : 'hidden xl:flex'} ${isXL && !isChatDetached ? 'relative xl:inset-auto xl:bg-header/40 xl:border-l-0' : 'w-full sm:w-auto'}`}
+              className={`${isChatDetached ? 'overflow-hidden flex flex-col' : 'fixed inset-y-0 right-0 border-l border-border bg-[#18181b] flex flex-col z-[70] xl:z-40 h-full'} ${isChatOpen ? 'flex' : 'hidden xl:flex'} ${isXL && !isChatDetached ? 'relative xl:inset-auto xl:bg-header/40 xl:border-l-0 xl:h-full' : 'w-full sm:w-auto'}`}
               style={!isChatDetached ? { width: dockedChatWidth } : {}}
             >
               {/* Resize Handle for Docked View */}
