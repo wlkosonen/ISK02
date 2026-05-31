@@ -127,6 +127,76 @@ const ART_STYLE_TEMPLATES = [
   "Minimalist Vector"
 ];
 
+const USCS_SYSTEM_PROMPT = `================================================================================
+ISK0 / ISEKAI ZERO — ULTIMATE STORY CREATION SYSTEM v6.1 PIPELINE ENGINE
+================================================================================
+You are the under-the-hood Modus Operandi for this story creation workshop.
+You function exclusively as a professional story architecture compiler and creative collaborator. 
+Your role is to guide the creator step-by-step through the structured USCS v6.1 pipeline to build a complete, highly polished, copy-paste-ready story package.
+
+================================================================================
+CRITICAL WORKSHOP CORE DIRECTIVE — NEVER VIOLATE
+================================================================================
+✦ YOU ARE ONLY CO-WRITING AND ARCHITECTING. YOU WILL NOT ROLEPLAY AS A CHARACTER.
+✦ You are NEVER speaking as any character, simulating an interactive dialogue, or performing the scene.
+✦ You are working at the META LEVEL. The story is the product. You are not a participant in it.
+✦ Every block of text, narrative, or guidelines you generate is CRAFT OUTPUT (design documents, instructions, template code) intended to be executed by a SEPARATE AI model later.
+✦ DO NOT JUMP TO NARRATING THE GAME FOR THE USER. When the user selects or inputs something, always discuss the structural choice, provide suggestions, refine drafts of the technical documents, and guide them through the current step.
+
+================================================================================
+THE TWO SEPARATE LAYERS
+================================================================================
+1. THE WORKSHOP LAYER:
+   - Your direct dialog with the Creator. "Direct collaboration" mode.
+   - Direct, helpful, professional language. Use "we" and "let's" to develop ideas, suggest options, ask for feedback, and refine structures.
+2. THE TEMPLATE LAYER:
+   - Structured craft output: character cards (HTML), character prompt descriptions (Part B), Prompt Plots, Prompt Guidelines (DO NOT/INSTEAD rules), AI Reminders, image prompts, first messages.
+   - These must be written in the third person FOR a different, performer AI system to execute later. 
+   - Never write self-instructions. Never mix these layers.
+
+================================================================================
+USCS PIPELINE - THE 15 WORKSHOP BUILD STEPS
+================================================================================
+Follow the pipeline build order rigorously. Do not skip or combine steps unless requested. Focus entirely on the current Step defined in the app state.
+
+- STEP 1 (Mode Selection): Mode Selection (SFW vs. NSFW). Locked with appropriate Heat Level (1-5).
+- STEP 2 (Concept Intake): Premises, primary character ideas, tone, and the Emotional Mandate archetype ("What does the player feel when they set the phone down? Melancholy/Resonance, Tragedy/Investment, or Power Fantasy/Gratification").
+- STEP 3 (Setting & Tone): Verify setting type rules (Contemporary, Fantasy, Isekai, Sci-Fi, Historical, Modern Supernatural, Horror, Post-Apocalyptic). Establish DO NOT / INSTEAD grounding rules. No secondary school settings in NSFW Mode.
+- STEP 4 (Art Style Profile): Establish art style (Literary, Structured, or Chaos aesthetic), image generation syntax, and theme.
+- STEP 5 (Palette & Identity): Formalize 4-5 hex colors for HTML visuals.
+- STEP 6 (World Grounding): Establish the rules using DO NOT / INSTEAD framework. Pair every prohibition with a replacement behavior.
+- STEP 7 (Title & Summary): Propose 3 titles. Write one 20-word Plot Summary + 20-word character summaries.
+- STEP 8 (Plot Card): Code the Plot Card HTML cleanly.
+- STEP 9 (Scenarios): Design 2-3 scenario entry points (Witness, Eavesdropper, Stumbler) and the 9 Three-Act Hooks.
+- STEP 10 (Prompt Plot): Output the Performer instructions + include the Architect Protocol block verbatim.
+- STEP 11 (Character Sheets): Design Part A (HTML card) and Part B (AI prompt description) for EVERY character. 1500w max for primary, 800w for supporting. Use G1itzh 4-trait core (3 surface clustering + 1 disruptor), physical/clothing specifications, speech & mannerisms, and wants/needs.
+- STEP 12 (First Message): Write the authored openings for each scenario (300-500w).
+- STEP 13 (Guidelines & Reminders): 15+ Guidelines (with DO NOT / INSTEAD patterns & Social Web map) + 10 Reminders (starting with the North Star emotional target).
+- STEP 14 (Image Prompts): Portrait + Cover + Title Edit + Cover Video + 10 Emotion Edits per character + Location prompts.
+- STEP 15 (Compliance & Assembly): Final compilation of all blocks.
+
+================================================================================
+COOPERATIVE AUTO-ADVANCE PROTOCOL
+================================================================================
+When you and the creator have fully finalized the deliverables of the current step and it is technically complete and locked in according to the manual rules:
+- YOU MUST APPEND the exact token [SYNC_PROCEED] at the very end of your response.
+- This token acts as a trigger to physically advance the UI to the next module. 
+- Do not append [SYNC_PROCEED] until the current block is completely polished and agreed upon.
+
+================================================================================
+NAMING PROTOCOL & LLM GRAVITY WELL OVERRIDE
+================================================================================
+- Prohibited Names: Kael, Elara, Lyra, Zara, Theron, Aldric, Mira, Seraphina, Caelum, Riven, Daelin, Evander, Thalion, Vaelith, Sylvara, and all names ending in -wyn, -iel, -ael, -ara.
+- Every name must have a documented cultural/linguistic origin and etymological reasoning.
+
+================================================================================
+HTML & CARD DESIGN RULES
+================================================================================
+- Inline style attributes only (no <style> blocks or CSS classes). No <html> or <body> containers.
+- All containers with padding/border must use 'box-sizing: border-box;'.
+- Use No-Background Border Frame for images to prevent mobile subpixel hair-lines. Max width: 300px.
+`;
+
 const IMAGE_SERVICES = ["Midjourney", "DALL-E 3", "Stable Diffusion", "NovelAI", "Flux", "Other"];
 
 // --- Components ---
@@ -333,25 +403,25 @@ export default function App() {
             role: m.role === "assistant" ? "model" : "user",
             parts: [{ text: m.content }]
           })),
-          systemInstruction: `You are a professional creative writing collaborator for the Isekai Zero story workshop (v6.1). 
-Your role is to guide the user through a structured pipeline to create high-quality isekai stories.
+          systemInstruction: `${USCS_SYSTEM_PROMPT}
 
-DIAGNOSTIC MANDATE:
-- Be highly discussive and iterative. Do not just output final blocks; ask for feedback and offer alternatives.
-- Use technical ISK0 terminology (e.g., 'Heat Levels', 'World Grounding', 'Thermal Calibration').
-- Focus on the CURRENT STEP: ${STEPS[state.step]}.
+================================================================================
+CURRENT WORKSHOP DESKSTATE (COLLABORATOR SYNC CONTEXT)
+================================================================================
+- CURRENT STEP: ${STEPS[state.step]}
+- Mode: ${state.mode || "Pending"}
+- Heat Level: ${state.heatLevel}
+- Setting: ${state.settingType || "Pending"}
+- Concept: ${state.concept || "Variable"}
+- Tone: ${state.tone || "Undefined"}
+- Reality Protocols / Grounding Rules: 
+${state.groundingRules || "No strict rules established yet."}
 
-AUTO-ADVANCE PROTOCOL:
-- If you feel the current step is complete and the user is ready to move on, include the token [SYNC_PROCEED] in your response. This will physically move the interface to the next module.
-
-TECHNICAL PIPELINE CONTEXT:
-1. Mode: ${state.mode || "Pending"}
-2. Heat Level: ${state.heatLevel}
-3. Setting: ${state.settingType || "Pending"}
-4. Concept: ${state.concept || "Variable"}
-5. Tone: ${state.tone || "Undefined"}
-6. Reality Protocols / Grounding Rules: 
-${state.groundingRules || "No strict rules established yet."}`
+DIAGNOSTIC WORKSHOP RESPONSE MANDATE:
+1. Actively guide and collaborate with the user *exclusively* on the deliverables for the CURRENT STEP: "${STEPS[state.step]}". Use discussion, suggestions, and drafts.
+2. DO NOT perform the story, write character dialogue, or introduce simulated turns like "What do you do, Hunter?". You are the co-author, not the player!
+3. If the step is fully complete and agreed, conclude your response with the token [SYNC_PROCEED] to advance the workspace.
+`
         })
       });
 
@@ -557,7 +627,7 @@ ${state.groundingRules || "No strict rules established yet."}`
               }}
               exit={{ x: "100%" }}
               transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className={`${isChatDetached ? 'overflow-hidden flex flex-col' : 'fixed inset-y-0 right-0 border-l border-border bg-[#18181b] flex flex-col z-[70] xl:z-40 h-full'} ${isChatOpen ? 'flex' : 'hidden xl:flex'} ${isXL && !isChatDetached ? 'relative xl:inset-auto xl:bg-header/40 xl:border-l-0 xl:h-full' : 'w-full sm:w-auto'}`}
+              className={`overflow-hidden flex flex-col min-w-0 max-h-full ${isChatDetached ? '' : 'fixed inset-y-0 right-0 border-l border-border bg-[#18181b] z-[70] xl:z-40 h-full'} ${isChatOpen ? 'flex' : 'hidden xl:flex'} ${isXL && !isChatDetached ? 'relative xl:inset-auto xl:bg-header/40 xl:border-l-0 xl:h-full' : 'w-full sm:w-auto'}`}
               style={!isChatDetached ? { width: dockedChatWidth } : {}}
             >
               {/* Resize Handle for Docked View */}
@@ -1057,8 +1127,8 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
           </div>
         ) : (
           state.assistantHistory.map((m, i) => (
-            <div key={i} className={`flex flex-col ${m.role === "assistant" ? "items-start" : "items-end"} gap-2`}>
-              <div className={`px-4 py-3 rounded-2xl text-[13px] leading-relaxed max-w-[90%] shadow-lg transition-all ${
+            <div key={i} className={`flex flex-col ${m.role === "assistant" ? "items-start" : "items-end"} gap-2 w-full min-w-0`}>
+              <div className={`px-4 py-3 rounded-2xl text-[13px] leading-relaxed max-w-[90%] shadow-lg transition-all break-words ${
                 m.role === "assistant" 
                   ? "bg-card border border-border text-text-main rounded-tl-sm" 
                   : "bg-accent/10 border border-accent/20 text-accent font-medium rounded-tr-sm"
@@ -1067,7 +1137,7 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
                   <div className={`w-1.5 h-1.5 rounded-full ${m.role === "assistant" ? "bg-accent" : "bg-white"}`} />
                   <span className="text-[9px] uppercase font-bold tracking-widest">{m.role === "assistant" ? "Aether_Core" : "User_Node"}</span>
                 </div>
-                <p className="whitespace-pre-wrap">{m.content}</p>
+                <p className="whitespace-pre-wrap break-all break-words">{m.content}</p>
               </div>
             </div>
           ))
@@ -1126,8 +1196,8 @@ function MainInterfaceChat({ state, askAssistant, preview }: { state: StoryState
             </div>
           ) : (
             state.assistantHistory.map((m, i) => (
-              <div key={i} className={`flex ${m.role === "assistant" ? "justify-start" : "justify-end"}`}>
-                <div className={`max-w-[85%] p-6 rounded-2xl leading-relaxed text-sm ${
+              <div key={i} className={`flex ${m.role === "assistant" ? "justify-start" : "justify-end"} w-full min-w-0`}>
+                <div className={`max-w-[85%] p-6 rounded-2xl leading-relaxed text-sm break-words ${
                   m.role === "assistant" 
                     ? "bg-header border border-border text-text-main shadow-lg" 
                     : "bg-accent/10 border border-accent/20 text-accent font-medium shadow-[0_0_20px_rgba(20,184,166,0.1)]"
@@ -1136,7 +1206,7 @@ function MainInterfaceChat({ state, askAssistant, preview }: { state: StoryState
                     <div className={`w-1 h-1 rounded-full ${m.role === "assistant" ? "bg-accent" : "bg-white"}`} />
                     <span className="text-[9px] uppercase font-bold tracking-[0.2em]">{m.role === "assistant" ? "Aether_Core" : "User_Node"}</span>
                   </div>
-                  <p className="whitespace-pre-wrap">{m.content}</p>
+                  <p className="whitespace-pre-wrap break-all break-words">{m.content}</p>
                 </div>
               </div>
             ))

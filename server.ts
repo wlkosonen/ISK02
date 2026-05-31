@@ -72,42 +72,58 @@ async function startServer() {
 
       if (aiProvider === "gemini") {
         const apiKey = settings.geminiApiKey?.trim() || process.env.GEMINI_API_KEY;
-        if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY is not configured." });
+        if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY is not configured. Please supply an API key in the Model Settings menu." });
 
-        const ai = new GoogleGenAI({ 
-          apiKey,
-          httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
-        });
+        try {
+          const ai = new GoogleGenAI({ 
+            apiKey,
+            httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
+          });
 
-        const modelName = settings.model || "gemini-3-flash-preview"; 
-        
-        // Format history for generateContent
-        const contents = (history || []).map((h: any) => ({
-          role: h.role,
-          parts: h.parts
-        }));
-        contents.push({ role: "user", parts: [{ text: prompt }] });
+          const modelName = settings.model || "gemini-3-flash-preview"; 
+          
+          // Format history for generateContent
+          const contents = (history || []).map((h: any) => ({
+            role: h.role,
+            parts: h.parts
+          }));
+          contents.push({ role: "user", parts: [{ text: prompt }] });
 
-        const result = await ai.models.generateContent({
-          model: modelName,
-          contents: contents,
-          config: {
-            systemInstruction: systemInstruction || "You are a professional creative writing collaborator.",
-            temperature: settings.temperature ?? 1,
-            topP: settings.topP,
-            topK: settings.topK,
-            maxOutputTokens: settings.maxTokens || 2048,
+          const result = await ai.models.generateContent({
+            model: modelName,
+            contents: contents,
+            config: {
+              systemInstruction: systemInstruction || "You are a professional creative writing collaborator.",
+              temperature: settings.temperature ?? 1,
+              topP: settings.topP,
+              topK: settings.topK,
+              maxOutputTokens: settings.maxTokens || 2048,
+            }
+          });
+
+          const text = result.text;
+          if (!text) throw new Error("Empty response from Gemini");
+          return res.json({ text });
+        } catch (geminiErr: any) {
+          console.error("Gemini model call failed:", geminiErr);
+          const errorDetail = geminiErr.message || JSON.stringify(geminiErr);
+          let errorMsg = `Gemini API error: ${errorDetail}`;
+          
+          if (errorDetail.includes("API_KEY_INVALID") || errorDetail.includes("invalid api key") || errorDetail.includes("key is invalid") || errorDetail.includes("API key not valid")) {
+            errorMsg = "Your Gemini API key is invalid. Please verify and update it in your Model Settings panel.";
+          } else if (errorDetail.includes("quota") || errorDetail.includes("limit exceeded") || errorDetail.includes("429")) {
+            errorMsg = "Your Gemini API quota has been exceeded or rate limit hit. (Error 429: Rate Limit/Quota Exceeded)";
+          } else if (errorDetail.includes("not found") || errorDetail.includes("model not found") || errorDetail.includes("404")) {
+            errorMsg = `The selected Gemini model '${settings.model || "gemini-3-flash-preview"}' was not found, or the API key lacks access. Check your Model Settings.`;
           }
-        });
-
-        const text = result.text;
-        if (!text) throw new Error("Empty response from Gemini");
-        return res.json({ text });
+          
+          return res.status(400).json({ error: errorMsg });
+        }
       } 
       
       if (aiProvider === "anthropic") {
         const anthropicApiKey = settings.anthropicApiKey?.trim() || process.env.ANTHROPIC_API_KEY;
-        if (!anthropicApiKey) return res.status(500).json({ error: "ANTHROPIC_API_KEY is not configured." });
+        if (!anthropicApiKey) return res.status(500).json({ error: "ANTHROPIC_API_KEY is not configured. Please supply your API key in the Model Settings menu." });
 
         const anthropic = new Anthropic({ apiKey: anthropicApiKey });
         
@@ -168,56 +184,65 @@ async function startServer() {
           if (!text) throw new Error("Empty response from Anthropic");
           return res.json({ text });
         } catch (anthropicErr: any) {
-          console.error("Anthropic failed completely. Falling back to Gemini:", anthropicErr);
+          console.error("Anthropic failed completely:", anthropicErr);
           
-          // Gemini fallback
-          const apiKey = settings.geminiApiKey?.trim() || process.env.GEMINI_API_KEY;
-          if (!apiKey) {
-            throw new Error(`Anthropic error: ${anthropicErr.message || anthropicErr}. Additionally, GEMINI_API_KEY is not configured for fallback.`);
-          }
-
-          const ai = new GoogleGenAI({ 
-            apiKey,
-            httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
-          });
-
-          // Format history for generateContent
-          const contents = (history || []).map((h: any) => ({
-            role: h.role,
-            parts: h.parts
-          }));
-          contents.push({ role: "user", parts: [{ text: prompt }] });
-
-          const fallbackModel = "gemini-2.5-flash"; // Extremely fast and capable public model
-          const result = await ai.models.generateContent({
-            model: fallbackModel,
-            contents: contents,
-            config: {
-              systemInstruction: systemInstruction || "You are a professional creative writing collaborator.",
-              temperature: settings.temperature ?? 1,
-              maxOutputTokens: settings.maxTokens || 2048,
-            }
-          });
-
-          const geminiText = result.text;
-          if (!geminiText) {
-            throw new Error(`Anthropic call failed with: ${anthropicErr.message || anthropicErr}. Gemini fallback also failed.`);
-          }
-
           const errorDetail = anthropicErr.message || JSON.stringify(anthropicErr);
           const statusCode = anthropicErr.status || anthropicErr.statusCode;
           
           let errorMsg = `Anthropic error: ${errorDetail}`;
-          if (statusCode === 503 || errorDetail.includes("503") || errorDetail.includes("high demand") || errorDetail.includes("overloaded")) {
-            errorMsg = "Anthropic's servers are currently experiencing high demand (503 Service Unavailable)";
+          if (statusCode === 401 || errorDetail.includes("invalid x-api-key") || errorDetail.includes("401")) {
+            errorMsg = "Your Anthropic API Key is invalid or expired. Please check your credentials in the Model Settings menu.";
+          } else if (statusCode === 403 || errorDetail.includes("credit_limit") || errorDetail.includes("403")) {
+            errorMsg = "Your Anthropic account has run out of credits or has hit its billing limit. Please verify your balance.";
+          } else if (statusCode === 503 || errorDetail.includes("503") || errorDetail.includes("high demand") || errorDetail.includes("overloaded")) {
+            errorMsg = "Anthropic's servers are currently experiencing high demand (503 Service Unavailable). Please retry shortly.";
           } else if (statusCode === 429 || errorDetail.includes("429") || errorDetail.includes("rate limit")) {
-            errorMsg = "Anthropic rate limit has been exceeded (429 Rate Limit)";
+            errorMsg = "Anthropic rate limit has been exceeded (429 Rate Limit). Please wait a bit and try again.";
           } else if (statusCode === 404 || errorDetail.includes("404") || errorDetail.includes("not found") || errorDetail.includes("not_found")) {
-            errorMsg = "Your Anthropic API key was rejected by Anthropic's gateway (likely due to an unprovisioned, newly-created, or zero-balance billing account which returns 404 for certain Claude models)";
+            errorMsg = `Anthropic API returned a 404 Model Not Found error for '${requestedModel}'. This is common with brand new Anthropic accounts or keys without funds (Anthropic restricts access to Claude models and throws 404 until you have topped up the account balance with a minimum deposit, e.g., $5). Code: ${statusCode}`;
           }
 
-          const warningMessage = `⚠️ [SYSTEM NOTICE: ${errorMsg}. To ensure your creative flow in Aether_Core v6.1 is not interrupted, we have automatically routed this connection to Gemini-2.5-Flash.] ⚠️\n\n`;
-          return res.json({ text: warningMessage + geminiText });
+          // Let's attempt Gemini fallback only if we have a key configured and ready
+          const apiKey = settings.geminiApiKey?.trim() || process.env.GEMINI_API_KEY;
+          if (apiKey) {
+            try {
+              console.log("Attempting automatic Gemini fallback...");
+              const ai = new GoogleGenAI({ 
+                apiKey,
+                httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
+              });
+
+              // Format history for generateContent
+              const contents = (history || []).map((h: any) => ({
+                role: h.role,
+                parts: h.parts
+              }));
+              contents.push({ role: "user", parts: [{ text: prompt }] });
+
+              const fallbackModel = "gemini-2.5-flash"; // Extremely fast and capable public model
+              const result = await ai.models.generateContent({
+                model: fallbackModel,
+                contents: contents,
+                config: {
+                  systemInstruction: systemInstruction || "You are a professional creative writing collaborator.",
+                  temperature: settings.temperature ?? 1,
+                  maxOutputTokens: settings.maxTokens || 2048,
+                }
+              });
+
+              const geminiText = result.text;
+              if (geminiText) {
+                const warningMessage = `⚠️ [SYSTEM NOTICE: ${errorMsg}. To ensure your creative flow in Aether_Core v6.1 is not interrupted, we have automatically routed this connection to Gemini-2.5-Flash.] ⚠️\n\n`;
+                return res.json({ text: warningMessage + geminiText });
+              }
+            } catch (fallbackErr: any) {
+              console.error("Gemini fallback also failed:", fallbackErr);
+              return res.status(400).json({ error: `${errorMsg}. Additionally, Gemini fallback failed: ${fallbackErr.message || fallbackErr}` });
+            }
+          }
+
+          // If no Gemini key for fallback, return the precise Anthropic error directly
+          return res.status(400).json({ error: errorMsg });
         }
       }
 
