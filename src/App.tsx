@@ -2958,7 +2958,6 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
     case 10: // Prompt Plot
     case 13: // First Message
     case 14: // Image Prompts
-    case 15: // Compliance & Assembly
       return (
         <div className="space-y-12 py-6 font-sans">
           {/* Header */}
@@ -2970,8 +2969,7 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
               {state.step === 9 ? "Design scenario triggers (Witness, Eavesdropper, Stumbler) and three-act narrative hooks." :
                state.step === 10 ? "Output performer instructions and inject the verbatim Architect Protocol sequence." :
                state.step === 13 ? "Establish high-impact entry narrative lines and authored openings for all cast segments." :
-               state.step === 14 ? "Generate style-compliant visual prompt triggers and portrait schemas for the engine." :
-               "Execute compliance matrix and build the unified compiled master prompt payload."}
+               "Generate style-compliant visual prompt triggers and portrait schemas for the engine."}
             </p>
           </div>
 
@@ -2984,8 +2982,7 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
               {state.step === 9 ? <BookOpen className="w-8 h-8 text-accent opacity-80" /> :
                state.step === 10 ? <Cpu className="w-8 h-8 text-accent opacity-80 animate-pulse" /> :
                state.step === 13 ? <MessageSquare className="w-8 h-8 text-accent opacity-80" /> :
-               state.step === 14 ? <ImageIcon className="w-8 h-8 text-accent opacity-80" /> :
-               <Sparkles className="w-8 h-8 text-accent opacity-80 animate-bounce" />}
+               <ImageIcon className="w-8 h-8 text-accent opacity-80" />}
             </div>
             <div className="space-y-2 text-center md:text-left flex-1">
               <span className="text-[8px] font-mono font-black text-accent uppercase tracking-[0.3em] block">
@@ -2995,15 +2992,13 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
                 {state.step === 9 ? "Orchestrate Playable Scenarios" :
                  state.step === 10 ? "Formulate the Prompt Plot" :
                  state.step === 13 ? "Script Dynamic Authored Openings" :
-                 state.step === 14 ? "Calibrate Image Prompts" :
-                 "Execute Final Master Build"}
+                 "Calibrate Image Prompts"}
               </h3>
               <p className="text-xs text-text-dim leading-relaxed max-w-2xl">
                 {state.step === 9 ? "Use the Collaborator Chat on your right sideline to direct scenario generation. Prompt the AI: 'Construct scenario openings for Lyra' to get styled hooks immediately." :
                  state.step === 10 ? "Send 'Generate performant instructions for prompt map' in the sideline chat to assemble verbatim continuity protocols." :
                  state.step === 13 ? "Instruct the AI on the right sideline: 'Write opening monologue lines for Kaelen Shadow' to draft dialogue buffers." :
-                 state.step === 14 ? "Calibrate stable diffusion seeds and descriptions: 'Draft location portrait triggers' on the sideline chat." :
-                 "The entire prompt matrix is fully prepped. Type 'Compile final master build payload' on your right sideline to package and preview."}
+                 "Calibrate stable diffusion seeds and descriptions: 'Draft location portrait triggers' on the sideline chat."}
               </p>
             </div>
             <button 
@@ -3011,8 +3006,7 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
                 const query = state.step === 9 ? "Suggest dynamic scenario hooks matching our locked tone." :
                               state.step === 10 ? "Structure the prompt plot instructions and include Architect Protocols." :
                               state.step === 13 ? "Draft opening first message templates based on our premises." :
-                              state.step === 14 ? "Build detailed stable diffusion image prompts for our main cast." :
-                              "Assemble and print the finalized prompt payload for copying.";
+                              "Build detailed stable diffusion image prompts for our main cast.";
                 askAssistant(query);
               }}
               className="px-6 py-3 bg-accent border border-accent text-black font-black text-[10px] uppercase tracking-widest rounded-xl hover:bg-transparent hover:text-accent transition-all shrink-0 active:scale-95"
@@ -3022,6 +3016,299 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
           </div>
         </div>
       );
+
+    case 15: { // Compliance & Assembly
+      // Calculate Compliance Integrity Score
+      const modeCompliant = state.mode !== null;
+      const toneCompliant = !!state.tone && !!state.settingType;
+      const aestheticCompliant = !!state.artStyle && state.palette.length > 0;
+      const groundingCompliant = state.groundingRules.length > 10;
+      const personaCompliant = state.characters.length > 0;
+      const creativeCompliant = !!state.title && state.concept.length > 10;
+      const chatCompliant = state.assistantHistory.length > 1;
+
+      let score = 0;
+      if (modeCompliant) score += 15;
+      if (toneCompliant) score += 15;
+      if (aestheticCompliant) score += 15;
+      if (groundingCompliant) score += 15;
+      if (personaCompliant) score += 15;
+      if (creativeCompliant) score += 15;
+      if (chatCompliant) score += 10;
+
+      // Helper function to extract relevant summaries from history
+      const parseSummaryFromChat = (keywords: string[], fallback: string) => {
+        if (!state.assistantHistory || state.assistantHistory.length === 0) {
+          return { text: fallback, sourcedFromChat: false };
+        }
+        
+        // Collate assistant lines
+        const sentences: string[] = [];
+        state.assistantHistory.forEach(m => {
+          if (m.role === "assistant") {
+            const cleanText = m.content.replace(/```[\s\S]*?```/g, ""); // clear out code blocks
+            const parts = cleanText.split(/(?<=[.!?])\s+/);
+            parts.forEach(p => {
+              const trimmed = p.trim().replace(/^[-*•\s]+/, "");
+              if (trimmed.length > 15 && trimmed.length < 300) {
+                sentences.push(trimmed);
+              }
+            });
+          }
+        });
+
+        // Search for matching keyword sentences
+        for (const sentence of sentences) {
+          const lower = sentence.toLowerCase();
+          const matched = keywords.some(kw => lower.includes(kw.toLowerCase()));
+          if (matched) {
+            return { text: sentence, sourcedFromChat: true };
+          }
+        }
+        
+        return { text: fallback, sourcedFromChat: false };
+      };
+
+      const checklistItems = [
+        {
+          id: "content_mode",
+          title: "Content Guardrails & Mode",
+          keywords: ["mode", "sfw", "nsfw", "heat level", "safeguard", "limit"],
+          status: modeCompliant,
+          fallback: "Safety thresholds and pacing regulations prevent accidental content overlaps, preserving narrative boundaries.",
+          askQuery: "Could you summarize the SFW/NSFW constraints and heat level limits of our story?"
+        },
+        {
+          id: "setting_tone",
+          title: "Aetheric Setting & Vibe",
+          keywords: ["setting", "tone", "atmosphere", "vibe", "style", "world", "genre", "cyberpunk", "fantasy", "historical", "contemporary"],
+          status: toneCompliant,
+          fallback: "Aetheric tone configuration establishes dialogue pacing frequency, ensuring standard output conformity.",
+          askQuery: "Highlight the key tone notes and setting parameters you recommend for this universe."
+        },
+        {
+          id: "aesthetics_palette",
+          title: "Aesthetic Identity & Palette",
+          keywords: ["palette", "colors", "art style", "visual", "aesthetic", "vector", "illustration", "anime"],
+          status: aestheticCompliant,
+          fallback: "Stylistic framework and color matrices calibrate custom portrait descriptors and illustration tags.",
+          askQuery: "What is your artistic guidance based on our chosen palette and aesthetic mode?"
+        },
+        {
+          id: "world_grounding",
+          title: "Reality Safeguards & Grounding",
+          keywords: ["grounding", "rules", "matrix", "law", "instead", "do_not", "prohibit", "constraint"],
+          status: groundingCompliant,
+          fallback: "Reality grounding rules establish hard 'DO_NOT / INSTEAD' mandates, disabling default self-narration states.",
+          askQuery: "Explain the logical bounds of reality grounding and exceptions for our cast."
+        },
+        {
+          id: "persona_registry",
+          title: "Cast Persona & Emotional Registers",
+          keywords: ["character", "persona", "profile", "cast", "role", "lyra", "kaelen", "sheets", "backstory"],
+          status: personaCompliant,
+          fallback: "Defined performance profiles govern emotional dynamic limits and character dialogue colors.",
+          askQuery: "Provide a quick character motivation summary and performance direction tips."
+        },
+        {
+          id: "identity_stamp",
+          title: "Narrative Premise & Core Story",
+          keywords: ["story", "plot", "manifest", "theme", "conflict", "synopsis", "story core"],
+          status: creativeCompliant,
+          fallback: "Central narrative summaries and title cards govern playability structures and thematic guidance.",
+          askQuery: "What is your main structural outline recommendation based on our locked story title and concept?"
+        },
+        {
+          id: "compiled_integrity",
+          title: "Performer Prompt Assembly",
+          keywords: ["assembly", "prompt plot", "verbatim", "instruction", "payload", "compile", "completion"],
+          status: chatCompliant,
+          fallback: "Aether-stream prompt packaging encloses compliance vectors within structural enclosures to prevent model drift.",
+          askQuery: "Give a final review of the system instructions and compiler integrity safeguards."
+        }
+      ];
+
+      return (
+        <div className="space-y-12 py-6 font-sans">
+          {/* Header */}
+          <div className="space-y-2">
+            <h2 className="text-4xl font-black uppercase tracking-tighter flex items-center gap-3">
+              COMPLIANCE_&_ASSEMBLY <span className="text-xs bg-accent/20 text-accent px-2.5 py-1 rounded font-mono uppercase tracking-widest animate-pulse">SYSTEM_CHECK</span>
+            </h2>
+            <p className="text-text-muted font-medium text-sm">
+              Verify compliance indices, analyze advisor feedback, and compile the final master prompt configuration.
+            </p>
+          </div>
+
+          {/* Compliance Meter Visual Panel */}
+          <div className="bg-card/40 border border-border p-8 rounded-3xl relative overflow-hidden shadow-2xl space-y-6">
+            <div className="flex flex-col md:flex-row items-center justify-between gap-6">
+              <div className="space-y-3 flex-1">
+                <div className="flex items-center gap-2">
+                  <Cpu className="text-accent w-4 h-4 animate-spin-slow" />
+                  <span className="text-[10px] font-mono font-black text-accent uppercase tracking-[0.2em]">INTEGRITY_CHECKPOINT_V6.1</span>
+                </div>
+                
+                <h3 className="text-2xl font-black uppercase tracking-tight">
+                  {score >= 85 ? "MASTER_INTEGRITY_VERIFIED" : "ADVISORY_CALIBRATION_ACTIVE"}
+                </h3>
+                
+                <p className="text-xs text-text-dim leading-relaxed max-w-xl">
+                  {score >= 85 
+                    ? "All critical visual identity profiles, pacing thresholds, grounding rules, and dialogue matrices are fully synced. Ready for master engine orchestration."
+                    : "The story engine has detected missing parameters or unsynced dialogue lines. Ask the collaborator on the sideline to finalize your calibration matrices."
+                  }
+                </p>
+              </div>
+
+              {/* Glowing Calibration Dial */}
+              <div className="relative shrink-0 flex flex-col items-center justify-center p-4 bg-header/20 border border-white/5 rounded-2xl w-44 h-44">
+                <div className="text-center space-y-1 relative z-10">
+                  <span className="text-[9px] font-mono uppercase tracking-widest text-[#fbbf24] block">COMPLIANCE</span>
+                  <div className="text-5xl font-black tracking-tighter text-text-main font-mono">
+                    {score}%
+                  </div>
+                  <span className="text-[8px] uppercase tracking-widest text-accent font-black">
+                    {score >= 85 ? "NOMINAL" : "TUNING"}
+                  </span>
+                </div>
+                {/* Visual Ring effect */}
+                <div 
+                  className="absolute inset-2 border-2 rounded-full border-dashed opacity-20 animate-spin-slow" 
+                  style={{ borderColor: state.palette[2] || "#14b8a6" }}
+                />
+              </div>
+            </div>
+
+            {/* Glowing Progress bar */}
+            <div className="space-y-2">
+              <div className="flex justify-between text-[9px] font-mono text-text-muted uppercase tracking-widest">
+                <span>Continuity Buffer</span>
+                <span>{score}/100 INGESTED</span>
+              </div>
+              <div className="w-full bg-bg border border-border/60 h-4 rounded-full overflow-hidden p-0.5 relative">
+                <div 
+                  className="h-full rounded-full bg-gradient-to-r from-accent via-emerald-400 to-[#fbbf24] transition-all duration-1000 relative shadow-[0_0_12px_rgba(20,184,166,0.5)]"
+                  style={{ width: `${score}%` }}
+                >
+                  <div className="absolute inset-0 bg-white/10 animate-pulse pointer-events-none" />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Checklist Cards with Summaries from Chat */}
+          <div className="space-y-6">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-accent" />
+              <span className="text-xs font-black uppercase tracking-widest text-text-main">
+                COMPLIANCE REQUIREMENTS CHECKLIST
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {checklistItems.map((item, idx) => {
+                const parsed = parseSummaryFromChat(item.keywords, item.fallback);
+                return (
+                  <div 
+                    key={item.id} 
+                    className={`bg-card/30 border p-6 rounded-3xl relative overflow-hidden transition-all duration-300 flex flex-col justify-between group hover:border-accent/40 hover:bg-card/50 ${
+                      item.status ? "border-emerald-500/10" : "border-amber-500/10"
+                    }`}
+                  >
+                    {/* Status side bar stripe */}
+                    <div className={`absolute top-0 left-0 w-1.5 h-full transition-opacity ${
+                      item.status ? "bg-emerald-400 opacity-20 group-hover:opacity-60" : "bg-[#fbbf24] opacity-20 group-hover:opacity-60"
+                    }`} />
+
+                    <div className="space-y-4">
+                      {/* Badge / Title Row */}
+                      <div className="flex items-center justify-between gap-4">
+                        <h4 className="text-sm font-black uppercase tracking-tight text-text-main flex-1">
+                          {item.title}
+                        </h4>
+                        
+                        <div className="flex items-center gap-2 shrink-0">
+                          {item.status ? (
+                            <span className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-400/10 border border-emerald-400/20 text-emerald-400 text-[8px] font-mono uppercase font-black tracking-widest rounded-lg">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> Compliant
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-1.5 px-2.5 py-1 bg-[#fbbf24]/10 border border-[#fbbf24]/20 text-[#fbbf24] text-[8px] font-mono uppercase font-black tracking-widest rounded-lg">
+                              <span className="w-1.5 h-1.5 rounded-full bg-[#fbbf24] animate-pulse" /> PENDING
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Brief Summary Box */}
+                      <div className="p-4 rounded-2xl bg-header/20 border border-border/40 space-y-2">
+                        <p className="text-xs text-text-dim leading-relaxed font-sans">
+                          {parsed.text}
+                        </p>
+                        
+                        {/* Feed Info */}
+                        {parsed.sourcedFromChat ? (
+                          <div className="flex items-center gap-1.5 pt-1 text-[8px] text-accent/80 font-mono font-black uppercase tracking-widest">
+                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent" />
+                            PULLED FROM COLLABORATOR ADVISORY CHAT
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1.5 pt-1 text-[8px] text-text-muted font-mono uppercase tracking-widest">
+                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-white/10" />
+                            CALIBRATION FALLBACK RULES
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Interaction Button at the bottom */}
+                    <div className="mt-4 pt-3 border-t border-border/30 flex items-center justify-between gap-4">
+                      <span className="text-[8px] font-mono text-text-muted">REQ_RULE::0{idx+1}</span>
+                      
+                      <button 
+                        onClick={() => askAssistant(item.askQuery)}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-[8px] flex items-center gap-1 bg-accent/10 border border-accent/20 hover:bg-accent/20 text-accent font-mono uppercase tracking-widest px-2 py-1 rounded"
+                        title="Query Collaborator Chat for guidance"
+                      >
+                        <MessageSquare className="w-3 h-3" /> CHAT_SYNC
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Compilation CTA Trigger */}
+          <div className="bg-card hover:border-accent/30 border border-border p-8 rounded-3xl relative overflow-hidden flex flex-col md:flex-row gap-6 items-center shadow-2xl transition-colors">
+            <div className="w-16 h-16 bg-accent/10 rounded-full flex items-center justify-center shrink-0">
+              <Sparkles className="w-8 h-8 text-accent opacity-80 animate-bounce" />
+            </div>
+            <div className="space-y-2 text-center md:text-left flex-1">
+              <span className="text-[8px] font-mono font-black text-accent uppercase tracking-[0.3em] block">
+                COMPILATION_PROTOCOL_V6.1 :: READY
+              </span>
+              <h3 className="text-lg font-black uppercase tracking-tight">
+                Package Story & Compile Master Prompt
+              </h3>
+              <p className="text-xs text-text-dim leading-relaxed max-w-2xl">
+                The entire prompt matrix is fully prepped. Trigger cohesion compiler to build a copy-paste-ready narrative instruction payload for the Performer LLM.
+              </p>
+            </div>
+            <button 
+              onClick={() => {
+                askAssistant("Assemble and print the finalized prompt payload for copying.");
+              }}
+              className="px-6 py-3 bg-accent border border-accent text-black font-black text-[10px] uppercase tracking-widest rounded-xl hover:bg-transparent hover:text-accent transition-all shrink-0 active:scale-95"
+            >
+              COMPILE_MASTER_BUILD
+            </button>
+          </div>
+        </div>
+      );
+    }
+
 
     default:
       return (
