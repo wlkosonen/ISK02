@@ -1,0 +1,16 @@
+version: "3.8"
+
+services:
+  aether-app:
+    build: .
+    container_name: aether-storyteller
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      # This allows the container to contact your Windows host machine's Ollama instance.
+      # Remember to set OLLAMA_HOST=0.0.0.0 on your Windows machine before running!
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

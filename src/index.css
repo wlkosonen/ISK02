@@ -1,0 +1,36 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&family=Georgia:ital@1&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-serif: "Georgia", serif;
+
+  --color-bg: #09090b;
+  --color-card: #121214;
+  --color-header: #18181b;
+  --color-border: #27272a;
+  --color-text-main: #e4e4e7;
+  --color-text-muted: #a1a1aa;
+  --color-text-dim: #52525b;
+  --color-label: #71717a;
+  --color-accent: #14b8a6;
+}
+
+@layer base {
+  body {
+    @apply bg-bg text-text-main font-sans antialiased;
+  }
+}
+
+.technical-grid {
+  background-image: linear-gradient(rgba(39, 39, 42, 0.4) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(39, 39, 42, 0.4) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.animate-spin-slow { animation: spin-slow 12s linear infinite; }

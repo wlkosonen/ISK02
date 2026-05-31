@@ -1,0 +1,8 @@
+{
+  "name": "Isekai Zero Story Workshop",
+  "description": "A professional story crafting tool for the Isekai Zero platform, guiding creators through the complete v6.1 pipeline from concept to copy-paste ready story packages.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
