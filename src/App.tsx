@@ -104,6 +104,9 @@ interface StoryState {
   tokenBudgetMin: number;
   tokenBudgetMax: number;
   budgetTierMode: boolean;
+  // Per-component overrides: relax the §21 cap for these blocks (richer output),
+  // while the 20k total platform ceiling still holds.
+  capOverrides: { promptPlot: boolean; guidelines: boolean; reminders: boolean; characters: boolean };
   deliverables: Deliverables;
   characters: any[];
   assistantHistory: Message[];
@@ -246,6 +249,7 @@ const DEFAULT_STATE: StoryState = {
   tokenBudgetMin: 7000,
   tokenBudgetMax: 10000,
   budgetTierMode: false,
+  capOverrides: { promptPlot: false, guidelines: false, reminders: false, characters: false },
   deliverables: EMPTY_DELIVERABLES,
   characters: [],
   assistantHistory: [],
@@ -274,6 +278,7 @@ function loadInitialState(): StoryState {
         isAssistantLoading: false,
         modelSettings: { ...DEFAULT_STATE.modelSettings, ...(parsed.modelSettings || {}) },
         deliverables: { ...EMPTY_DELIVERABLES, ...(parsed.deliverables || {}) },
+        capOverrides: { ...DEFAULT_STATE.capOverrides, ...(parsed.capOverrides || {}) },
       };
     }
   } catch (err) {
@@ -434,6 +439,7 @@ export default function App() {
     tokenBudgetMin: 7000,
     tokenBudgetMax: 10000,
     budgetTierMode: false,
+    capOverrides: { promptPlot: false, guidelines: false, reminders: false, characters: false },
     step: 0
   });
 
@@ -708,6 +714,7 @@ export default function App() {
     state.tokenBudgetMin !== lastSyncedState.tokenBudgetMin ||
     state.tokenBudgetMax !== lastSyncedState.tokenBudgetMax ||
     state.budgetTierMode !== lastSyncedState.budgetTierMode ||
+    JSON.stringify(state.capOverrides) !== JSON.stringify(lastSyncedState.capOverrides) ||
     state.step !== lastSyncedState.step;
 
   // Editing a deskstate field after the AI marked the step complete invalidates
@@ -731,6 +738,7 @@ export default function App() {
     if (state.title !== lastSyncedState.title) updatedFields.push(`Title: ${state.title || "Untitled"}`);
     if (state.tokenBudgetMin !== lastSyncedState.tokenBudgetMin || state.tokenBudgetMax !== lastSyncedState.tokenBudgetMax) updatedFields.push(`Token Budget: ~${state.tokenBudgetMin / 1000}k–${state.tokenBudgetMax / 1000}k`);
     if (state.budgetTierMode !== lastSyncedState.budgetTierMode) updatedFields.push(`Budget-Tier Mode: ${state.budgetTierMode ? "ON" : "OFF"}`);
+    if (JSON.stringify(state.capOverrides) !== JSON.stringify(lastSyncedState.capOverrides)) updatedFields.push(`§21 cap overrides changed`);
     if (state.step !== lastSyncedState.step) updatedFields.push(`Moved to Step: ${state.step + 1} (${STEPS[state.step]})`);
 
     setLastSyncedState({
@@ -748,6 +756,7 @@ export default function App() {
       tokenBudgetMin: state.tokenBudgetMin,
       tokenBudgetMax: state.tokenBudgetMax,
       budgetTierMode: state.budgetTierMode,
+      capOverrides: { ...state.capOverrides },
       step: state.step
     });
 
@@ -779,6 +788,14 @@ Please acknowledge these updated options, explicitly address the modified parame
     // A new turn supersedes any prior "step complete" signal until the AI re-confirms.
     setReadyToAdvance(false);
     setResponseTruncated(false);
+
+    const co = state.capOverrides;
+    const relaxedCaps = [
+      co.promptPlot && "Prompt Plot",
+      co.guidelines && "Guidelines",
+      co.reminders && "Reminders",
+      co.characters && "Character sheets",
+    ].filter(Boolean).join(", ");
     // 1. Immediately update UI with user message and loading state
     const userMessage: Message = { role: "user", content: prompt };
     setState(s => ({
@@ -813,7 +830,8 @@ CURRENT WORKSHOP DESKSTATE (COLLABORATOR SYNC CONTEXT)
 ${state.groundingRules || "No strict rules established yet."}
 - Target Instruction-Package Budget: ~${state.tokenBudgetMin / 1000}k–${state.tokenBudgetMax / 1000}k tokens. This counts ONLY the AI instruction package (Prompt Plot + Prompt Guidelines + AI Reminders + Character AI prompt descriptions + Player Persona), per USCS §21.1. HTML cards and image/location prompts do NOT count.
   HOW TO HIT THIS BUDGET: The per-block §21 caps (Prompt Plot ≤2500, Guidelines ≤3000, Reminders ≤800, Player Persona ≤500, each character ≤1500 primary / ≤800 supporting) are HARD ceilings — NEVER inflate a block beyond its cap to reach a number. The fixed blocks total ~6,800 tokens at most; the rest of the budget comes from CAST SIZE (USCS guide: ~2 chars ≈ 8–10k, ~4 ≈ 12–15k, ~6 ≈ 16–19k) plus any optional systems. If the chosen budget cannot be met within the caps at the current number of characters, say so and suggest adjusting the cast — do not bloat individual blocks. A higher budget means a larger ensemble, not a bigger Prompt Plot.${state.budgetTierMode ? `
-- BUDGET-TIER MODE: ACTIVE (story targets free/budget models such as DeepSeek/Ministral/GLM). Apply the USCS Section 21 budget-tier optimizations throughout: use concrete state-based triggers instead of session-number pacing; require a mandatory status block at the start of every response; add a worked example for any rule that contradicts a model's default training; enforce strict document separation (facts in Plot, behavior in Guidelines, non-negotiables in Reminders — never duplicated); and follow the §21 trim-priority order if over budget.` : ""}
+- BUDGET-TIER MODE: ACTIVE (story targets free/budget models such as DeepSeek/Ministral/GLM). Apply the USCS Section 21 budget-tier optimizations throughout: use concrete state-based triggers instead of session-number pacing; require a mandatory status block at the start of every response; add a worked example for any rule that contradicts a model's default training; enforce strict document separation (facts in Plot, behavior in Guidelines, non-negotiables in Reminders — never duplicated); and follow the §21 trim-priority order if over budget.` : ""}${relaxedCaps ? `
+- §21 CAP OVERRIDE (creator-set): This OVERRIDES the "never inflate a block" rule above, but ONLY for these components: ${relaxedCaps}. For these you MAY exceed the standard §21 per-component cap to deliver richer, more detailed content. ALL OTHER components keep their §21 caps. The 20,000-token TOTAL platform ceiling is still a HARD limit — never exceed it; if the richer overridden blocks push the total up, trim lower-priority NON-overridden content first (§21 trim order). Reminder: a larger Prompt Plot or Guidelines costs tokens on EVERY turn of the deployed story, so spend that allowance deliberately.` : ""}
 
 ================================================================================
 REAL-TIME UI SYNCHRONIZATION COMMANDS
@@ -2947,6 +2965,34 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
                   <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${state.budgetTierMode ? "left-[18px]" : "left-0.5"}`} />
                 </div>
               </button>
+
+              {/* Relax §21 per-component caps */}
+              <div className="space-y-2 pt-3 border-t border-border/40">
+                <p className="text-[9px] uppercase tracking-[0.2em] font-black text-label">Relax §21 caps <span className="text-text-dim/60 normal-case tracking-normal">— advanced</span></p>
+                <p className="text-[9px] text-text-dim leading-snug">
+                  Let specific blocks exceed their §21 size cap for richer detail. The <span className="text-text-muted">20k platform total still applies</span> — the AI trims elsewhere to fit. Note: a bigger Prompt Plot / Guidelines costs tokens on every turn of the deployed story.
+                </p>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {([
+                    ["promptPlot", "Prompt Plot"],
+                    ["guidelines", "Guidelines"],
+                    ["reminders", "Reminders"],
+                    ["characters", "Char Sheets"],
+                  ] as [keyof StoryState["capOverrides"], string][]).map(([key, label]) => {
+                    const on = state.capOverrides[key];
+                    return (
+                      <button
+                        key={key}
+                        onClick={() => setState(s => ({ ...s, capOverrides: { ...s.capOverrides, [key]: !s.capOverrides[key] } }))}
+                        className={`p-2 rounded-lg border text-left transition-all ${on ? "border-[#f43f5e]/50 bg-[#f43f5e]/10" : "border-border bg-bg hover:border-text-dim"}`}
+                      >
+                        <span className={`block text-[10px] font-black uppercase tracking-tight ${on ? "text-[#f43f5e]" : "text-text-muted"}`}>{label}</span>
+                        <span className={`block text-[8px] font-mono mt-0.5 ${on ? "text-[#f43f5e]/80" : "text-text-dim"}`}>{on ? "UNCAPPED" : "§21 cap"}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
           </div>
         </div>
