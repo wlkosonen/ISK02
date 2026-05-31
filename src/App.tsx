@@ -33,7 +33,8 @@ import {
   HelpCircle,
   RefreshCw,
   Eye,
-  EyeOff
+  EyeOff,
+  Star
 } from "lucide-react";
 
 // --- Types ---
@@ -208,13 +209,25 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 
 // Version of THIS app (the Aether_Core tool), distinct from the USCS framework
 // version it implements. Bump this when you ship changes.
-const APP_VERSION = "0.1.0";
+const APP_VERSION = "0.2.0";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
 const USCS_VERSION = "6.1";
 
 // --- Session persistence ---
 // Story state, chat history and typed API keys survive a page reload (per tab).
 const STORAGE_KEY = "aether_core_state_v1";
+
+// Favourite models persist across sessions (localStorage), keyed by provider,
+// so the user doesn't re-search the 300+ OpenRouter list every time.
+const FAV_STORAGE_KEY = "aether_core_favourites_v1";
+function loadFavourites(): Record<string, string[]> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(FAV_STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch { /* ignore */ }
+  return {};
+}
 
 const DEFAULT_STATE: StoryState = {
   step: 0,
@@ -371,6 +384,20 @@ function downloadTextFile(filename: string, content: string) {
 
 export default function App() {
   const [showSettings, setShowSettings] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  const [favourites, setFavourites] = useState<Record<string, string[]>>(loadFavourites);
+
+  useEffect(() => {
+    try { window.localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify(favourites)); } catch { /* ignore */ }
+  }, [favourites]);
+
+  const toggleFavourite = (provider: string, m: string) => {
+    setFavourites(f => {
+      const list = f[provider] || [];
+      const next = list.includes(m) ? list.filter(x => x !== m) : [...list, m];
+      return { ...f, [provider]: next };
+    });
+  };
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -628,6 +655,35 @@ export default function App() {
       setState(s => ({ ...s, modelSettings: { ...s.modelSettings, maxTokens: ceiling } }));
     }
   }, [state.aiProvider, state.modelSettings.model]);
+
+  const providerFavourites = favourites[state.aiProvider] || [];
+  const isFavourite = (m: string) => providerFavourites.includes(m);
+  const selectModel = (m: string) => setState(s => ({ ...s, modelSettings: { ...s.modelSettings, model: m } }));
+
+  // A model row with select + a favourite star (used across all provider lists).
+  const renderModelRow = (m: string, badge?: React.ReactNode) => {
+    const selected = state.modelSettings.model === m;
+    const fav = isFavourite(m);
+    return (
+      <div key={m} className={`flex items-center rounded-lg border transition-all ${selected ? "border-accent bg-accent/5" : "border-border bg-bg hover:bg-white/5"}`}>
+        <button onClick={() => selectModel(m)} className={`flex-1 min-w-0 p-3 text-left text-[11px] font-mono flex items-center justify-between gap-2 ${selected ? "text-accent" : "text-text-dim hover:text-text-muted"}`}>
+          <span className="truncate">{m}</span>
+          {badge}
+        </button>
+        <button
+          onClick={() => toggleFavourite(state.aiProvider, m)}
+          title={fav ? "Remove from favourites" : "Add to favourites"}
+          className="p-2.5 shrink-0 text-text-dim hover:text-[#fbbf24] transition-colors"
+        >
+          <Star className={`w-3.5 h-3.5 ${fav ? "fill-[#fbbf24] text-[#fbbf24]" : ""}`} />
+        </button>
+      </div>
+    );
+  };
+  const freeBadge = <span className="text-[8px] bg-[#10b981]/15 text-[#10b981] px-1.5 py-0.5 rounded uppercase font-bold tracking-widest font-sans shrink-0">Free</span>;
+  const liveBadge = <span className="text-[8px] bg-accent/15 text-accent px-1.5 py-0.5 rounded uppercase font-bold tracking-widest font-sans shrink-0">Live</span>;
+  const installedBadge = <span className="text-[8px] bg-accent/15 text-accent px-1.5 py-0.5 rounded uppercase font-bold tracking-widest font-sans shrink-0">Installed</span>;
+  const hostedBadge = (m: string) => m.endsWith(":free") ? freeBadge : (remoteModels.length > 0 ? liveBadge : null);
 
   const hostedModels = remoteModels.length > 0 ? remoteModels : PROVIDERS[state.aiProvider].models;
   const visibleHostedModels = modelFilter.trim()
@@ -1131,7 +1187,14 @@ Rules:
           >
             <MessageSquare className="w-5 h-5" />
           </button>
-          <button 
+          <button
+            onClick={() => setShowHelp(true)}
+            title="How this works · getting API keys · local models"
+            className={`p-2 hover:bg-white/5 rounded-md transition-all ${showHelp ? 'bg-accent/10 border border-accent/30' : ''}`}
+          >
+            <HelpCircle className={`w-5 h-5 ${showHelp ? 'text-accent' : 'text-label'}`} />
+          </button>
+          <button
             onClick={() => setShowSettings(true)}
             className={`p-2 hover:bg-white/5 rounded-md transition-all ${showSettings ? 'bg-accent/10 border border-accent/30' : ''}`}
           >
@@ -1613,7 +1676,18 @@ Rules:
                 {/* Model Selection */}
                 <div className="space-y-4">
                   <label className="text-[10px] uppercase tracking-[0.3em] font-black text-label block">Target_Model</label>
-                  
+
+                  {providerFavourites.length > 0 && (
+                    <div className="space-y-2 p-3 rounded-xl border border-[#fbbf24]/20 bg-[#fbbf24]/5">
+                      <p className="text-[9px] uppercase tracking-[0.2em] font-black text-[#fbbf24] flex items-center gap-1.5">
+                        <Star className="w-3 h-3 fill-[#fbbf24]" /> Favourites
+                      </p>
+                      <div className="grid grid-cols-1 gap-2">
+                        {providerFavourites.map((m) => renderModelRow(m, m.endsWith(":free") ? freeBadge : undefined))}
+                      </div>
+                    </div>
+                  )}
+
                   {state.aiProvider === "ollama" ? (
                     <div className="space-y-3">
                       {isFetchingModels && (
@@ -1637,42 +1711,11 @@ Rules:
                       
                       {localOllamaModels.length > 0 ? (
                         <div className="grid grid-cols-1 gap-2 max-h-[180px] overflow-y-auto custom-scrollbar pr-1">
-                          {localOllamaModels.map((m) => (
-                            <button
-                              key={m}
-                              onClick={() => setState(s => ({ 
-                                ...s, 
-                                modelSettings: { ...s.modelSettings, model: m }
-                              }))}
-                              className={`p-3 rounded-lg border text-[11px] font-mono text-left transition-all flex items-center justify-between ${
-                                state.modelSettings.model === m 
-                                  ? "border-accent bg-accent/5 text-accent" 
-                                  : "border-border bg-bg text-text-muted hover:bg-white/5 hover:text-text-main"
-                              }`}
-                            >
-                              <span>{m}</span>
-                              <span className="text-[8px] bg-accent/15 text-accent px-1.5 py-0.5 rounded uppercase font-bold tracking-widest font-sans">Installed</span>
-                            </button>
-                          ))}
+                          {localOllamaModels.map((m) => renderModelRow(m, installedBadge))}
                         </div>
                       ) : (
                         <div className="grid grid-cols-1 gap-2">
-                          {PROVIDERS[state.aiProvider].models.map((m) => (
-                            <button
-                              key={m}
-                              onClick={() => setState(s => ({ 
-                                ...s, 
-                                modelSettings: { ...s.modelSettings, model: m }
-                              }))}
-                              className={`p-3 rounded-lg border text-[11px] font-mono text-left transition-all ${
-                                state.modelSettings.model === m 
-                                  ? "border-accent bg-accent/5 text-accent" 
-                                  : "border-border bg-bg text-text-dim hover:bg-white/5 hover:text-text-muted"
-                              }`}
-                            >
-                              {m}
-                            </button>
-                          ))}
+                          {PROVIDERS[state.aiProvider].models.map((m) => renderModelRow(m))}
                         </div>
                       )}
                     </div>
@@ -1702,27 +1745,7 @@ Rules:
                         {visibleHostedModels.length === 0 && (
                           <p className="text-[10px] font-mono text-text-dim py-2">No models match "{modelFilter}".</p>
                         )}
-                        {visibleHostedModels.map((m) => (
-                          <button
-                            key={m}
-                            onClick={() => setState(s => ({
-                              ...s,
-                              modelSettings: { ...s.modelSettings, model: m }
-                            }))}
-                            className={`p-3 rounded-lg border text-[11px] font-mono text-left transition-all flex items-center justify-between gap-2 ${
-                              state.modelSettings.model === m
-                                ? "border-accent bg-accent/5 text-accent"
-                                : "border-border bg-bg text-text-dim hover:bg-white/5 hover:text-text-muted"
-                            }`}
-                          >
-                            <span className="truncate">{m}</span>
-                            {m.endsWith(":free") ? (
-                              <span className="text-[8px] bg-[#10b981]/15 text-[#10b981] px-1.5 py-0.5 rounded uppercase font-bold tracking-widest font-sans shrink-0">Free</span>
-                            ) : remoteModels.length > 0 && (
-                              <span className="text-[8px] bg-accent/15 text-accent px-1.5 py-0.5 rounded uppercase font-bold tracking-widest font-sans shrink-0">Live</span>
-                            )}
-                          </button>
-                        ))}
+                        {visibleHostedModels.map((m) => renderModelRow(m, hostedBadge(m)))}
                       </div>
                     </div>
                   )}
@@ -1781,6 +1804,11 @@ Rules:
             </motion.div>
           </div>
         )}
+      </AnimatePresence>
+
+      {/* Help / How-To */}
+      <AnimatePresence>
+        {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
       </AnimatePresence>
 
       {/* Real-time sync notifications */}
@@ -2094,6 +2122,104 @@ function MainInterfaceChat({ state, askAssistant, preview, isSyncNeeded, syncDes
           <ChatInput onSend={askAssistant} isLoading={state.isAssistantLoading} variant="large" />
         </div>
       </div>
+    </div>
+  );
+}
+
+function HelpModal({ onClose }: { onClose: () => void }) {
+  const Link = ({ href, children }: { href: string; children: React.ReactNode }) => (
+    <a href={href} target="_blank" rel="noopener noreferrer" className="text-accent underline decoration-accent/40 hover:decoration-accent break-all">{children}</a>
+  );
+  const H = ({ children }: { children: React.ReactNode }) => (
+    <h3 className="text-[11px] font-black uppercase tracking-[0.2em] text-accent flex items-center gap-2 pt-2">
+      <div className="w-2 h-[1px] bg-accent" />{children}
+    </h3>
+  );
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+      <motion.div
+        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+        onClick={onClose}
+        className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+      />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }}
+        className="relative w-full max-w-2xl max-h-[88vh] flex flex-col bg-header border border-border rounded-3xl shadow-2xl overflow-hidden"
+      >
+        <div className="absolute top-0 left-0 w-full h-1 bg-accent" />
+        <div className="flex justify-between items-start p-8 pb-4 shrink-0">
+          <div className="space-y-1 text-left">
+            <h2 className="text-xl font-black uppercase tracking-tighter flex items-center gap-2"><HelpCircle className="w-5 h-5 text-accent" /> How It Works</h2>
+            <p className="text-[10px] text-label font-bold uppercase tracking-widest">Aether_Core · Quick Guide</p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-white/5 rounded-lg text-label hover:text-white transition-all">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="px-8 pb-8 overflow-y-auto custom-scrollbar space-y-5 text-left text-[13px] leading-relaxed text-text-muted">
+          <section className="space-y-2">
+            <H>What this is</H>
+            <p>Aether_Core is a <span className="text-text-main">workshop</span>, not a chatbot. You collaborate step-by-step with an AI to build a complete, copy-paste-ready <span className="text-text-main">story package</span> for the ISK0 platform — using the USCS v6.1 framework under the hood. The AI is a co-author and architect; it never plays the story itself.</p>
+            <p>As you finish each piece (plot card, character sheets, guidelines, etc.), the app captures it into a structured package and tracks its token budget. When you're done, <span className="text-text-main">Export_Core</span> assembles everything into one clean <code className="bg-black/30 px-1 rounded text-[11px]">.txt</code> file.</p>
+          </section>
+
+          <section className="space-y-2">
+            <H>Choosing a model (the engine)</H>
+            <p>The AI work is done by a language model. You pick which one in <span className="text-text-main">Settings</span> (the ⚙ icon, top-right). There are four options:</p>
+            <ul className="space-y-1.5 pl-1">
+              <li>• <span className="text-text-main">Google Gemini</span> — has a genuinely free tier. Good starting point.</li>
+              <li>• <span className="text-text-main">Anthropic Claude</span> — high quality, but paid only.</li>
+              <li>• <span className="text-text-main">OpenRouter</span> — one key unlocks GPT, Claude, Gemini, Grok, Llama and more, including free models.</li>
+              <li>• <span className="text-text-main">Local Ollama</span> — runs models on your own machine, fully free and offline.</li>
+            </ul>
+            <p>For the three cloud options you need an <span className="text-text-main">API key</span> — a password-like string that lets this app use your account. You paste it into Settings; it stays on your machine and is sent only to your chosen provider.</p>
+          </section>
+
+          <section className="space-y-2">
+            <H>Getting an API key</H>
+            <div className="p-3 rounded-xl border border-border bg-bg/50 space-y-1">
+              <p className="text-text-main font-bold">Google Gemini (free tier)</p>
+              <p>Go to <Link href="https://aistudio.google.com/apikey">aistudio.google.com/apikey</Link>, sign in with a Google account, click <span className="text-text-main">Create API key</span>. Copy the key (starts with <code className="bg-black/30 px-1 rounded text-[11px]">AIza…</code>) into Settings → Gemini.</p>
+            </div>
+            <div className="p-3 rounded-xl border border-border bg-bg/50 space-y-1">
+              <p className="text-text-main font-bold">Anthropic Claude (paid)</p>
+              <p>Go to <Link href="https://console.anthropic.com/settings/keys">console.anthropic.com</Link>, create an account, add a little credit (about $5 minimum), then create a key (starts with <code className="bg-black/30 px-1 rounded text-[11px]">sk-ant-…</code>). Without credit, Claude returns errors.</p>
+            </div>
+            <div className="p-3 rounded-xl border border-border bg-bg/50 space-y-1">
+              <p className="text-text-main font-bold">OpenRouter (one key, many models)</p>
+              <p>Go to <Link href="https://openrouter.ai/keys">openrouter.ai/keys</Link>, sign in, create a key (starts with <code className="bg-black/30 px-1 rounded text-[11px]">sk-or-v1-…</code>). Models tagged <span className="text-[#10b981] font-bold">:free</span> cost nothing (they're rate-limited); paid models work too if you add credit. Tip: use the ⭐ to favourite the models you like so you don't scroll the 300+ list.</p>
+            </div>
+            <p className="text-[11px] text-text-dim">A key is like a password to your own account — don't share it. If one leaks, delete it on the provider's site and make a new one.</p>
+          </section>
+
+          <section className="space-y-2">
+            <H>Running local models (Ollama)</H>
+            <p>Local models are free, private, and need no key — but you install and run them yourself. The short version:</p>
+            <ol className="space-y-1.5 pl-1 list-decimal list-inside marker:text-accent">
+              <li>Install Ollama from <Link href="https://ollama.com">ollama.com</Link>.</li>
+              <li>Download a model: open a terminal and run <code className="bg-black/30 px-1 rounded text-[11px]">ollama pull llama3</code>.</li>
+              <li>In Settings, choose <span className="text-text-main">Local Ollama</span> — it auto-detects installed models.</li>
+            </ol>
+            <p className="text-[11px] text-text-dim">If you run this app via Docker, set the base URL to <code className="bg-black/30 px-1 rounded text-[11px]">http://host.docker.internal:11434</code> and start Ollama with <code className="bg-black/30 px-1 rounded text-[11px]">OLLAMA_HOST=0.0.0.0</code> so the container can reach it. Local models are smaller than the big cloud ones, so output quality varies — but it's free and stays on your machine.</p>
+          </section>
+
+          <section className="space-y-2">
+            <H>Handy to know</H>
+            <ul className="space-y-1.5 pl-1">
+              <li>• <span className="text-text-main">⭐ Favourites</span> — star models in Settings to pin them at the top.</li>
+              <li>• <span className="text-text-main">Token Budget</span> (Concept step) — tell the AI how big the final package should be; the gauge in the left panel tracks it.</li>
+              <li>• <span className="text-text-main">LOCK IN</span> — when the AI marks a step complete, the top-right button pulses; click it (or the chat banner) to advance when you're ready.</li>
+              <li>• <span className="text-text-main">Snapshot</span> saves a full backup (chat included); <span className="text-text-main">Export_Core</span> saves just the clean deliverables.</li>
+            </ul>
+          </section>
+        </div>
+
+        <div className="px-8 py-4 border-t border-border shrink-0 flex justify-end">
+          <button onClick={onClose} className="px-8 py-2.5 bg-accent text-black rounded-lg text-xs font-black uppercase tracking-[0.2em] hover:bg-white transition-all">Got it</button>
+        </div>
+      </motion.div>
     </div>
   );
 }
