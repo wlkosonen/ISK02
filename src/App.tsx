@@ -1460,11 +1460,22 @@ Rules:
               />
             ))}
           </div>
-          <span className="text-[10px] font-mono text-text-dim/50 uppercase tracking-widest hidden lg:block">System_Stability: 99.2%</span>
+          <button
+            onClick={() => {
+              navigator.clipboard?.writeText("HK08YR5L");
+              triggerToast("Referral code HK08YR5L copied — new users get free tokens!", "info");
+            }}
+            title="Copy referral code — new users get free tokens"
+            className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-text-dim hover:text-accent transition-colors active:scale-95"
+          >
+            <span className="opacity-50">Referral</span>
+            <span className="text-accent font-bold tracking-wider">HK08YR5L</span>
+            <span className="hidden lg:inline opacity-50 normal-case">· free tokens</span>
+          </button>
         </div>
 
         <a
-          href="https://discord.com/invite/isekaizero"
+          href="https://discord.com/servers/isekai-zero-1415040517594550282"
           target="_blank"
           rel="noopener noreferrer"
           title="@Shegs — find me in the ISK0 Discord for feedback & ideas"
@@ -2227,7 +2238,7 @@ function HelpModal({ onClose }: { onClose: () => void }) {
           <section className="space-y-2">
             <H>Credits &amp; feedback</H>
             <p>This workshop runs on <span className="text-text-main">USCS v6.1</span> — a community effort from the Isekai Zero community, released into the public domain (CC0). Huge thanks to everyone who built it.</p>
-            <p>App put together by <span className="text-accent font-bold">@Shegs</span> — find me in the <Link href="https://discord.com/invite/isekaizero">ISK0 Discord</Link> for feedback and ideas. 💬</p>
+            <p>App put together by <span className="text-accent font-bold">@Shegs</span> — find me in the <Link href="https://discord.com/servers/isekai-zero-1415040517594550282">ISK0 Discord</Link> for feedback and ideas. 💬</p>
           </section>
         </div>
 

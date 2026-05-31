@@ -108,6 +108,6 @@ All are **optional** — the app works with keys entered in the UI. See `.env.ex
   **Isekai Zero community**, released into the public domain under **CC0 1.0**.
   No conditions, no attribution required — but credit the community anyway. ✨
 
-Built by **@Shegs** — find me in the [ISK0 Discord](https://discord.com/invite/isekaizero)
+Built by **@Shegs** — find me in the [ISK0 Discord](https://discord.com/servers/isekai-zero-1415040517594550282)
 for feedback and ideas.
 
