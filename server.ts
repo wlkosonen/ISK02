@@ -38,9 +38,29 @@ function isPrivateOrLocalHost(hostname: string): boolean {
   }
   return false; // non-literal hostnames are not allowed by default
 }
-function ollamaUrlAllowed(rawUrl: string): boolean {
-  if (process.env.OLLAMA_ALLOW_ANY === "true") return true;
-  try { return isPrivateOrLocalHost(new URL(rawUrl).hostname); } catch { return false; }
+// The Ollama proxy lets the server make a request to a user-named host, which is
+// an SSRF vector on a PUBLIC deploy. Enable it only where Ollama is genuinely
+// used: local dev, or any deploy where the operator explicitly opted in by
+// setting OLLAMA_BASE_URL or OLLAMA_ALLOW_ANY. A public box (e.g. Render) sets
+// neither, so the proxy is inert there and cannot be abused by strangers.
+function ollamaEnabled(): boolean {
+  return process.env.NODE_ENV !== "production"
+    || !!process.env.OLLAMA_BASE_URL?.trim()
+    || process.env.OLLAMA_ALLOW_ANY === "true";
+}
+
+// Validate a (user- or operator-supplied) Ollama base URL and return a SAFE,
+// fully reconstructed target for a FIXED path (e.g. "/api/chat"), or null if the
+// base is not an allowed local/private http(s) address. We rebuild the URL from
+// the parsed origin + a server-controlled path — never the raw string — so user
+// input cannot smuggle in path traversal, query, fragment or credential tricks.
+function buildOllamaTarget(rawBase: string, path: string): string | null {
+  let u: URL;
+  try { u = new URL(rawBase); } catch { return null; }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return null; // no file:/gopher:/etc.
+  if (u.username || u.password) return null;                          // no embedded credentials
+  if (process.env.OLLAMA_ALLOW_ANY !== "true" && !isPrivateOrLocalHost(u.hostname)) return null;
+  return new URL(path, `${u.protocol}//${u.host}`).href;
 }
 
 async function startServer() {
@@ -125,22 +145,23 @@ async function startServer() {
 
   // Endpoint to fetch available models from local Ollama instance
   app.get("/api/ollama/models", async (req, res) => {
-    let ollamaUrl = (req.query.url as string)?.trim() || process.env.OLLAMA_BASE_URL?.trim() || "http://localhost:11434";
-    if (ollamaUrl.endsWith("/")) {
-      ollamaUrl = ollamaUrl.slice(0, -1);
+    if (!ollamaEnabled()) {
+      return res.status(403).json({ error: "The Ollama provider is disabled on this server. It is available when self-hosting (set OLLAMA_BASE_URL or OLLAMA_ALLOW_ANY)." });
     }
-
-    if (!ollamaUrlAllowed(ollamaUrl)) {
-      return res.status(400).json({ error: "Ollama URL must be a local or private-network address." });
+    const rawBase = (req.query.url as string)?.trim() || process.env.OLLAMA_BASE_URL?.trim() || "http://localhost:11434";
+    const target = buildOllamaTarget(rawBase, "/api/tags");
+    if (!target) {
+      return res.status(400).json({ error: "Ollama URL must be a local or private-network http(s) address." });
     }
 
     try {
-      console.log(`Checking local Ollama models on: ${ollamaUrl}/api/tags`);
+      console.log(`Checking local Ollama models on: ${target}`);
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 4000); // 4 second timeout for local lookup
 
-      const response = await fetch(`${ollamaUrl}/api/tags`, {
+      const response = await fetch(target, {
         signal: controller.signal,
+        redirect: "error", // a private host must not 302-bounce us to a public/metadata target
       });
       clearTimeout(timeoutId);
 
@@ -152,7 +173,7 @@ async function startServer() {
       const models = (data.models || []).map((m: any) => m.name);
       return res.json({ models });
     } catch (err: any) {
-      console.info(`Could not connect to Ollama at ${ollamaUrl} to fetch models:`, err.message || err);
+      console.info(`Could not connect to Ollama at ${target} to fetch models:`, err.message || err);
       return res.status(500).json({ error: `Connection failed: ${err.message || err}` });
     }
   });
@@ -315,14 +336,13 @@ async function startServer() {
       }
 
       if (aiProvider === "ollama") {
-        let ollamaUrl = settings.ollamaBaseUrl?.trim() || process.env.OLLAMA_BASE_URL?.trim() || "http://localhost:11434";
-        // Ensure no trailing slashes
-        if (ollamaUrl.endsWith("/")) {
-          ollamaUrl = ollamaUrl.slice(0, -1);
+        if (!ollamaEnabled()) {
+          return res.status(403).json({ error: "The Ollama provider is disabled on this server (public deploy). Run the app locally or set OLLAMA_BASE_URL / OLLAMA_ALLOW_ANY to use local models." });
         }
-
-        if (!ollamaUrlAllowed(ollamaUrl)) {
-          return res.status(400).json({ error: "Ollama URL must be a local or private-network address (set OLLAMA_ALLOW_ANY=true to override on a trusted self-host)." });
+        const rawBase = settings.ollamaBaseUrl?.trim() || process.env.OLLAMA_BASE_URL?.trim() || "http://localhost:11434";
+        const target = buildOllamaTarget(rawBase, "/api/chat");
+        if (!target) {
+          return res.status(400).json({ error: "Ollama URL must be a local or private-network http(s) address (set OLLAMA_ALLOW_ANY=true to override on a trusted self-host)." });
         }
 
         const modelName = settings.model || "llama3";
@@ -347,9 +367,10 @@ async function startServer() {
         messages.push({ role: "user", content: prompt });
 
         try {
-          console.log(`Forwarding request to Ollama at ${ollamaUrl}/api/chat with model ${modelName}`);
-          const response = await fetch(`${ollamaUrl}/api/chat`, {
+          console.log(`Forwarding request to Ollama at ${target} with model ${modelName}`);
+          const response = await fetch(target, {
             method: "POST",
+            redirect: "error", // a private host must not 302-bounce us to a public/metadata target
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               model: modelName,
@@ -378,8 +399,8 @@ async function startServer() {
           return res.json({ text, truncated });
         } catch (ollamaErr: any) {
           console.error("Local Ollama bridge failed:", ollamaErr);
-          return res.status(500).json({ 
-            error: `Could not connect to Ollama at ${ollamaUrl}. Error details: ${ollamaErr.message || ollamaErr}. Please verify that Ollama is running ('ollama serve') and accessible from the container.` 
+          return res.status(500).json({
+            error: `Could not connect to Ollama at ${target}. Error details: ${ollamaErr.message || ollamaErr}. Please verify that Ollama is running ('ollama serve') and accessible from the container.`
           });
         }
       }
