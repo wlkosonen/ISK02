@@ -1459,8 +1459,11 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                 setChatPosition(prev => ({ x: prev.x + info.offset.x, y: prev.y + info.offset.y }));
               }}
               initial={isXL && !isChatDetached ? false : { x: "100%" }}
-              animate={isChatDetached ? { 
-                x: chatPosition.x, 
+              animate={isChatDetached ? {
+                // Floating window. Geometry only — cosmetics (radius/border/shadow/
+                // bg) live in className so Framer doesn't leave them as stale inline
+                // styles when we re-dock.
+                x: chatPosition.x,
                 y: chatPosition.y,
                 width: chatSize.width,
                 height: chatSize.height,
@@ -1468,19 +1471,23 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                 top: 100,
                 right: 40,
                 zIndex: 1000,
-                borderRadius: '24px',
-                border: '1px solid rgba(255,255,255,0.1)',
-                boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)',
-                backgroundColor: '#18181b',
-                display: 'flex',
-                flexDirection: 'column'
-              } : { 
+              } : {
+                // Docked. Must reset EVERY geometry key the detached state set,
+                // otherwise Framer keeps the floating position/size as inline
+                // styles and the panel never re-docks (which also hid the resize
+                // handle). Values track the responsive className for the breakpoint.
                 x: 0,
+                y: 0,
                 width: dockedChatWidth,
+                height: '100%',
+                position: isXL ? 'relative' : 'fixed',
+                top: isXL ? 'auto' : 0,
+                right: isXL ? 'auto' : 0,
+                zIndex: isXL ? 40 : 70,
               }}
               exit={{ x: "100%" }}
               transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className={`overflow-hidden flex flex-col min-w-0 max-h-full ${isChatDetached ? '' : 'fixed inset-y-0 right-0 border-l border-border bg-[#18181b] z-[70] xl:z-40 h-full'} ${isChatOpen ? 'flex' : 'hidden xl:flex'} ${isXL && !isChatDetached ? 'relative xl:inset-auto xl:bg-header/40 xl:border-l-0 xl:h-full' : 'w-full sm:w-auto'}`}
+              className={`overflow-hidden flex flex-col min-w-0 max-h-full ${isChatDetached ? 'rounded-[24px] border border-white/10 shadow-2xl bg-[#18181b]' : 'fixed inset-y-0 right-0 border-l border-border bg-[#18181b] z-[70] xl:z-40 h-full xl:relative xl:inset-auto xl:bg-header/40 xl:border-l-0 xl:h-full'} ${isChatOpen ? 'flex' : 'hidden xl:flex'} ${isXL && !isChatDetached ? '' : 'w-full sm:w-auto'}`}
               style={!isChatDetached ? { width: dockedChatWidth } : {}}
             >
               {/* Resize Handle for Docked View */}
