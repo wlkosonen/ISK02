@@ -884,7 +884,7 @@ CURRENT WORKSHOP DESKSTATE (COLLABORATOR SYNC CONTEXT)
 ${STEPS.map((s, i) => `    ${i + 1}. ${s}${i === state.step ? "   ← CURRENT STEP" : ""}`).join("\n")}
   Work ONLY on the current step. Do not advance to, pre-empt, or ask the creator about anything that belongs to a later step.
 - CURRENT STEP: ${STEPS[state.step]} (step ${state.step + 1} of ${STEPS.length})
-- Story Track: ${state.isDMOnly ? "Dungeon-Mind / DM-only (a stateless world-as-stage; the player is an external protagonist who drops in)" : "Full Story Package (a continuous narrative protagonist with a story spine)"} — this is ALREADY chosen by the creator in the UI. Do NOT ask which track they want; just proceed on this basis.
+- ⚠️ OUTPUT TRACK — LOCKED VIA UI, DO NOT RE-ASK: The creator has ALREADY selected "${state.isDMOnly ? "Dungeon-Mind / DM-only (a stateless world-as-stage; the player is an external protagonist who drops in)" : "Full Story Package (a continuous narrative protagonist with a story spine)"}" using a dedicated on-screen control. This is final and authoritative. You MUST treat it as a settled decision: do NOT ask, confirm, double-check, "just to be sure", or otherwise re-open the full-story-vs-DM question in any form, and do NOT list it as an open/pending decision. If the USCS framework text above says to establish this track, consider it ALREADY established by the UI selection. Simply proceed on this basis without comment.
 - Mode: ${state.mode || "Pending"}
 - Heat Level: ${state.heatLevel}
 - Setting: ${state.settingType || "Pending"}
