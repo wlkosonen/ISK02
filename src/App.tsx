@@ -2404,6 +2404,7 @@ function HelpModal({ onClose }: { onClose: () => void }) {
             <div className="p-3 rounded-xl border border-border bg-bg/50 space-y-1">
               <p className="text-text-main font-bold">OpenRouter (one key, many models)</p>
               <p>Go to <Link href="https://openrouter.ai/keys">openrouter.ai/keys</Link>, sign in, create a key (starts with <code className="bg-black/30 px-1 rounded text-[11px]">sk-or-v1-…</code>). Models tagged <span className="text-[#10b981] font-bold">:free</span> cost nothing (they're rate-limited); paid models work too if you add credit. Tip: use the ⭐ to favourite the models you like so you don't scroll the 300+ list.</p>
+              <p className="mt-1.5 p-2 rounded-lg bg-[#10b981]/10 border border-[#10b981]/25 text-[#a7f3d0]">💡 <span className="font-bold">Hidden perk:</span> adding even ~$10 of credit to your OpenRouter account raises the <span className="font-bold">free</span> daily allowance a lot (roughly 50 → 1,000 free requests/day) and makes <span className="text-[#10b981] font-bold">:free</span> models far less likely to bounce you with a rate-limit. You still pay nothing for free models — the credit just unlocks the bigger free quota. Great if you keep hitting "out of free allocation."</p>
             </div>
             <p className="text-[11px] text-text-dim">A key is like a password to your own account — don't share it. If one leaks, delete it on the provider's site and make a new one.</p>
           </section>
