@@ -814,8 +814,12 @@ export default function App() {
     if (state.title) established.push(`Draft Title: "${state.title}"`);
     else pending.push("Title");
 
-    // Budget is set up-front on Concept Intake, so always report it.
-    established.push(`Target Instruction-Package Budget: ~${state.tokenBudgetMin / 1000}k–${state.tokenBudgetMax / 1000}k tokens (USCS §21.1 package: Prompt Plot + Guidelines + Reminders + Character AI descriptions; HTML/images excluded)${state.budgetTierMode ? " · BUDGET-TIER MODE ACTIVE (apply USCS §21 free-model optimizations)" : ""}`);
+    // Budget is chosen on Concept Intake. Only report it if the creator actually
+    // moved it off the default range (or turned on Budget-Tier Mode); otherwise
+    // it's an untouched default and must not be presented as a locked target.
+    const budgetTouched = state.tokenBudgetMin !== d.tokenBudgetMin || state.tokenBudgetMax !== d.tokenBudgetMax || state.budgetTierMode !== d.budgetTierMode;
+    if (budgetTouched) established.push(`Target Instruction-Package Budget: ~${state.tokenBudgetMin / 1000}k–${state.tokenBudgetMax / 1000}k tokens (USCS §21.1 package: Prompt Plot + Guidelines + Reminders + Character AI descriptions; HTML/images excluded)${state.budgetTierMode ? " · BUDGET-TIER MODE ACTIVE (apply USCS §21 free-model optimizations)" : ""}`);
+    else pending.push("Token Budget target");
 
     const syncPrompt = `[SYSTEM ACTION - MANUAL STATE SYNC]
 The creator synced the workspace. We are currently on **Step ${state.step + 1} ("${STEPS[state.step]}")**.
