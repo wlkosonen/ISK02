@@ -68,6 +68,26 @@ CORE DIRECTIVE — NEVER VIOLATE:
 AUTHORITATIVE SPECIFICATION:
 The verbatim USCS v6.1 specification governing the CURRENT step follows below. Treat it as the single source of truth — follow its rules, structures, required subsections, word counts, and templates EXACTLY. Do not summarize, abbreviate, or water it down; produce output to the full depth the specification requires.`;
 
+// The full-story-vs-Dungeon-Mind "track" decision is now owned by a dedicated
+// on-screen control (and re-stated to the model in the live deskstate). The
+// verbatim framework, however, instructs the AI to OFFER/ASK that choice in chat
+// at Step 1 — which made the model keep re-asking even after the creator picked
+// it on the UI. We strip ONLY those offer/ask lines from the injected text; all
+// Dungeon Mind mechanics and sections remain fully intact.
+const TRACK_OFFER_LINE_RES: RegExp[] = [
+  /ALSO OFFER/i,
+  /Are you building a full story/i,
+  /If DM-only\s*:/i,
+  /ALTERNATE ENTRY POINT\s*[—–-]\s*DUNGEON MIND ONLY/i,
+  /offer a DM-only track/i,
+];
+function stripTrackOffer(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .filter(line => !TRACK_OFFER_LINE_RES.some(re => re.test(line)))
+    .join("\n");
+}
+
 interface ParsedDoc {
   sections: Map<string, string>;
   steps: Map<string, string>;
@@ -126,7 +146,7 @@ export function buildStepContext(uiStep: number): string {
   const parts: string[] = [CORE_PREAMBLE];
 
   const stepIds = STEP_BLOCKS[uiStep] || [];
-  const stepText = stepIds.map(id => doc.steps.get(id)).filter(Boolean).join("\n\n");
+  const stepText = stripTrackOffer(stepIds.map(id => doc.steps.get(id)).filter(Boolean).join("\n\n")).trim();
   if (stepText) {
     parts.push(
       "================================================================================\n" +
@@ -137,7 +157,7 @@ export function buildStepContext(uiStep: number): string {
   }
 
   const secIds = DETAIL_SECTIONS[uiStep] || [];
-  const secText = secIds.map(id => doc.sections.get(id)).filter(Boolean).join("\n\n");
+  const secText = stripTrackOffer(secIds.map(id => doc.sections.get(id)).filter(Boolean).join("\n\n")).trim();
   if (secText) {
     parts.push(
       "================================================================================\n" +

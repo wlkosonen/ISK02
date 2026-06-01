@@ -6,3 +6,6 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Local dev artifact from scripts/dump-system-prompt.ts
+system-prompt-review.txt
