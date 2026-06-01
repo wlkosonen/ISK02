@@ -149,6 +149,22 @@ const STEPS = [
   "Compliance & Assembly"
 ];
 
+// Per-step OUTPUT COMPLETENESS gates for the heavy craft steps. The full spec is
+// already injected server-side (verbatim USCS sections); this is a terse checklist
+// that stops weaker models from abbreviating a multi-part deliverable down to a
+// few parts, and reminds them to wrap the result for capture. It reinforces — does
+// NOT replace — the injected specification. Steps without an entry have no gate.
+const STEP_MANDATES: Record<number, string> = {
+  6: `Produce BOTH a Title and a ~20-word user-facing Plot Summary. Wrap the finished pair in <<<USCS_BLOCK TITLE_SUMMARY>>> … <<<END USCS_BLOCK>>>.`,
+  7: `Produce the COMPLETE Plot Card (user-facing HTML) with every required field from the spec — do not abbreviate. Wrap it in <<<USCS_BLOCK PLOT_CARD>>> … <<<END USCS_BLOCK>>>.`,
+  8: `ONE FULL sheet PER character — primary AND supporting, no exceptions, no "secondary" shortcuts. Each character gets BOTH parts: Part A HTML card → <<<USCS_BLOCK CHAR_CARD: Name>>>, and Part B AI prompt description → <<<USCS_BLOCK CHAR_DESC: Name>>>. Respect §21 caps on Part B (≤1500 primary / ≤800 supporting). Build and confirm one character fully before starting the next.`,
+  9: `Produce 2–3 DISTINCT scenario variants (alternative entry points) per the spec. Wrap the finished set in <<<USCS_BLOCK SCENARIOS>>> … <<<END USCS_BLOCK>>>.`,
+  10: `The Prompt Plot MUST contain ALL Section 6 required subsections, IN ORDER: 1) Quick Reference, 2) {{user}}'s Role, 3) Narrative Perspective, 4) Primary Dramatic Engine, 5) Core Conflict Management, 6) Agency Protection, 7) Setting Description, 8) World Grounding / Genre Anchor, 9) Genre Mechanics, 10) Heat Level Guidelines (NSFW only), 11) Pacing & Revelation / Phase Structure — PLUS the mandatory Architect Protocol block (Section 6A). If a subsection is genuinely N/A (e.g. Heat Guidelines in SFW, Genre Mechanics in a plain contemporary story), write its heading followed by "N/A — <reason>"; NEVER drop one silently. Wrap the finished Prompt Plot (Architect Protocol included) in <<<USCS_BLOCK PROMPT_PLOT>>> … <<<END USCS_BLOCK>>>.`,
+  11: `The Guidelines MUST: open with the one-paragraph Emotional Mandate (§22.4); contain at least 15 behavioral rules; include Section 7A (NPC Social Web / Anti-Harem) IN FULL if the story has 2+ NPCs; include Section 7B rules if a Status Dashboard is active; include module integration if the Module System is active. Do not abbreviate. Wrap in <<<USCS_BLOCK GUIDELINES>>> … <<<END USCS_BLOCK>>>.`,
+  12: `Reminders are non-negotiable rules ONLY (plus a keys-only Quick Reference and the critical character table) — never re-state Plot/Guidelines prose. Keep within the §21 cap (≤800 tok). Wrap in <<<USCS_BLOCK REMINDERS>>> … <<<END USCS_BLOCK>>>.`,
+  14: `Produce every required prompt per the spec (at minimum: portrait, cover, and title-edit image prompts, plus one emotion-edit set per character). Wrap the finished set in <<<USCS_BLOCK IMAGE_PROMPTS>>> … <<<END USCS_BLOCK>>>.`,
+};
+
 const PROVIDERS = {
   gemini: {
     name: "Google Gemini",
@@ -219,7 +235,7 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 
 // Version of THIS app (the Aether_Core tool), distinct from the USCS framework
 // version it implements. Bump this when you ship changes.
-const APP_VERSION = "0.3.0";
+const APP_VERSION = "0.4.0";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
 const USCS_VERSION = "6.1";
 
@@ -896,7 +912,13 @@ ${state.groundingRules || "No strict rules established yet."}
   HOW TO HIT THIS BUDGET: The per-block §21 caps (Prompt Plot ≤2500, Guidelines ≤3000, Reminders ≤800, Player Persona ≤500, each character ≤1500 primary / ≤800 supporting) are HARD ceilings — NEVER inflate a block beyond its cap to reach a number. The fixed blocks total ~6,800 tokens at most; the rest of the budget comes from CAST SIZE (USCS guide: ~2 chars ≈ 8–10k, ~4 ≈ 12–15k, ~6 ≈ 16–19k) plus any optional systems. If the chosen budget cannot be met within the caps at the current number of characters, say so and suggest adjusting the cast — do not bloat individual blocks. A higher budget means a larger ensemble, not a bigger Prompt Plot.${state.budgetTierMode ? `
 - BUDGET-TIER MODE: ACTIVE (story targets free/budget models such as DeepSeek/Ministral/GLM). Apply the USCS Section 21 budget-tier optimizations throughout: use concrete state-based triggers instead of session-number pacing; require a mandatory status block at the start of every response; add a worked example for any rule that contradicts a model's default training; enforce strict document separation (facts in Plot, behavior in Guidelines, non-negotiables in Reminders — never duplicated); and follow the §21 trim-priority order if over budget.` : ""}${relaxedCaps ? `
 - §21 CAP OVERRIDE (creator-set): This OVERRIDES the "never inflate a block" rule above, but ONLY for these components: ${relaxedCaps}. For these you MAY exceed the standard §21 per-component cap to deliver richer, more detailed content. ALL OTHER components keep their §21 caps. The 20,000-token TOTAL platform ceiling is still a HARD limit — never exceed it; if the richer overridden blocks push the total up, trim lower-priority NON-overridden content first (§21 trim order). Reminder: a larger Prompt Plot or Guidelines costs tokens on EVERY turn of the deployed story, so spend that allowance deliberately.` : ""}
-
+${STEP_MANDATES[state.step] ? `
+================================================================================
+MANDATORY OUTPUT CHECKLIST FOR THIS STEP — DO NOT ABBREVIATE OR SKIP
+================================================================================
+${STEP_MANDATES[state.step]}
+Follow the full injected USCS specification above for exact structure, depth, and word counts. Output the COMPLETE deliverable — if it is long, split into clearly labeled parts ("Part 1/N…") and continue on request rather than omitting any required section.
+` : ""}
 ================================================================================
 REAL-TIME UI SYNCHRONIZATION COMMANDS
 ================================================================================
