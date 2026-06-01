@@ -2373,6 +2373,7 @@ function HelpModal({ onClose }: { onClose: () => void }) {
             <H>Credits &amp; feedback</H>
             <p>This workshop runs on <span className="text-text-main">USCS v6.1</span> — a community effort from the Isekai Zero community, released into the public domain (CC0). Huge thanks to everyone who built it.</p>
             <p>App put together by <span className="text-accent font-bold">@Shegs</span> — find me in the <Link href="https://discord.com/servers/isekai-zero-1415040517594550282">ISK0 Discord</Link> for feedback and ideas. 💬</p>
+            <p>Source code is open on <Link href="https://github.com/wlkosonen/ISK02">GitHub</Link> — fork it, self-host it, or open an issue. 🛠️</p>
           </section>
         </div>
 
