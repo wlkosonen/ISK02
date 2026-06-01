@@ -1022,6 +1022,20 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
         if (data.truncated) {
           setResponseTruncated(true);
         }
+
+        // Prompt-cache telemetry (Anthropic returns it; other providers cache
+        // server-side without reporting here). Show a brief hit indicator so the
+        // user can see the instruction package is being reused cheaply.
+        const usage = data.usage;
+        if (usage && (usage.cacheRead > 0 || usage.cacheWrite > 0)) {
+          const cachedIn = (usage.input || 0) + (usage.cacheRead || 0) + (usage.cacheWrite || 0);
+          const pct = cachedIn > 0 ? Math.round((usage.cacheRead / cachedIn) * 100) : 0;
+          if (usage.cacheRead > 0) {
+            triggerToast(`⚡ Prompt cache hit — ${pct}% of input reused (cheaper & faster)`, "ai-to-ui");
+          } else {
+            triggerToast(`⚡ Prompt cached — next turns in this step will be cheaper`, "ai-to-ui");
+          }
+        }
       } else {
         throw new Error("Empty response from matrix");
       }

@@ -211,6 +211,30 @@ async function startServer() {
       const uscsContext = buildStepContext(typeof step === "number" ? step : 0);
       const fullSystem = `${uscsContext}\n\n${systemInstruction || ""}`.trim();
 
+      // --- Prompt caching prep (Anthropic) ---------------------------------
+      // Caching keys on an EXACT prefix match: the stable bytes must come first,
+      // the volatile bytes last, with the cache breakpoint between them. The
+      // client's systemInstruction is laid out as [live deskstate] + [fixed
+      // UI/capture/length protocols]; the deskstate changes as the story's
+      // parameters evolve, so if it stayed in the prefix the cache would be
+      // invalidated almost every turn. We split on the protocol-section marker
+      // and reassemble as: STABLE (USCS step text + fixed protocols) → break →
+      // VOLATILE (live deskstate). Falls back to caching the whole prompt if the
+      // marker is absent.
+      const SYNC_SECTION_MARKER = "================================================================================\nREAL-TIME UI SYNCHRONIZATION COMMANDS";
+      let cacheStableSystem = fullSystem;
+      let cacheVolatileSystem = "";
+      {
+        const si = systemInstruction || "";
+        const markerIdx = si.indexOf(SYNC_SECTION_MARKER);
+        if (markerIdx > -1) {
+          const deskstate = si.slice(0, markerIdx).trim(); // volatile (per-turn)
+          const protocols = si.slice(markerIdx).trim();    // stable (fixed)
+          cacheStableSystem = `${uscsContext}\n\n${protocols}`.trim();
+          cacheVolatileSystem = deskstate;
+        }
+      }
+
       if (aiProvider === "gemini") {
         const apiKey = settings.geminiApiKey?.trim() || process.env.GEMINI_API_KEY;
         if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY is not configured. Please supply an API key in the Model Settings menu." });
@@ -295,6 +319,17 @@ async function startServer() {
         if (requestedModel !== "claude-3-5-sonnet-20240620") modelsToTry.push("claude-3-5-sonnet-20240620");
         if (requestedModel !== "claude-3-haiku-20240307") modelsToTry.push("claude-3-haiku-20240307");
 
+        // Structured system prompt: cache the large STABLE prefix (USCS step text
+        // + fixed protocols) with an ephemeral breakpoint; the VOLATILE deskstate
+        // follows uncached. Repeat turns reuse the cached prefix at ~10% of the
+        // input cost (cache_read) instead of paying full price every message.
+        const systemBlocks: Anthropic.TextBlockParam[] = [
+          { type: "text", text: cacheStableSystem, cache_control: { type: "ephemeral" } },
+        ];
+        if (cacheVolatileSystem) {
+          systemBlocks.push({ type: "text", text: cacheVolatileSystem });
+        }
+
         let response = null;
         let lastError = null;
 
@@ -306,7 +341,7 @@ async function startServer() {
                 model: candidateModel,
                 max_tokens: settings.maxTokens || 4096,
                 temperature: settings.temperature ?? 1,
-                system: fullSystem,
+                system: systemBlocks,
                 messages: messages,
               });
               console.log("Success with Anthropic model: %s", candidateModel);
@@ -325,7 +360,15 @@ async function startServer() {
           const text = response.content[0].type === 'text' ? response.content[0].text : '';
           if (!text) throw new Error("Empty response from Anthropic");
           const truncated = response.stop_reason === "max_tokens";
-          return res.json({ text, truncated });
+          // Surface cache telemetry so the UI can show a hit indicator.
+          const u = response.usage;
+          const usage = u ? {
+            input: u.input_tokens,
+            output: u.output_tokens,
+            cacheRead: u.cache_read_input_tokens ?? 0,
+            cacheWrite: u.cache_creation_input_tokens ?? 0,
+          } : undefined;
+          return res.json({ text, truncated, usage });
         } catch (anthropicErr: any) {
           console.error("Anthropic failed completely:", anthropicErr);
           
