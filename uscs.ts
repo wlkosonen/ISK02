@@ -39,12 +39,12 @@ const STEP_BLOCKS: Record<number, string[]> = {
 
 // UI step index -> verbatim detail SECTION id(s) the step depends on.
 const DETAIL_SECTIONS: Record<number, string[]> = {
-  0: ["3", "4"],            // modes/heat + compliance
-  1: ["22", "3"],           // emotional architecture (§22.4) + setting types
-  2: ["3"],                 // setting types / mode lock
+  0: ["3-modes", "4"],      // modes + heat (NOT setting types) + compliance
+  1: ["22", "3-settings"],  // emotional architecture (§22.4) + setting types
+  2: ["3-settings"],        // setting types / mode lock
   3: ["12"],                // image gen & art style profiles
   4: ["5"],                 // HTML reference (palette / card visual identity)
-  5: ["15", "3"],           // naming protocol + world grounding setting rules
+  5: ["15", "3-settings"],  // naming protocol + world grounding setting rules
   6: [],                    // title/summary — build-order block is sufficient
   7: ["16", "5"],           // plot card templates + HTML reference
   8: ["10", "17", "21"],    // character sheet structure + card templates + budget caps
@@ -123,6 +123,42 @@ function load(): ParsedDoc {
     const lines = raw.split(/\r?\n/);
 
     const sections = sliceBlocks(lines, SECTION_RE, true);
+
+    // Section 3 ("MODES, HEAT LEVELS, AND SETTING TYPES") bundles three things,
+    // but most steps need only part of it: Mode Selection needs modes+heat,
+    // while the Setting/Concept/Grounding steps need the setting-type catalog.
+    // Injecting the whole block on every one of those steps wastes ~1.4k tokens
+    // and pulls off-topic content (the setting catalog) into Mode Selection,
+    // which nudges the model to drift. We register two virtual sub-sections:
+    //   "3-modes"    = SECTION 3 header + 3.1 Modes + 3.2 Heat Levels
+    //   "3-settings" = 3.3 Setting Types
+    // The original "3" is left intact as a fallback. If the 3.3 subheader can't
+    // be found (doc edited), both virtual ids alias the full section so nothing
+    // silently loses content.
+    {
+      const sec3 = sections.get("3");
+      if (sec3) {
+        const l3 = sec3.split(/\r?\n/);
+        const idx = l3.findIndex(l => /^3\.3\s*[—–-]\s*SETTING TYPES/i.test(l.trim()));
+        if (idx > 0) {
+          let headStart = idx;
+          while (headStart > 0 && /^[-\s]*$/.test(l3[headStart - 1])) headStart--;
+          const modesHeat = l3.slice(0, headStart).join("\n").trim();
+          const settings = l3.slice(headStart).join("\n").trim();
+          sections.set("3-modes", modesHeat);
+          sections.set(
+            "3-settings",
+            "================================================================================\n" +
+            "USCS v6.1 — SECTION 3.3: SETTING TYPES\n" +
+            "================================================================================\n" +
+            settings
+          );
+        } else {
+          sections.set("3-modes", sec3);
+          sections.set("3-settings", sec3);
+        }
+      }
+    }
 
     // STEP blocks live inside "SECTION 2 — BUILD ORDER". Parse that section's body.
     const section2 = sections.get("2") || "";
