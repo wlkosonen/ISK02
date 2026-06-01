@@ -1253,13 +1253,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
           >
             <BookOpen className="w-5 h-5" />
           </button>
-          <div className="px-2 lg:px-3 py-1 bg-header border border-border rounded flex items-center gap-2">
-            <div className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse"></div>
-            <span className="text-[9px] lg:text-[10px] font-bold text-accent uppercase tracking-widest truncate max-w-[80px] sm:max-w-none">
-              {STEPS[state.step]}
-            </span>
-          </div>
-          <button 
+          <button
             onClick={() => setIsChatOpen(!isChatOpen)}
             className={`p-2 xl:hidden hover:bg-white/5 rounded-md transition-all ${isChatOpen ? 'bg-accent/10 text-accent' : 'text-label'}`}
           >
