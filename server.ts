@@ -1,4 +1,5 @@
 import express from "express";
+import rateLimit from "express-rate-limit";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
@@ -65,6 +66,12 @@ function buildOllamaTarget(rawBase: string, path: string): string | null {
 
 async function startServer() {
   const app = express();
+  // Render and most PaaS hosts put the app behind exactly one reverse-proxy hop.
+  // Trust that single hop so the rate limiter (and req.ip) reads the real client
+  // IP from X-Forwarded-For instead of lumping every visitor under the proxy IP.
+  // A specific hop count (1) is safer than `true`, which would let clients spoof
+  // their IP to dodge the limiter.
+  app.set("trust proxy", 1);
   // Docker (NODE_ENV=production) listens on 3000 inside the container, which
   // docker-compose maps to host 3010. Local dev also uses 3010 so the app is
   // always reachable at localhost:3010 and never collides with Open WebUI on 3000.
@@ -72,6 +79,17 @@ async function startServer() {
   const PORT = Number(process.env.PORT) || (process.env.NODE_ENV === "production" ? 3000 : 3010);
 
   app.use(express.json());
+
+  // Basic denial-of-service guard (CWE-770 / CodeQL js/missing-rate-limiting):
+  // cap requests per client IP across every route — the static file server and
+  // the proxy/AI endpoints all do expensive work (disk reads, outbound calls).
+  // The ceiling is generous (AI turns are slow and few per user) but stops floods.
+  app.use(rateLimit({
+    windowMs: 60_000, // 1 minute
+    max: 300,         // 300 requests / minute / IP
+    standardHeaders: true,
+    legacyHeaders: false,
+  }));
 
   // Configuration endpoint to expose server-side environment defaults
   app.get("/api/config", (req, res) => {
