@@ -880,7 +880,11 @@ Acknowledge the established parameters, leave everything under NOT YET DECIDED u
           systemInstruction: `================================================================================
 CURRENT WORKSHOP DESKSTATE (COLLABORATOR SYNC CONTEXT)
 ================================================================================
-- CURRENT STEP: ${STEPS[state.step]}
+- WORKSHOP PIPELINE (the creator's REAL UI steps, in order — when you refer to any step, use these EXACT names; never invent step names or numbers like "Character & Setting" or "World-Building"):
+${STEPS.map((s, i) => `    ${i + 1}. ${s}${i === state.step ? "   ← CURRENT STEP" : ""}`).join("\n")}
+  Work ONLY on the current step. Do not advance to, pre-empt, or ask the creator about anything that belongs to a later step.
+- CURRENT STEP: ${STEPS[state.step]} (step ${state.step + 1} of ${STEPS.length})
+- Story Track: ${state.isDMOnly ? "Dungeon-Mind / DM-only (a stateless world-as-stage; the player is an external protagonist who drops in)" : "Full Story Package (a continuous narrative protagonist with a story spine)"} — this is ALREADY chosen by the creator in the UI. Do NOT ask which track they want; just proceed on this basis.
 - Mode: ${state.mode || "Pending"}
 - Heat Level: ${state.heatLevel}
 - Setting: ${state.settingType || "Pending"}
@@ -2189,13 +2193,13 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
                 return (
                   <div
                     title={`Input ${u.input} full-price + ${u.cacheRead} from cache + ${u.cacheWrite} written to cache · Output ${u.output}. Cached input costs ~10% of full price.`}
-                    className="flex items-center gap-2 text-[9px] font-mono text-text-dim px-1"
+                    className="flex items-center gap-2 text-[11px] font-mono text-text-muted px-1"
                   >
                     <span>{fmt(totalIn)} in · {fmt(u.output)} out</span>
                     {u.cacheRead > 0 ? (
                       <span className="text-accent font-bold">⚡ {cachePct}% cached</span>
                     ) : u.cacheWrite > 0 ? (
-                      <span className="text-text-muted">⚡ cache primed</span>
+                      <span className="text-text-muted/80">⚡ cache primed</span>
                     ) : null}
                   </div>
                 );
@@ -3010,17 +3014,33 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
             </motion.div>
           )}
 
-          <div className="pt-12 text-center">
-            <button 
-              onClick={() => setState(s => ({ ...s, isDMOnly: !s.isDMOnly }))}
-              className={`px-6 py-3 rounded-lg font-mono text-[10px] font-bold tracking-[0.2em] transition-all border uppercase ${
-                state.isDMOnly 
-                  ? "bg-accent/10 border-accent text-accent shadow-[0_0_20px_rgba(20,184,166,0.2)]" 
-                  : "bg-card border-border text-text-dim hover:border-text-muted hover:text-text-muted"
-              }`}
-            >
-              {state.isDMOnly ? "SYSTEM_TRACK: DUNGEON_MIND_CORE" : "SYSTEM_TRACK: FULL_STORY_PACKAGE"}
-            </button>
+          <div className="pt-12">
+            <p className="text-center text-[10px] uppercase tracking-[0.3em] font-black text-label mb-1">Output Track</p>
+            <p className="text-center text-xs text-text-muted mb-4">What is this workshop producing? (This is communicated to the collaborator.)</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-2xl mx-auto">
+              <button
+                onClick={() => setState(s => ({ ...s, isDMOnly: false }))}
+                className={`text-left p-4 rounded-xl border transition-all ${
+                  !state.isDMOnly
+                    ? "bg-accent/10 border-accent text-text-main shadow-[0_0_20px_rgba(20,184,166,0.2)]"
+                    : "bg-card border-border text-text-muted hover:border-text-muted"
+                }`}
+              >
+                <div className="font-mono text-[11px] font-bold tracking-[0.15em] uppercase mb-1.5">Full Story Package</div>
+                <div className="text-[11px] leading-relaxed text-text-muted">The standard pipeline — a complete deliverable set (plot card, character sheets, scenarios, prompt plot, guidelines, reminders) around a continuous protagonist.</div>
+              </button>
+              <button
+                onClick={() => setState(s => ({ ...s, isDMOnly: true }))}
+                className={`text-left p-4 rounded-xl border transition-all ${
+                  state.isDMOnly
+                    ? "bg-accent/10 border-accent text-text-main shadow-[0_0_20px_rgba(20,184,166,0.2)]"
+                    : "bg-card border-border text-text-muted hover:border-text-muted"
+                }`}
+              >
+                <div className="font-mono text-[11px] font-bold tracking-[0.15em] uppercase mb-1.5">Dungeon-Mind <span className="text-text-dim normal-case tracking-normal">(advanced)</span></div>
+                <div className="text-[11px] leading-relaxed text-text-muted">A stateless "world-as-stage" the player drops into as an external protagonist. The collaborator applies USCS DM-only rules; the visual step pipeline is the same for now.</div>
+              </button>
+            </div>
           </div>
         </div>
       );
