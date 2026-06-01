@@ -42,9 +42,16 @@ import {
 type Mode = "SFW" | "NSFW";
 type HeatLevel = 1 | 2 | 3 | 4 | 5;
 
+interface MessageUsage {
+  input: number;     // uncached input tokens (full price)
+  output: number;    // output tokens
+  cacheRead: number; // input tokens served from cache (~10% price)
+  cacheWrite: number;// input tokens written to cache (~125% price, one-time)
+}
 interface Message {
   role: "user" | "assistant";
   content: string;
+  usage?: MessageUsage; // present on assistant turns when the provider reports it (Anthropic)
 }
 
 // Captured story-package deliverables. The five "counting" fields (promptPlot,
@@ -772,21 +779,56 @@ export default function App() {
 
     triggerToast(`Workspace parameters synced to collaborator!`, "ui-to-ai");
 
-    const syncPrompt = `[SYSTEM ACTION - MANUAL STATE SYNCED]
-The user updated the workspace deskstate. Here are the current parameters in real-time:
-- Active Step: Step ${state.step + 1} ("${STEPS[state.step]}")
-- Narrative Mode: ${state.mode || "Pending Selection"} (${state.isDMOnly ? "Dungeon Mind Trace" : "Full Story Package"})
-- Thermal Heat Level: ${state.heatLevel}/5
-- Setting Type Classification: ${state.settingType || "Not established"}
-- Architectural Tone: ${state.tone || "Not established"}
-- Visual Art Style: ${state.artStyle} (${state.aestheticMode} approach)
-- Chromatic HEX Palette: [${state.palette.join(', ')}]
-- Narrative Premise Seed: "${state.concept || "(Empty)"}"
-- Reality Protocols: "${state.groundingRules || "(None)"}"
-- Draft Title: "${state.title || "Untitled"}"
-- Target Instruction-Package Budget: ~${state.tokenBudgetMin / 1000}k–${state.tokenBudgetMax / 1000}k tokens (USCS §21.1 package: Prompt Plot + Guidelines + Reminders + Character AI descriptions; HTML/images excluded)${state.budgetTierMode ? " · BUDGET-TIER MODE ACTIVE (apply USCS §21 free-model optimizations)" : ""}
+    // Only report parameters the creator has ACTUALLY established. Fields still
+    // at their default value are listed as "not yet decided" so the AI doesn't
+    // mistake an untouched default (e.g. the default art style / palette / heat)
+    // for a locked choice and race ahead to later steps.
+    const established: string[] = [];
+    const pending: string[] = [];
+    const d = DEFAULT_STATE;
 
-Please acknowledge these updated options, explicitly address the modified parameters (${updatedFields.length > 0 ? updatedFields.join(', ') : 'no key differences'}), and guide the creator forward on Step ${state.step + 1} ("${STEPS[state.step]}").`;
+    if (state.mode) established.push(`Narrative Mode: ${state.mode} (${state.isDMOnly ? "Dungeon Mind Trace" : "Full Story Package"})`);
+    else pending.push("Narrative Mode (SFW/NSFW)");
+
+    if (state.mode || state.heatLevel !== d.heatLevel) established.push(`Heat Level: ${state.heatLevel}/5`);
+    else pending.push("Heat Level");
+
+    if (state.settingType) established.push(`Setting Type: ${state.settingType}`);
+    else pending.push("Setting Type");
+
+    if (state.tone) established.push(`Tone: ${state.tone}`);
+    else pending.push("Tone");
+
+    if (state.concept) established.push(`Narrative Premise: "${state.concept}"`);
+    else pending.push("Narrative Premise / Concept");
+
+    if (state.artStyle !== d.artStyle || state.aestheticMode !== d.aestheticMode) established.push(`Visual Art Style: ${state.artStyle} (${state.aestheticMode} approach)`);
+    else pending.push("Visual Art Style / Aesthetic");
+
+    if (state.palette.join(",") !== d.palette.join(",")) established.push(`HEX Palette: [${state.palette.join(", ")}]`);
+    else pending.push("Colour Palette");
+
+    if (state.groundingRules) established.push(`Reality Protocols: "${state.groundingRules}"`);
+    else pending.push("Reality Protocols / Grounding Rules");
+
+    if (state.title) established.push(`Draft Title: "${state.title}"`);
+    else pending.push("Title");
+
+    // Budget is set up-front on Concept Intake, so always report it.
+    established.push(`Target Instruction-Package Budget: ~${state.tokenBudgetMin / 1000}k–${state.tokenBudgetMax / 1000}k tokens (USCS §21.1 package: Prompt Plot + Guidelines + Reminders + Character AI descriptions; HTML/images excluded)${state.budgetTierMode ? " · BUDGET-TIER MODE ACTIVE (apply USCS §21 free-model optimizations)" : ""}`);
+
+    const syncPrompt = `[SYSTEM ACTION - MANUAL STATE SYNC]
+The creator synced the workspace. We are currently on **Step ${state.step + 1} ("${STEPS[state.step]}")**.
+
+ESTABLISHED parameters (already chosen — treat these as locked):
+${established.map(e => `- ${e}`).join("\n")}
+
+NOT YET DECIDED — these belong to later steps. Do NOT assume, invent, lock, or present them as chosen. Do not list them as decided in any status block:
+${pending.length > 0 ? pending.map(p => `- ${p}`).join("\n") : "- (none — all parameters established)"}
+
+${updatedFields.length > 0 ? `Just modified: ${updatedFields.join(", ")}.` : "No key differences since the last sync."}
+
+Acknowledge the established parameters, leave everything under NOT YET DECIDED untouched, and guide the creator ONLY on the current step ("${STEPS[state.step]}"). Do not jump ahead to future steps.`;
 
     askAssistant(syncPrompt);
   };
@@ -916,7 +958,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
         const { next: capturedDeliverables, captured, cleaned } = captureDeliverables(data.text, state.deliverables);
         // [SYNC_PROCEED] is a control signal (arms the advance-gate), not content.
         const displayText = (cleaned || data.text).replace(/\[SYNC_PROCEED\]/gi, "").trim();
-        const assistantMessage: Message = { role: "assistant", content: displayText };
+        const assistantMessage: Message = { role: "assistant", content: displayText, usage: data.usage };
 
         // Match tag functions for AI-to-UI Sync in real-time
         const updates: any = {};
@@ -1022,20 +1064,8 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
         if (data.truncated) {
           setResponseTruncated(true);
         }
-
-        // Prompt-cache telemetry (Anthropic returns it; other providers cache
-        // server-side without reporting here). Show a brief hit indicator so the
-        // user can see the instruction package is being reused cheaply.
-        const usage = data.usage;
-        if (usage && (usage.cacheRead > 0 || usage.cacheWrite > 0)) {
-          const cachedIn = (usage.input || 0) + (usage.cacheRead || 0) + (usage.cacheWrite || 0);
-          const pct = cachedIn > 0 ? Math.round((usage.cacheRead / cachedIn) * 100) : 0;
-          if (usage.cacheRead > 0) {
-            triggerToast(`⚡ Prompt cache hit — ${pct}% of input reused (cheaper & faster)`, "ai-to-ui");
-          } else {
-            triggerToast(`⚡ Prompt cached — next turns in this step will be cheaper`, "ai-to-ui");
-          }
-        }
+        // (Prompt-cache telemetry rides along on assistantMessage.usage and is
+        // rendered as a per-message chip under the bubble — see CollaboratorChat.)
       } else {
         throw new Error("Empty response from matrix");
       }
@@ -2147,6 +2177,25 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
                   <p className="whitespace-pre-wrap break-words">{m.content}</p>
                 )}
               </div>
+              {m.role === "assistant" && !isError && m.usage && (m.usage.input + m.usage.output + m.usage.cacheRead + m.usage.cacheWrite) > 0 && (() => {
+                const u = m.usage;
+                const totalIn = u.input + u.cacheRead + u.cacheWrite;
+                const cachePct = totalIn > 0 ? Math.round((u.cacheRead / totalIn) * 100) : 0;
+                const fmt = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;
+                return (
+                  <div
+                    title={`Input ${u.input} full-price + ${u.cacheRead} from cache + ${u.cacheWrite} written to cache · Output ${u.output}. Cached input costs ~10% of full price.`}
+                    className="flex items-center gap-2 text-[9px] font-mono text-text-dim px-1"
+                  >
+                    <span>{fmt(totalIn)} in · {fmt(u.output)} out</span>
+                    {u.cacheRead > 0 ? (
+                      <span className="text-accent font-bold">⚡ {cachePct}% cached</span>
+                    ) : u.cacheWrite > 0 ? (
+                      <span className="text-text-muted">⚡ cache primed</span>
+                    ) : null}
+                  </div>
+                );
+              })()}
               {isError && isLast && onRetry && (
                 <button
                   onClick={onRetry}
