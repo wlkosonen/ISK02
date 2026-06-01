@@ -3561,11 +3561,28 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
             </div>
           </div>
 
+          {/* Primary action: co-design with the collaborator */}
+          <button
+            onClick={() => askAssistant(`[WORKSHOP ACTION — DESIGN GROUNDING RULES] Let's build custom World Grounding "Reality Protocols" for THIS story together — not a generic template. Using the established setting, concept, and tone, propose a tailored DO NOT / INSTEAD ruleset in the [PROTOCOL_NN] format that locks this world's physics/logic and stops the deployed AI from drifting into genre clichés. Briefly explain your reasoning, then emit the finished ruleset with a [SET_RULES: ...] tag so it loads into my editor. We'll refine from there.`)}
+            disabled={state.isAssistantLoading}
+            className="w-full p-6 rounded-2xl border border-accent bg-accent/10 hover:bg-accent/15 transition-all text-left group disabled:opacity-50 shadow-[0_0_24px_rgba(20,184,166,0.18)] active:scale-[0.995]"
+          >
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-xl bg-accent/20 border border-accent/40 flex items-center justify-center shrink-0">
+                <Sparkles className="w-6 h-6 text-accent" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-sm font-black uppercase tracking-[0.15em] text-accent flex items-center gap-2">Design your own with the collaborator <ChevronRight className="w-4 h-4 transition-transform group-hover:translate-x-1" /></div>
+                <div className="text-xs text-text-muted mt-1 leading-relaxed">Have Aether_Core propose Reality Protocols tailored to your specific setting &amp; concept, then refine them together in chat. Recommended — the templates below are just examples to explore.</div>
+              </div>
+            </div>
+          </button>
+
           {/* Template Selection Grid */}
           <div className="space-y-5">
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 bg-accent rounded-full" />
-              <h3 className="text-xs font-black uppercase tracking-[0.3em] text-text-main">Select a Protocol Template</h3>
+              <h3 className="text-xs font-black uppercase tracking-[0.3em] text-text-main">Or start from a template <span className="text-text-dim normal-case tracking-normal font-medium">(click to load, then edit or refine with the collaborator)</span></h3>
             </div>
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
