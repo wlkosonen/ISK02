@@ -3750,21 +3750,38 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
               <p className="text-text-muted font-medium text-sm">Visualizing the story core. Calibrate and adjust elements freely.</p>
             </div>
             <div className="flex gap-4">
-              <button 
-                onClick={() => askAssistant("Generate the Plot Analysis for the Manifest Card.")}
-                className="px-6 py-2 bg-accent/20 border border-accent/40 text-accent rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-accent/30 transition-all flex items-center gap-2"
+              <button
+                onClick={() => askAssistant(`[WORKSHOP ACTION — DRAFT PLOT CARD] Draft the COMPLETE user-facing Plot Card for "${state.title || 'this story'}" as self-contained HTML, following the injected USCS Plot Card spec. Use my locked visual identity — background ${state.palette[0]}, text ${state.palette[1]}, primary ${state.palette[2]}, secondary ${state.palette[3]}, accent ${state.palette[4]} — and the ${state.aestheticMode} aesthetic. Include every required field; do not abbreviate. Emit the finished card wrapped in <<<USCS_BLOCK PLOT_CARD>>> … <<<END USCS_BLOCK>>> so it loads into my live preview; keep only a brief note in chat.`)}
+                disabled={state.isAssistantLoading}
+                className="px-6 py-2 bg-accent text-black rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-white transition-all flex items-center gap-2 disabled:opacity-50"
               >
-                <Zap className="w-3 h-3" /> SYNC_PIPELINE
+                <Sparkles className="w-3 h-3" /> {state.deliverables.plotCard ? "Regenerate Card" : "Draft Plot Card"}
               </button>
             </div>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <div className="lg:col-span-2">
-              <div 
+            <div className="lg:col-span-2 space-y-3">
+              {state.deliverables.plotCard ? (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between px-1">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-accent flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5" /> Live Plot Card — captured HTML</span>
+                    <span className="text-[8px] font-mono text-text-dim uppercase tracking-widest">sandboxed · scripts off</span>
+                  </div>
+                  <iframe
+                    title="Plot Card Preview"
+                    sandbox=""
+                    className="w-full h-[520px] rounded-3xl border border-border shadow-2xl"
+                    style={{ backgroundColor: state.palette[0] || "#18181b" }}
+                    srcDoc={state.deliverables.plotCard}
+                  />
+                  <p className="text-[10px] text-text-dim px-1">This is the real HTML the player will see. Tinker the palette on the right and hit <span className="text-text-muted font-bold">Apply Palette &amp; Iterate</span>, or ask for changes in chat — the AI re-emits the card and this preview refreshes.</p>
+                </div>
+              ) : (
+              <div
                 className={`aspect-[16/9] w-full border rounded-3xl shadow-2xl flex items-center justify-center relative overflow-hidden group transition-all duration-700 ${
-                  state.aestheticMode === "Literary" ? "font-serif border-accent/20" : 
-                  state.aestheticMode === "Chaos" ? "skew-x-1 -rotate-1 border-accent/40" : 
+                  state.aestheticMode === "Literary" ? "font-serif border-accent/20" :
+                  state.aestheticMode === "Chaos" ? "skew-x-1 -rotate-1 border-accent/40" :
                   "font-sans border-white/10"
                 }`}
                 style={{ backgroundColor: state.palette[0] || "#18181b" }}
@@ -3813,8 +3830,9 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
                   )}
                 </div>
               </div>
+              )}
             </div>
-            
+
             <div className="space-y-8 bg-card border border-border p-8 rounded-3xl h-fit sticky top-8">
               <div className="flex items-center gap-3 text-accent border-b border-border pb-4 mb-6">
                 <Palette className="w-5 h-5" />
@@ -3860,11 +3878,14 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
               </div>
 
               <div className="pt-6 border-t border-border mt-8">
-                <button 
-                  onClick={() => askAssistant(`I've updated my colors to ${state.palette.join(', ')}. How do these influence the atmospheric weight of the ${state.settingType} setting?`)}
-                  className="w-full py-4 bg-accent/10 border border-accent/20 text-accent rounded-xl text-[10px] font-black uppercase tracking-[0.2em] hover:bg-accent hover:text-black transition-all"
+                <button
+                  onClick={() => askAssistant(state.deliverables.plotCard
+                    ? `[WORKSHOP ACTION — ITERATE PLOT CARD] I've set the palette to background ${state.palette[0]}, text ${state.palette[1]}, primary ${state.palette[2]}, secondary ${state.palette[3]}, accent ${state.palette[4]}. Re-skin the Plot Card HTML to use exactly these colors (keep the content and structure unless I ask otherwise) and re-emit the FULL updated card wrapped in <<<USCS_BLOCK PLOT_CARD>>> … <<<END USCS_BLOCK>>> so my live preview refreshes.`
+                    : `I've set my palette to background ${state.palette[0]}, text ${state.palette[1]}, primary ${state.palette[2]}, secondary ${state.palette[3]}, accent ${state.palette[4]}. When you draft the Plot Card, use exactly these colors.`)}
+                  disabled={state.isAssistantLoading}
+                  className="w-full py-4 bg-accent/10 border border-accent/20 text-accent rounded-xl text-[10px] font-black uppercase tracking-[0.2em] hover:bg-accent hover:text-black transition-all disabled:opacity-50"
                 >
-                  Sync Chromatic Shift
+                  {state.deliverables.plotCard ? "Apply Palette & Iterate Card" : "Lock Palette for the Card"}
                 </button>
               </div>
             </div>
