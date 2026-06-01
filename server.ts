@@ -156,7 +156,7 @@ async function startServer() {
 
       return res.status(400).json({ error: "Model listing is not supported for this provider." });
     } catch (err: any) {
-      console.info(`Could not list ${provider} models:`, err.message || err);
+      console.info("Could not list %s models:", provider, err.message || err);
       return res.status(500).json({ error: err.message || String(err) });
     }
   });
@@ -173,7 +173,7 @@ async function startServer() {
     }
 
     try {
-      console.log(`Checking local Ollama models on: ${target}`);
+      console.log("Checking local Ollama models on: %s", target);
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 4000); // 4 second timeout for local lookup
 
@@ -191,7 +191,7 @@ async function startServer() {
       const models = (data.models || []).map((m: any) => m.name);
       return res.json({ models });
     } catch (err: any) {
-      console.info(`Could not connect to Ollama at ${target} to fetch models:`, err.message || err);
+      console.info("Could not connect to Ollama at %s to fetch models:", target, err.message || err);
       return res.status(500).json({ error: `Connection failed: ${err.message || err}` });
     }
   });
@@ -301,7 +301,7 @@ async function startServer() {
         try {
           for (const candidateModel of modelsToTry) {
             try {
-              console.log(`Attempting Anthropic message generation with model: ${candidateModel}`);
+              console.log("Attempting Anthropic message generation with model: %s", candidateModel);
               response = await anthropic.messages.create({
                 model: candidateModel,
                 max_tokens: settings.maxTokens || 4096,
@@ -309,10 +309,10 @@ async function startServer() {
                 system: fullSystem,
                 messages: messages,
               });
-              console.log(`Success with Anthropic model: ${candidateModel}`);
+              console.log("Success with Anthropic model: %s", candidateModel);
               break; // Successfully got response
             } catch (err: any) {
-              console.warn(`Failed with Anthropic model ${candidateModel}:`, err.message || err);
+              console.warn("Failed with Anthropic model %s:", candidateModel, err.message || err);
               lastError = err;
               continue; // Try the next available candidate model in the sequence
             }
@@ -385,7 +385,7 @@ async function startServer() {
         messages.push({ role: "user", content: prompt });
 
         try {
-          console.log(`Forwarding request to Ollama at ${target} with model ${modelName}`);
+          console.log("Forwarding request to Ollama at %s with model %s", target, modelName);
           const response = await fetch(target, {
             method: "POST",
             redirect: "error", // a private host must not 302-bounce us to a public/metadata target
@@ -441,7 +441,7 @@ async function startServer() {
         messages.push({ role: "user", content: prompt });
 
         try {
-          console.log(`Forwarding request to OpenRouter with model ${modelName}`);
+          console.log("Forwarding request to OpenRouter with model %s", modelName);
           const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
             method: "POST",
             headers: {
