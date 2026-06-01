@@ -794,10 +794,14 @@ Please acknowledge these updated options, explicitly address the modified parame
   const nextStep = () => setState(prev => ({ ...prev, step: Math.min(prev.step + 1, STEPS.length - 1) }));
   const prevStep = () => setState(prev => ({ ...prev, step: Math.max(prev.step - 1, 0) }));
 
-  const askAssistant = async (prompt: string) => {
+  const askAssistant = async (prompt: string, requestHistoryOverride?: Message[]) => {
     // A new turn supersedes any prior "step complete" signal until the AI re-confirms.
     setReadyToAdvance(false);
     setResponseTruncated(false);
+    // The conversation context sent to the model. Normally the current history;
+    // on a retry we pass an explicit (trimmed) history so the failed turn + its
+    // error bubble are NOT replayed to the model.
+    const requestHistory = requestHistoryOverride ?? state.assistantHistory;
 
     const co = state.capOverrides;
     const relaxedCaps = [
@@ -822,7 +826,7 @@ Please acknowledge these updated options, explicitly address the modified parame
           prompt,
           provider: state.aiProvider,
           modelSettings: state.modelSettings,
-          history: state.assistantHistory.map(m => ({
+          history: requestHistory.map(m => ({
             role: m.role === "assistant" ? "model" : "user",
             parts: [{ text: m.content }]
           })),
@@ -1035,6 +1039,26 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
   const continueResponse = () => {
     if (state.isAssistantLoading) return;
     askAssistant("[CONTINUE] Your previous message was cut off at the token limit. Resume EXACTLY where you stopped — do not repeat anything already sent, just continue the text from the exact cut-off point. If you were mid-way through a <<<USCS_BLOCK>>>, finish that block and include its closing <<<END USCS_BLOCK>>> sentinel so it captures correctly.");
+  };
+
+  // Re-send the last user turn after a failed request (e.g. an OpenRouter free
+  // model that hit its rate cap). Strips the failed user message + its error
+  // bubble, then replays the same prompt with a clean history — no need to
+  // fiddle a UI control to force a re-trigger.
+  const retryLast = () => {
+    if (state.isAssistantLoading) return;
+    const h = state.assistantHistory;
+    let lastUserIdx = -1;
+    for (let i = h.length - 1; i >= 0; i--) {
+      if (h[i].role === "user") { lastUserIdx = i; break; }
+    }
+    if (lastUserIdx === -1) return;
+    const prompt = h[lastUserIdx].content;
+    // Everything from the failed user turn onward is discarded (the user msg
+    // gets re-added by askAssistant; the error bubble is dropped).
+    const trimmed = h.slice(0, lastUserIdx);
+    setState(s => ({ ...s, assistantHistory: trimmed }));
+    askAssistant(prompt, trimmed);
   };
 
   // EXPORT: compile the final ISK0 package as a MULTI-PART operation — one model
@@ -1498,6 +1522,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                 onAdvance={nextStep}
                 responseTruncated={responseTruncated}
                 onContinue={continueResponse}
+                onRetry={retryLast}
               />
               {isChatDetached && (
                 <div 
@@ -1984,7 +2009,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
   );
 }
 
-function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDetached, setIsDetached, isSyncNeeded, syncDeskstateToAI, onExport, onSnapshot, isExporting, exportProgress, onManualCapture, readyToAdvance, onAdvance, responseTruncated, onContinue }: {
+function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDetached, setIsDetached, isSyncNeeded, syncDeskstateToAI, onExport, onSnapshot, isExporting, exportProgress, onManualCapture, readyToAdvance, onAdvance, responseTruncated, onContinue, onRetry }: {
   state: StoryState,
   setState: React.Dispatch<React.SetStateAction<StoryState>>,
   askAssistant: (p: string) => Promise<void>,
@@ -2001,7 +2026,8 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
   readyToAdvance?: boolean,
   onAdvance?: () => void,
   responseTruncated?: boolean,
-  onContinue?: () => void
+  onContinue?: () => void,
+  onRetry?: () => void
 }) {
   return (
     <>
@@ -2064,20 +2090,53 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
             </p>
           </div>
         ) : (
-          state.assistantHistory.map((m, i) => (
+          state.assistantHistory.map((m, i) => {
+            const isError = m.content.startsWith("ERROR_SIGNAL");
+            const isLast = i === state.assistantHistory.length - 1;
+            const rawErr = isError ? m.content.replace(/^ERROR_SIGNAL:\s*/, "") : "";
+            // Free OpenRouter models commonly fail with a rate/quota error — give a
+            // tailored hint so the user knows to retry or pick another model.
+            const isRateLimited = /rate|quota|429|free|exhaust|capacity|limit|busy|temporarily/i.test(rawErr);
+            return (
             <div key={i} className={`flex flex-col ${m.role === "assistant" ? "items-start" : "items-end"} gap-2 w-full min-w-0`}>
               <div className={`px-4 py-3 rounded-2xl text-[13px] leading-relaxed max-w-[90%] shadow-lg transition-all break-words ${
-                m.role === "assistant" 
-                  ? "bg-card border border-border text-text-main rounded-tl-sm" 
+                isError
+                  ? "bg-red-500/10 border border-red-500/30 text-red-200 rounded-tl-sm"
+                  : m.role === "assistant"
+                  ? "bg-card border border-border text-text-main rounded-tl-sm"
                   : "bg-accent/10 border border-accent/20 text-accent font-medium rounded-tr-sm"
               }`}>
                 <div className="flex items-center gap-2 mb-2 opacity-50">
-                  <div className={`w-1.5 h-1.5 rounded-full ${m.role === "assistant" ? "bg-accent" : "bg-white"}`} />
-                  <span className="text-[9px] uppercase font-bold tracking-widest">{m.role === "assistant" ? "Aether_Core" : "User_Node"}</span>
+                  <div className={`w-1.5 h-1.5 rounded-full ${isError ? "bg-red-400" : m.role === "assistant" ? "bg-accent" : "bg-white"}`} />
+                  <span className="text-[9px] uppercase font-bold tracking-widest">{isError ? "Link_Error" : m.role === "assistant" ? "Aether_Core" : "User_Node"}</span>
                 </div>
-                <p className="whitespace-pre-wrap break-words">{m.content}</p>
+                {isError ? (
+                  <div className="space-y-1.5">
+                    <p className="font-semibold text-red-300">
+                      {isRateLimited
+                        ? "This model is rate-limited or out of free allocation right now."
+                        : "The request didn't go through."}
+                    </p>
+                    <p className="whitespace-pre-wrap break-words text-red-200/80 text-[11px]">{rawErr}</p>
+                    {isRateLimited && (
+                      <p className="text-red-200/60 text-[11px] leading-relaxed">Free OpenRouter models share a daily cap and can be busy. Hit <span className="font-bold">Retry</span> to try the same model again, or switch to another model in Settings.</p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="whitespace-pre-wrap break-words">{m.content}</p>
+                )}
               </div>
-              {m.role === "assistant" && onManualCapture && !m.content.startsWith("ERROR_SIGNAL") && m.content.trim().length > 40 && (
+              {isError && isLast && onRetry && (
+                <button
+                  onClick={onRetry}
+                  disabled={state.isAssistantLoading}
+                  title="Re-send your last message (keeps the conversation; just retries the request)"
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 rounded-lg text-[10px] font-black uppercase tracking-wider text-red-200 transition-all active:scale-95 disabled:opacity-50"
+                >
+                  <RefreshCw className="w-3 h-3" /> Retry
+                </button>
+              )}
+              {m.role === "assistant" && onManualCapture && !isError && m.content.trim().length > 40 && (
                 <select
                   value=""
                   onChange={(e) => { if (e.target.value) onManualCapture(e.target.value as SingleSlotKey, m.content); }}
@@ -2089,7 +2148,8 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
                 </select>
               )}
             </div>
-          ))
+            );
+          })
         )}
         {state.isAssistantLoading && (
           <div className="flex items-center gap-3 text-accent animate-pulse pb-4">
