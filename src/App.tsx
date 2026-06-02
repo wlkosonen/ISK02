@@ -4120,6 +4120,20 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
             </p>
           </div>
 
+          <button
+            onClick={() => askAssistant(`[WORKSHOP ACTION — ASSEMBLE GUIDELINES] Assemble the complete Prompt Guidelines for the deployed AI now, per the injected USCS §7 spec. OPEN with the one-paragraph emotional mandate (§22.4). Include AT LEAST 15 rules, and weave in: our locked World Grounding rules, the NPC Social Web & Anti-Harem architecture (§7A) for our cast, the Status Dashboard rules (§7B) if we enabled one, and character-specific voice/behaviour/speech rules now that the sheets exist. Respect the §21 cap (≤3000 tokens). Emit the finished block wrapped in <<<USCS_BLOCK GUIDELINES>>> … <<<END USCS_BLOCK>>>; keep only a brief note in chat.`)}
+            disabled={state.isAssistantLoading}
+            className="w-full p-5 rounded-2xl border border-accent bg-accent/10 hover:bg-accent/15 transition-all flex items-center gap-4 shadow-[0_0_24px_rgba(20,184,166,0.18)] disabled:opacity-50 active:scale-[0.995] text-left"
+          >
+            <div className="w-12 h-12 rounded-xl bg-accent/20 border border-accent/40 flex items-center justify-center shrink-0">
+              <Sparkles className="w-6 h-6 text-accent" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-sm font-black uppercase tracking-[0.15em] text-accent">{state.deliverables.guidelines ? "Re-assemble Guidelines" : "Assemble Guidelines with the collaborator"}</div>
+              <div className="text-xs text-text-muted mt-0.5">Builds the full §7 rule set from your grounding rules, social web, dashboard &amp; character sheets — opens with the emotional mandate.</div>
+            </div>
+          </button>
+
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
             {/* Left side: Re-injected Grounding Rules */}
             <div className="space-y-6">
@@ -4226,6 +4240,13 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
               </div>
             </div>
           </div>
+
+          {state.deliverables.guidelines && (
+            <div className="space-y-2">
+              <span className="text-[10px] font-black uppercase tracking-widest text-accent flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5" /> Captured Guidelines — your assembled output</span>
+              <pre className="text-[11px] font-mono leading-relaxed text-text-muted bg-header/20 border border-border rounded-2xl p-5 whitespace-pre-wrap max-h-[420px] overflow-y-auto custom-scrollbar">{state.deliverables.guidelines}</pre>
+            </div>
+          )}
         </div>
       );
     }
@@ -4242,6 +4263,20 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
               Construct high-intensity, prioritized reminders to prevent the Performer LLM from defaulting, breaking formatting, or self-narrating.
             </p>
           </div>
+
+          <button
+            onClick={() => askAssistant(`[WORKSHOP ACTION — ASSEMBLE REMINDERS] Assemble the complete AI Reminders block now, per the injected USCS §8 spec. OPEN with the single emotional-target line (§22.4) — the AI's north star. Produce ~7 high-priority reminders reinforcing the non-negotiables (no self-narration, output format, heat bounds ${state.mode === 'NSFW' ? `${state.heatLevel}/5` : 'SFW'}, and character precision now that the sheets exist). Respect the §21 cap (≤800 tokens). Emit the finished block wrapped in <<<USCS_BLOCK REMINDERS>>> … <<<END USCS_BLOCK>>>; keep only a brief note in chat.`)}
+            disabled={state.isAssistantLoading}
+            className="w-full p-5 rounded-2xl border border-accent bg-accent/10 hover:bg-accent/15 transition-all flex items-center gap-4 shadow-[0_0_24px_rgba(20,184,166,0.18)] disabled:opacity-50 active:scale-[0.995] text-left"
+          >
+            <div className="w-12 h-12 rounded-xl bg-accent/20 border border-accent/40 flex items-center justify-center shrink-0">
+              <Sparkles className="w-6 h-6 text-accent" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-sm font-black uppercase tracking-[0.15em] text-accent">{state.deliverables.reminders ? "Re-assemble Reminders" : "Assemble Reminders with the collaborator"}</div>
+              <div className="text-xs text-text-muted mt-0.5">Builds the ~7-line reinforcement block, opening with the emotional-target north star.</div>
+            </div>
+          </button>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             {/* North Star Target */}
@@ -4300,6 +4335,13 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
               </div>
             </div>
           </div>
+
+          {state.deliverables.reminders && (
+            <div className="space-y-2">
+              <span className="text-[10px] font-black uppercase tracking-widest text-accent flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5" /> Captured Reminders — your assembled output</span>
+              <pre className="text-[11px] font-mono leading-relaxed text-text-muted bg-header/20 border border-border rounded-2xl p-5 whitespace-pre-wrap max-h-[360px] overflow-y-auto custom-scrollbar">{state.deliverables.reminders}</pre>
+            </div>
+          )}
         </div>
       );
     }
