@@ -157,7 +157,7 @@ const STEPS = [
   "Title & Summary",
   "Plot Card",
   "Character Sheets",
-  "Scenarios",
+  "Scenario & System Planning",
   "Prompt Plot",
   "Guidelines",
   "Reminders",
@@ -4316,12 +4316,24 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
               {STEPS[state.step].replace(/ /g, '_')} <span className="text-xs bg-accent/20 text-accent px-2.5 py-1 rounded font-mono uppercase tracking-widest">AETHER_STREAM</span>
             </h2>
             <p className="text-text-muted font-medium text-sm">
-              {state.step === 9 ? "Design scenario triggers (Witness, Eavesdropper, Stumbler) and three-act narrative hooks." :
+              {state.step === 9 ? "A planning step: design the alternate openings, the three-act structure, and any optional systems — each feeds a later step (see below)." :
                state.step === 10 ? "Output performer instructions and inject the verbatim Architect Protocol sequence." :
                state.step === 13 ? "Establish high-impact entry narrative lines and authored openings for all cast segments." :
                "Generate style-compliant visual prompt triggers and portrait schemas for the engine."}
             </p>
           </div>
+
+          {state.step === 9 && (
+            <div className="bg-card border border-border p-6 rounded-3xl space-y-3">
+              <h3 className="text-sm font-black uppercase tracking-[0.2em] text-accent flex items-center gap-2"><HelpCircle className="w-4 h-4" /> What this step makes — and where it lands on ISK0</h3>
+              <p className="text-xs text-text-muted leading-relaxed">This is a <span className="text-text-main font-bold">planning</span> step — nothing here is pasted into ISK0 as one block. Each output feeds a later step:</p>
+              <ul className="text-xs text-text-muted space-y-1.5 leading-relaxed">
+                <li>• <span className="text-text-main font-bold">Scenario variants</span> (2–3 alternate openings) → become your <span className="text-text-main">First Messages</span> (next step), which fill ISK0's <span className="text-accent font-mono text-[11px]">"First Messages (Scenarios)"</span> field.</li>
+                <li>• <span className="text-text-main font-bold">Three-act structure &amp; hooks</span> → become the <span className="text-text-main">phase / pacing structure of your Prompt Plot</span> (used directly, or expanded into modules).</li>
+                <li>• <span className="text-text-main font-bold">Optional modules / timekeeping / status dashboard</span> → folded into your <span className="text-text-main">Prompt Plot &amp; Guidelines</span> (ISK0's main prompt).</li>
+              </ul>
+            </div>
+          )}
 
           {/* Locked-in Decisions Summary Panel */}
           <LockedStepsSummary state={state} />
@@ -4339,23 +4351,23 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
                 SIDELINE_COMMUNICATION_PROTOCOL :: ACTIVE
               </span>
               <h3 className="text-lg font-black uppercase tracking-tight">
-                {state.step === 9 ? "Orchestrate Playable Scenarios" :
+                {state.step === 9 ? "Plan Scenarios, Act Structure & Systems" :
                  state.step === 10 ? "Formulate the Prompt Plot" :
                  state.step === 13 ? "Script Dynamic Authored Openings" :
                  "Calibrate Image Prompts"}
               </h3>
               <p className="text-xs text-text-dim leading-relaxed max-w-2xl">
-                {state.step === 9 ? "Use the Collaborator Chat on your right sideline to direct scenario generation. Prompt the AI: 'Construct scenario openings for Lyra' to get styled hooks immediately." :
+                {state.step === 9 ? "Use the Collaborator Chat to design 2–3 scenario variants (alternate openings), shape the three-act structure, and decide on optional modules / timekeeping / status systems — or hit the button to start." :
                  state.step === 10 ? "Send 'Generate performant instructions for prompt map' in the sideline chat to assemble verbatim continuity protocols." :
-                 state.step === 13 ? "Instruct the AI on the right sideline: 'Write opening monologue lines for Kaelen Shadow' to draft dialogue buffers." :
+                 state.step === 13 ? "Write the actual opening message for each scenario variant — these become ISK0's 'First Messages (Scenarios)' field. Use the chat, or hit the button to draft them." :
                  "Calibrate stable diffusion seeds and descriptions: 'Draft location portrait triggers' on the sideline chat."}
               </p>
             </div>
             <button 
               onClick={() => {
-                const query = state.step === 9 ? "Suggest dynamic scenario hooks matching our locked tone." :
+                const query = state.step === 9 ? "[WORKSHOP ACTION — SCENARIO & SYSTEM PLANNING] Based on our locked premise, propose: (1) 2–3 scenario VARIANTS — distinct alternate openings/entry points that all lead into the same core story (these become our First Messages later); (2) the three-act STRUCTURE with early/mid/late hooks (this becomes the Prompt Plot's pacing/phase structure); and (3) a recommendation on whether the story benefits from optional MODULES, a timekeeping system, or a status dashboard. Capture the finished scenario variants wrapped in <<<USCS_BLOCK SCENARIOS>>> … <<<END USCS_BLOCK>>>." :
                               state.step === 10 ? "Structure the prompt plot instructions and include Architect Protocols." :
-                              state.step === 13 ? "Draft opening first message templates based on our premises." :
+                              state.step === 13 ? "Draft the opening First Message for each scenario variant we defined — one authored opening per variant, per the USCS First Message rules. Capture each finished message." :
                               "Build detailed stable diffusion image prompts for our main cast.";
                 askAssistant(query);
               }}
