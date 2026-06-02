@@ -2636,8 +2636,6 @@ function HelpModal({ onClose }: { onClose: () => void }) {
 }
 
 function StatusMonitor({ state }: { state: StoryState }) {
-  const [isOpen, setIsOpen] = React.useState(false);
-
   // Counts ONLY the captured §21.1 package blocks (Prompt Plot + Guidelines +
   // Reminders + Player Persona + each character's AI description) — not workshop
   // chatter or non-counting HTML/image blocks. ~4 chars/token estimate.
@@ -2649,175 +2647,73 @@ function StatusMonitor({ state }: { state: StoryState }) {
   const barColor = overBudget ? "#f43f5e" : inRange ? "#14b8a6" : "#64748b";
 
   return (
-    <div className="border border-border bg-[#131316]/95 rounded-2xl overflow-hidden transition-all duration-300 shadow-xl">
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="w-full px-4 py-3 bg-white/5 hover:bg-white/10 flex items-center justify-between text-left border-b border-border transition-colors cursor-pointer"
-      >
+    <div className="border border-border bg-[#131316]/95 rounded-2xl overflow-hidden shadow-xl">
+      {/* Static header + live package-budget number */}
+      <div className="px-4 py-2.5 flex items-center justify-between border-b border-border bg-white/5">
         <div className="flex items-center gap-2">
-          <Zap className={`w-3.5 h-3.5 text-accent ${isOpen ? 'animate-pulse' : ''}`} />
-          <span className="text-[10px] font-black uppercase tracking-wider text-accent">Telemetry_Feed</span>
+          <Zap className="w-3.5 h-3.5 text-accent" />
+          <span className="text-[10px] font-black uppercase tracking-wider text-accent">Token Budget</span>
         </div>
-        <div className="flex items-center gap-1.5 font-mono text-[8px] font-bold">
-          <span className="inline-block w-1 h-1 rounded-full bg-[#10b981] animate-pulse" />
-          <span className="text-text-dim uppercase tracking-widest">{isOpen ? "CLOSE" : "OPEN"}</span>
-        </div>
-      </button>
-
-      {/* Always-visible Token Budget gauge — counts the captured §21 package blocks */}
-      <div className="px-4 py-2.5 border-b border-border bg-bg/40" title="Captured package size (Prompt Plot + Guidelines + Reminders + Player Persona + character AI descriptions) vs your target. ~4 chars/token estimate. HTML cards & image prompts excluded, per §21.1.">
-        <div className="flex items-center justify-between text-[8px] font-mono uppercase tracking-widest mb-1.5">
-          <span className="text-text-dim flex items-center gap-1">
-            <Cpu className="w-2.5 h-2.5" /> Package Budget{state.budgetTierMode && <span className="text-[#fbbf24] font-bold">· §21</span>}
-          </span>
-          <span className="font-black" style={{ color: barColor }}>
-            ≈{fmtK(estTokens)} <span className="text-text-dim font-normal">/ {fmtK(state.tokenBudgetMin)}–{fmtK(state.tokenBudgetMax)}</span>
-          </span>
-        </div>
-        <div className="h-1 w-full bg-border rounded-full overflow-hidden">
-          <div className="h-full transition-all duration-700 ease-out" style={{ width: `${pctOfMax}%`, backgroundColor: barColor }} />
-        </div>
+        <span className="font-mono text-[11px] font-black" style={{ color: barColor }}>
+          ≈{fmtK(estTokens)} <span className="text-text-muted font-normal">/ {fmtK(state.tokenBudgetMin)}–{fmtK(state.tokenBudgetMax)}</span>
+        </span>
       </div>
 
-      {isOpen ? (
-        <div className="p-4 space-y-4 max-h-[320px] overflow-y-auto custom-scrollbar text-[10px] leading-relaxed">
-          {/* Core Tuning */}
-          <section className="space-y-2">
-            <h3 className="text-[8px] uppercase font-black tracking-[0.2em] text-label flex items-center gap-1.5">
-              <div className="w-1.5 h-[1px] bg-accent" /> Core_Tuning
-            </h3>
-            <div className="grid grid-cols-2 gap-2 text-[10px]">
-              <div className="p-2 rounded border border-border bg-bg/50 flex flex-col">
-                <span className="text-text-dim uppercase tracking-widest text-[7px] mb-0.5">Mode</span>
-                <span className={`font-black uppercase ${state.mode === 'NSFW' ? 'text-red-400' : 'text-accent'}`}>{state.mode || "PENDING"}</span>
-              </div>
-              {state.mode === 'NSFW' && (
-                <div className="p-2 rounded border border-border bg-bg/50 flex flex-col">
-                  <span className="text-text-dim uppercase tracking-widest text-[7px] mb-0.5">Heat_Level</span>
-                  <span className="font-mono font-black text-red-500">{state.heatLevel}/5</span>
-                </div>
-              )}
-              <div className="p-2 rounded border border-border bg-bg/50 col-span-2 flex flex-col">
-                <span className="text-text-dim uppercase tracking-widest text-[7px] mb-0.5">Aesthetic_Style</span>
-                <span className="font-bold text-text-main truncate">{state.artStyle}</span>
-              </div>
-            </div>
-          </section>
-
-          {/* Narrative Anchor */}
-          <section className="space-y-2">
-            <h3 className="text-[8px] uppercase font-black tracking-[0.2em] text-label flex items-center gap-1.5">
-              <div className="w-1.5 h-[1px] bg-accent" /> Narrative_Anchor
-            </h3>
-            <div className="p-3 rounded-xl border border-border bg-bg text-[10px] space-y-2 leading-relaxed">
-              <div>
-                <span className="text-[7px] font-black uppercase text-accent/60 block mb-0.5">Tone</span>
-                <p className="text-text-main font-semibold italic">"{state.tone || 'Not Defined'}"</p>
-              </div>
-              <div>
-                <span className="text-[7px] font-black uppercase text-accent/60 block mb-0.5">Concept Summary</span>
-                <p className="text-text-dim line-clamp-3 leading-normal">{state.concept || 'Awaiting ingest...'}</p>
-              </div>
-            </div>
-          </section>
-
-          {/* Palette Registry */}
-          <section className="space-y-2">
-            <h3 className="text-[8px] uppercase font-black tracking-[0.2em] text-label flex items-center gap-1.5">
-              <div className="w-1.5 h-[1px] bg-accent" /> Chromatic_Registry
-            </h3>
-            <div className="flex gap-1 h-4">
-              {state.palette.map((c, i) => (
-                <div key={i} className="flex-1 rounded border border-white/5" style={{ backgroundColor: c }} title={c} />
-              ))}
-            </div>
-          </section>
-
-          {/* Package Contents */}
-          <section className="space-y-2">
-            <h3 className="text-[8px] uppercase font-black tracking-[0.2em] text-label flex items-center gap-1.5">
-              <div className="w-1.5 h-[1px] bg-accent" /> Package_Contents
-            </h3>
-            <div className="rounded-xl border border-border bg-bg/50 divide-y divide-border/40">
-              {([
-                ["Title & Summary", state.deliverables.titleSummary, false, null],
-                ["Plot Card", state.deliverables.plotCard, false, null],
-                ["Prompt Plot", state.deliverables.promptPlot, true, state.capOverrides.promptPlot ? null : 2500],
-                ["Guidelines", state.deliverables.guidelines, true, state.capOverrides.guidelines ? null : 3000],
-                ["Reminders", state.deliverables.reminders, true, state.capOverrides.reminders ? null : 800],
-                ["Player Persona", state.deliverables.playerPersona, true, 500],
-                ["Scenarios", state.deliverables.scenarios, false, null],
-                ["Image Prompts", state.deliverables.imagePrompts, false, null],
-              ] as [string, string, boolean, number | null][]).map(([label, content, counts, cap]) => {
-                const t = counts && content ? estimateTokens(content) : 0;
-                const over = !!(cap && t > cap);
-                return (
-                <div key={label} className="flex items-center justify-between px-2.5 py-1.5 text-[9px]">
-                  <span className="flex items-center gap-1.5">
-                    <span className={`inline-block w-1.5 h-1.5 rounded-full ${content ? "bg-[#10b981]" : "bg-text-dim/30"}`} />
-                    <span className={content ? "text-text-main" : "text-text-dim"}>{label}</span>
-                    {!counts && <span className="text-[7px] text-text-dim/60 uppercase tracking-wide">(no count)</span>}
-                    {over && <span className="text-[7px] text-[#f43f5e] font-black uppercase tracking-wide">over §21 cap</span>}
-                  </span>
-                  <span className={`font-mono ${over ? "text-[#f43f5e] font-bold" : "text-text-dim"}`}>
-                    {content ? (counts ? `${fmtK(t)}t${cap ? ` / ${fmtK(cap)}` : ""}` : "✓") : "—"}
-                  </span>
-                </div>
-                );
-              })}
-              {state.deliverables.characters.map((c) => {
-                const charCap = state.capOverrides.characters ? null : 1500;
-                const t = c.desc ? estimateTokens(c.desc) : 0;
-                const over = !!(charCap && t > charCap);
-                return (
-                <div key={c.name} className="flex items-center justify-between px-2.5 py-1.5 text-[9px]">
-                  <span className="flex items-center gap-1.5 min-w-0">
-                    <span className={`inline-block w-1.5 h-1.5 rounded-full ${c.desc ? "bg-[#10b981]" : "bg-text-dim/30"}`} />
-                    <span className="text-text-main truncate">{c.name}</span>
-                    <span className="text-[7px] text-text-dim/60 uppercase tracking-wide">{c.card ? "card+desc" : c.desc ? "desc" : "card"}</span>
-                    {over && <span className="text-[7px] text-[#f43f5e] font-black uppercase tracking-wide shrink-0">over §21 cap</span>}
-                  </span>
-                  <span className={`font-mono shrink-0 ${over ? "text-[#f43f5e] font-bold" : "text-text-dim"}`}>{c.desc ? `${fmtK(t)}t${charCap ? ` / ${fmtK(charCap)}` : ""}` : "✓"}</span>
-                </div>
-                );
-              })}
-            </div>
-          </section>
-
-          {/* Pipeline Progress */}
-          <section className="space-y-2">
-            <h3 className="text-[8px] uppercase font-black tracking-[0.2em] text-label flex items-center gap-1.5">
-              <div className="w-1.5 h-[1px] bg-accent" /> Pipeline_Progress
-            </h3>
-            <div className="space-y-2">
-              <div className="h-1 w-full bg-border rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-accent transition-all duration-1000 ease-out shadow-[0_0_10px_rgba(20,184,166,0.5)]" 
-                  style={{ width: `${(state.step / (STEPS.length - 1)) * 100}%` }}
-                />
-              </div>
-              <div className="flex justify-between text-[7px] font-mono text-label uppercase tracking-widest font-black">
-                <span>Ingest</span>
-                <span>Assembly</span>
-              </div>
-            </div>
-          </section>
+      {/* Budget gauge */}
+      <div className="px-4 pt-3" title="§21.1 package only (Prompt Plot + Guidelines + Reminders + Player Persona + character AI descriptions) vs your target. ~4 chars/token estimate.">
+        <div className="h-1.5 w-full bg-border rounded-full overflow-hidden">
+          <div className="h-full transition-all duration-700 ease-out" style={{ width: `${pctOfMax}%`, backgroundColor: barColor }} />
         </div>
-      ) : (
-        /* Collapsed minimal row */
-        <div className="px-4 py-3 flex justify-between items-center text-[9px] font-mono text-text-dim bg-white/[0.01]">
-          <div className="flex items-center gap-1">
-            <span className="text-accent/60 font-bold">MODE:</span>
-            <span className={`font-black uppercase ${state.mode === 'NSFW' ? 'text-red-400' : 'text-accent'}`}>{state.mode || "PENDING"}</span>
-          </div>
-          <div className="flex items-center gap-1 overflow-hidden">
-            <span className="text-accent/60 font-bold">STYLE:</span>
-            <span className="text-text-main font-semibold truncate max-w-[80px]" title={state.artStyle}>
-              {state.artStyle.replace(" Style", "").replace("/VN", "")}
-            </span>
-          </div>
+        <p className="text-[8px] font-mono text-text-muted uppercase tracking-widest mt-1.5">§21.1 package · HTML &amp; images excluded{state.budgetTierMode && <span className="text-[#fbbf24] font-bold"> · §21 tier</span>}</p>
+      </div>
+
+      {/* Per-block breakdown — the panel's one job: token tracking */}
+      <div className="p-3 pt-2.5">
+        <div className="divide-y divide-border/40 max-h-[340px] overflow-y-auto custom-scrollbar pr-1">
+          {([
+            ["Title & Summary", state.deliverables.titleSummary, false, null],
+            ["Plot Card", state.deliverables.plotCard, false, null],
+            ["Prompt Plot", state.deliverables.promptPlot, true, state.capOverrides.promptPlot ? null : 2500],
+            ["Guidelines", state.deliverables.guidelines, true, state.capOverrides.guidelines ? null : 3000],
+            ["Reminders", state.deliverables.reminders, true, state.capOverrides.reminders ? null : 800],
+            ["Player Persona", state.deliverables.playerPersona, true, 500],
+            ["Scenarios", state.deliverables.scenarios, false, null],
+            ["Image Prompts", state.deliverables.imagePrompts, false, null],
+          ] as [string, string, boolean, number | null][]).map(([label, content, counts, cap]) => {
+            const t = counts && content ? estimateTokens(content) : 0;
+            const over = !!(cap && t > cap);
+            return (
+            <div key={label} className="flex items-center justify-between py-1.5 text-[10px]">
+              <span className="flex items-center gap-2 min-w-0">
+                <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${content ? "bg-[#10b981]" : "bg-text-dim/40"}`} />
+                <span className={content ? "text-text-main" : "text-text-muted"}>{label}</span>
+                {over && <span className="text-[8px] text-[#f43f5e] font-black uppercase tracking-wide shrink-0">over cap</span>}
+              </span>
+              <span className={`font-mono shrink-0 ${over ? "text-[#f43f5e] font-bold" : content && counts ? "text-text-main" : "text-text-dim"}`}>
+                {content ? (counts ? `${fmtK(t)}t${cap ? ` / ${fmtK(cap)}` : ""}` : "✓") : "—"}
+              </span>
+            </div>
+            );
+          })}
+          {state.deliverables.characters.map((c) => {
+            const charCap = state.capOverrides.characters ? null : 1500;
+            const t = c.desc ? estimateTokens(c.desc) : 0;
+            const over = !!(charCap && t > charCap);
+            return (
+            <div key={c.name} className="flex items-center justify-between py-1.5 text-[10px]">
+              <span className="flex items-center gap-2 min-w-0">
+                <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${c.desc ? "bg-[#10b981]" : "bg-text-dim/40"}`} />
+                <span className="text-text-main truncate">{c.name}</span>
+                <span className="text-[8px] text-text-muted uppercase tracking-wide shrink-0">{c.card ? "card+desc" : c.desc ? "desc" : "card"}</span>
+                {over && <span className="text-[8px] text-[#f43f5e] font-black uppercase tracking-wide shrink-0">over cap</span>}
+              </span>
+              <span className={`font-mono shrink-0 ${over ? "text-[#f43f5e] font-bold" : c.desc ? "text-text-main" : "text-text-dim"}`}>{c.desc ? `${fmtK(t)}t${charCap ? ` / ${fmtK(charCap)}` : ""}` : "✓"}</span>
+            </div>
+            );
+          })}
         </div>
-      )}
+        <p className="text-[8px] font-mono text-text-dim uppercase tracking-widest mt-2.5">●&nbsp;captured · ○&nbsp;pending · "—"&nbsp;not&nbsp;made · "✓"&nbsp;not&nbsp;counted</p>
+      </div>
     </div>
   );
 }
