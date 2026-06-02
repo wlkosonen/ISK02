@@ -133,7 +133,6 @@ interface StoryState {
   // while the 20k total platform ceiling still holds.
   capOverrides: { promptPlot: boolean; guidelines: boolean; reminders: boolean; characters: boolean };
   deliverables: Deliverables;
-  characters: any[];
   assistantHistory: Message[];
   isAssistantLoading: boolean;
   aiProvider: "gemini" | "anthropic" | "ollama" | "openrouter";
@@ -293,7 +292,6 @@ const DEFAULT_STATE: StoryState = {
   budgetTierMode: false,
   capOverrides: { promptPlot: false, guidelines: false, reminders: false, characters: false },
   deliverables: EMPTY_DELIVERABLES,
-  characters: [],
   assistantHistory: [],
   isAssistantLoading: false,
   aiProvider: "gemini",
@@ -2957,31 +2955,24 @@ function LockedStepsSummary({ state }: { state: StoryState }) {
             <div className="space-y-1">
               <span className="text-[8px] font-mono font-black text-text-dim uppercase tracking-widest block">Persona_Registry</span>
               <div className="text-xs text-text-main font-bold mt-1 max-h-[48px] overflow-hidden">
-                {state.characters && state.characters.length > 0 ? (
+                {state.deliverables.characters.length > 0 ? (
                   <div className="flex flex-wrap gap-1">
-                    {state.characters.slice(0, 3).map((char, idx) => (
+                    {state.deliverables.characters.slice(0, 3).map((char, idx) => (
                       <span key={idx} className="text-[7px] font-mono bg-white/5 px-1 py-0.5 rounded border border-white/5 uppercase truncate max-w-[70px]">
-                        {char.name || char}
+                        {char.name}
                       </span>
                     ))}
-                    {state.characters.length > 3 && (
-                      <span className="text-[7px] font-mono bg-white/5 px-1 py-0.5 rounded text-accent">+{state.characters.length - 3}</span>
+                    {state.deliverables.characters.length > 3 && (
+                      <span className="text-[7px] font-mono bg-white/5 px-1 py-0.5 rounded text-accent">+{state.deliverables.characters.length - 3}</span>
                     )}
                   </div>
                 ) : (
-                  <div className="flex gap-1.5 pt-0.5">
-                    <span className="text-[7px] font-mono bg-white/5 px-1.5 py-0.5 rounded border border-white/5 uppercase text-accent/80">
-                      LYRA_VAHN
-                    </span>
-                    <span className="text-[7px] font-mono bg-white/5 px-1.5 py-0.5 rounded border border-white/5 uppercase text-text-dim">
-                      KAELEN_SHADOW
-                    </span>
-                  </div>
+                  <span className="text-[8px] font-mono text-text-dim uppercase tracking-widest pt-0.5 block">No cast registered yet</span>
                 )}
               </div>
             </div>
             <span className="text-[7px] font-mono font-semibold text-text-muted mt-2 tracking-tight block">
-              Total index Cast: {state.characters?.length || 2} registered
+              Total index Cast: {state.deliverables.characters.length} registered
             </span>
           </div>
         </div>
@@ -3980,91 +3971,84 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
     case 8: // Character Sheets
       return (
         <div className="space-y-10">
-          <div className="flex justify-between items-end">
-            <div className="space-y-4">
-              <h2 className="text-4xl font-black uppercase tracking-tighter">Persona_Matrices</h2>
-              <p className="text-text-muted font-medium text-sm">Define the core cast through the technical 6.1 framework.</p>
-            </div>
+          <div className="space-y-3 text-center">
+            <h2 className="text-4xl font-black uppercase tracking-tighter">Persona_Matrices</h2>
+            <p className="text-text-muted font-medium text-sm max-w-xl mx-auto">Build the cast one character at a time with the collaborator. Each finished sheet — its HTML card and AI prompt description — appears here as it's captured.</p>
           </div>
 
-          <div className="grid grid-cols-1 gap-8">
+          {/* Primary action: construct the next character — top & centre */}
+          <div className="flex flex-col items-center text-center gap-4 p-8 bg-header/20 border border-border border-dashed rounded-3xl">
+            <div className="w-14 h-14 bg-accent/10 rounded-full flex items-center justify-center">
+              <Users className="w-7 h-7 text-accent opacity-50" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-sm font-black uppercase tracking-[0.3em]">Construct New Persona</h3>
+              <p className="text-xs text-text-dim max-w-sm">Have the collaborator build the next character's full sheet — Part A HTML card + Part B AI prompt description. Build and confirm one fully before the next.</p>
+            </div>
+            <button
+              onClick={() => askAssistant(`[WORKSHOP ACTION — BUILD NEXT CHARACTER] Let's build the next character's FULL sheet together, following the injected USCS Character Sheet spec. Propose the character (or continue from the cast we've discussed), then produce BOTH parts: the Part A user-facing HTML card wrapped in <<<USCS_BLOCK CHAR_CARD: Name>>> … <<<END USCS_BLOCK>>> using my locked palette and ${state.aestheticMode} aesthetic, and the Part B AI prompt description wrapped in <<<USCS_BLOCK CHAR_DESC: Name>>> … <<<END USCS_BLOCK>>> (respect §21 caps: ≤1500 primary / ≤800 supporting). Build and confirm ONE character fully before the next.`)}
+              disabled={state.isAssistantLoading}
+              className="px-6 py-2 bg-accent/20 border border-accent/40 text-accent rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-accent/30 transition-all font-mono disabled:opacity-50"
+            >
+              INIT_PERSONA_SYNC
+            </button>
+          </div>
+
+          {/* Captured cast — real sheets built in the workshop */}
+          {state.deliverables.characters.length === 0 ? (
+            <div className="flex items-center justify-center gap-3 p-6 rounded-2xl border border-border/60 bg-white/[0.01] text-center">
+              <span className="text-[10px] font-mono uppercase tracking-widest text-text-dim">No characters captured yet — finished sheets from the collaborator will appear here.</span>
+            </div>
+          ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {[
-                { 
-                  name: "LYRA_VAHN", 
-                  role: "PROTAGONIST", 
-                  origin: "Prime_Earth", 
-                  status: "Calibrating",
-                  stats: { resonance: "88.4%", stability: "High", thermal: "0.2" },
-                  tags: ["Technomancer", "Outcast", "Legacy"]
-                },
-                { 
-                  name: "KAELEN_SHADOW", 
-                  role: "ANTAGONIST", 
-                  origin: "Aetheria", 
-                  status: "Stable",
-                  stats: { resonance: "94.1%", stability: "Fractured", thermal: "0.8" },
-                  tags: ["Void-Touched", "Nobility", "Zealot"]
-                }
-              ].map((char, i) => (
-                <div key={i} className="bg-card border border-border p-8 rounded-3xl relative overflow-hidden group hover:border-accent/40 transition-all">
-                  <div className="absolute top-0 left-0 w-1.5 h-full bg-accent opacity-40 group-hover:opacity-100 transition-opacity" />
-                  
-                  <div className="flex justify-between items-start mb-8">
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                         <div className="w-1.5 h-1.5 bg-accent rounded-full shadow-[0_0_8px_rgba(20,184,166,0.5)]" />
-                         <span className="text-[9px] font-black uppercase text-accent tracking-[0.3em]">{char.role}</span>
+              {state.deliverables.characters.map((char, i) => (
+                <div key={i} className="bg-card border border-border rounded-3xl relative overflow-hidden group">
+                  <div className="absolute top-0 left-0 w-1.5 h-full bg-accent opacity-40 group-hover:opacity-100 transition-opacity z-10" />
+                  <div className="p-6 space-y-4">
+                    <div className="flex justify-between items-start gap-3">
+                      <h4 className="text-2xl font-black tracking-tighter uppercase min-w-0 truncate">{char.name}</h4>
+                      <div className="flex gap-1.5 shrink-0">
+                        <span className={`text-[8px] font-mono font-bold uppercase tracking-widest px-2 py-1 rounded border ${char.card ? "bg-accent/15 text-accent border-accent/30" : "bg-header text-text-dim border-border"}`}>Card {char.card ? "✓" : "—"}</span>
+                        <span className={`text-[8px] font-mono font-bold uppercase tracking-widest px-2 py-1 rounded border ${char.desc ? "bg-accent/15 text-accent border-accent/30" : "bg-header text-text-dim border-border"}`}>Desc {char.desc ? "✓" : "—"}</span>
                       </div>
-                      <h4 className="text-2xl font-black tracking-tighter uppercase">{char.name}</h4>
                     </div>
-                    <div className="px-3 py-1.5 bg-header border border-border rounded-lg flex items-center gap-3">
-                      <div className={`w-1.5 h-1.5 rounded-full ${char.status === 'Calibrating' ? 'bg-yellow-400 animate-pulse' : 'bg-accent'}`} />
-                      <span className="text-[8px] font-mono font-bold uppercase tracking-widest">{char.status}</span>
-                    </div>
-                  </div>
 
-                  <div className="grid grid-cols-3 gap-4 mb-8">
-                     {Object.entries(char.stats).map(([key, val]) => (
-                       <div key={key} className="space-y-1 bg-header/40 p-3 rounded-xl border border-border/50">
-                          <div className="text-[7px] font-black uppercase tracking-widest text-text-dim">{key}</div>
-                          <div className="text-[10px] font-mono font-bold text-text-main">{val}</div>
-                       </div>
-                     ))}
-                  </div>
+                    {/* Part A — real HTML card, sandboxed */}
+                    {char.card ? (
+                      <iframe
+                        title={`Character Card — ${char.name}`}
+                        sandbox=""
+                        className="w-full h-[380px] rounded-2xl border border-border"
+                        style={{ backgroundColor: state.palette[0] || "#18181b" }}
+                        srcDoc={char.card}
+                      />
+                    ) : (
+                      <div className="h-[110px] rounded-2xl border border-dashed border-border flex items-center justify-center text-[9px] font-mono uppercase tracking-widest text-text-dim">No HTML card captured yet</div>
+                    )}
 
-                  <div className="flex flex-wrap gap-2">
-                     {char.tags.map(tag => (
-                       <span key={tag} className="px-2.5 py-1 bg-white/5 border border-white/5 rounded-full text-[8px] font-bold uppercase tracking-widest text-text-muted">
-                         {tag}
-                       </span>
-                     ))}
-                  </div>
+                    {/* Part B — AI prompt description, expandable */}
+                    {char.desc && (
+                      <details className="group/desc rounded-xl border border-border bg-header/20">
+                        <summary className="cursor-pointer list-none flex items-center gap-2 p-3 text-[10px] font-black uppercase tracking-widest text-text-muted">
+                          <ChevronRight className="w-3.5 h-3.5 transition-transform group-open/desc:rotate-90" /> AI Prompt Description (Part B)
+                        </summary>
+                        <pre className="px-3 pb-3 text-[11px] font-mono leading-relaxed text-text-muted whitespace-pre-wrap max-h-56 overflow-y-auto custom-scrollbar">{char.desc}</pre>
+                      </details>
+                    )}
 
-                  <div className="mt-8 pt-6 border-t border-border/50 flex justify-between items-center opacity-0 group-hover:opacity-100 transition-opacity">
-                     <span className="text-[8px] font-mono text-text-dim">UID::persona_${char.name.toLowerCase()}</span>
-                     <button className="text-[8px] font-black uppercase tracking-widest text-accent hover:underline">Edit_Profile</button>
+                    {/* Refine this character (replaces the dead Edit_Profile) */}
+                    <button
+                      onClick={() => askAssistant(`[WORKSHOP ACTION — REFINE CHARACTER] Let's refine "${char.name}". Briefly note what's already in their sheet and ask what I'd like to change (or suggest improvements). When we update, re-emit the affected block — <<<USCS_BLOCK CHAR_CARD: ${char.name}>>> for the HTML card and/or <<<USCS_BLOCK CHAR_DESC: ${char.name}>>> for the AI prompt description — so the captured sheet here updates.`)}
+                      disabled={state.isAssistantLoading}
+                      className="w-full py-2.5 rounded-lg border border-border text-[9px] font-black uppercase tracking-widest text-text-muted hover:border-accent hover:text-accent hover:bg-accent/10 transition-all disabled:opacity-50"
+                    >
+                      Refine "{char.name}" in chat
+                    </button>
                   </div>
                 </div>
               ))}
             </div>
-
-            <div className="p-10 bg-header/20 border border-border rounded-3xl border-dashed flex flex-col items-center justify-center text-center space-y-4">
-              <div className="w-16 h-16 bg-accent/10 rounded-full flex items-center justify-center">
-                <Users className="w-8 h-8 text-accent opacity-40" />
-              </div>
-              <div className="space-y-2">
-                <h3 className="text-sm font-black uppercase tracking-[0.3em]">Construct_New_Persona</h3>
-                <p className="text-xs text-text-dim max-w-sm">Use the pipeline chat on the sideline to define attributes, backstory, and world-resonance for your characters.</p>
-              </div>
-              <button 
-                onClick={() => askAssistant("Let's construct a new character sheet persona.")}
-                className="px-6 py-2 bg-accent/20 border border-accent/40 text-accent rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-accent/30 transition-all font-mono"
-              >
-                INIT_PERSONA_SYNC
-              </button>
-            </div>
-          </div>
+          )}
         </div>
       );
 
@@ -4365,7 +4349,7 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
       const toneCompliant = !!state.tone && !!state.settingType;
       const aestheticCompliant = !!state.artStyle && state.palette.length > 0;
       const groundingCompliant = state.groundingRules.length > 10;
-      const personaCompliant = state.characters.length > 0;
+      const personaCompliant = state.deliverables.characters.length > 0;
       const creativeCompliant = !!state.title && state.concept.length > 10;
       const chatCompliant = state.assistantHistory.length > 1;
 
