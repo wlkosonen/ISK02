@@ -52,6 +52,23 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   usage?: MessageUsage; // present on assistant turns when the provider reports it (Anthropic)
+  streaming?: boolean;  // transient: true while tokens are still arriving for this turn
+}
+
+// Cleans the live-streaming buffer for display: hides capture sentinels and
+// UI-sync tags so the user sees readable prose instead of raw protocol noise as
+// it streams. The FULL raw text is still processed (captured, parsed) on
+// completion — this only affects the in-flight view.
+function cleanStreamingText(raw: string): string {
+  let t = raw;
+  // Completed capture blocks -> compact note
+  t = t.replace(/<<<USCS_BLOCK\s+([A-Z_]+)(?::[^>\n]*)?>>>[\s\S]*?<<<END USCS_BLOCK>>>/g, (_m, type) => `\n〔✓ ${type} captured〕\n`);
+  // In-progress (still streaming, unclosed) capture block at the tail -> spinner note
+  t = t.replace(/<<<USCS_BLOCK\s+([A-Z_]+)(?::[^>\n]*)?>>>[\s\S]*$/g, (_m, type) => `\n〔⏳ generating ${type}…〕\n`);
+  // Strip control + completed SET_* tags
+  t = t.replace(/\[SYNC_PROCEED\]/gi, "");
+  t = t.replace(/\[SET_[A-Z_]+:[^\]]*\]/gi, "");
+  return t.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 // Captured story-package deliverables. The five "counting" fields (promptPlot,
@@ -886,6 +903,7 @@ Acknowledge the established parameters, leave everything under NOT YET DECIDED u
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           prompt,
+          stream: true,
           provider: state.aiProvider,
           modelSettings: state.modelSettings,
           history: requestHistory.map(m => ({
@@ -976,106 +994,70 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
         })
       });
 
-      const data = await response.json();
-      
+      // Pre-stream errors are returned as JSON (status != 2xx); check before
+      // touching the body as a stream.
       if (!response.ok) {
-        throw new Error(data.error || "Communication link severed");
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || "Communication link severed");
       }
-      
-      if (data.text) {
-        // Capture any finalized deliverable blocks into the structured package
-        // (and strip the sentinel markers from what we show in the chat).
-        const { next: capturedDeliverables, captured, cleaned } = captureDeliverables(data.text, state.deliverables);
-        // [SYNC_PROCEED] is a control signal (arms the advance-gate), not content.
-        const displayText = (cleaned || data.text).replace(/\[SYNC_PROCEED\]/gi, "").trim();
-        const assistantMessage: Message = { role: "assistant", content: displayText, usage: data.usage };
 
-        // Match tag functions for AI-to-UI Sync in real-time
+      // Runs the SAME capture/tag/usage processing as before, on the COMPLETE
+      // text — whether it arrived streamed (replaceLast=true, swaps the live
+      // placeholder) or as one legacy JSON blob (replaceLast=false, appends).
+      const finalize = (fullText: string, truncated: boolean, usage: any, replaceLast: boolean) => {
+        if (!fullText || !fullText.trim()) {
+          if (replaceLast) {
+            setState(s => {
+              const h = [...s.assistantHistory];
+              if (h.length && h[h.length - 1].role === "assistant" && h[h.length - 1].streaming) h.pop();
+              return { ...s, isAssistantLoading: false, assistantHistory: [...h, { role: "assistant", content: "ERROR_SIGNAL: Empty response from matrix" }] };
+            });
+            return;
+          }
+          throw new Error("Empty response from matrix");
+        }
+
+        const { next: capturedDeliverables, captured, cleaned } = captureDeliverables(fullText, state.deliverables);
+        const displayText = (cleaned || fullText).replace(/\[SYNC_PROCEED\]/gi, "").trim();
+        const assistantMessage: Message = { role: "assistant", content: displayText, usage };
+
         const updates: any = {};
         const toastMsgs: string[] = [];
         if (captured.length > 0) updates.deliverables = capturedDeliverables;
 
-        const modeMatch = data.text.match(/\[SET_MODE:\s*(SFW|NSFW)\]/i);
-        if (modeMatch) {
-          updates.mode = modeMatch[1].toUpperCase() as Mode;
-          toastMsgs.push(`Mode: ${updates.mode}`);
-        }
-
-        const heatMatch = data.text.match(/\[SET_HEAT:\s*([1-5])\]/i);
-        if (heatMatch) {
-          updates.heatLevel = parseInt(heatMatch[1], 10) as HeatLevel;
-          toastMsgs.push(`Heat: ${updates.heatLevel}/5`);
-        }
-
-        const titleMatch = data.text.match(/\[SET_TITLE:\s*([^\]\n]+)\]/i);
-        if (titleMatch) {
-          updates.title = titleMatch[1].trim();
-          toastMsgs.push(`Title: "${updates.title}"`);
-        }
-
-        const conceptMatch = data.text.match(/\[SET_CONCEPT:\s*([^\]]+)\]/i);
-        if (conceptMatch) {
-          updates.concept = conceptMatch[1].trim();
-          toastMsgs.push("Premise Concept");
-        }
-
-        const settingMatch = data.text.match(/\[SET_SETTING:\s*([^\]\n]+)\]/i);
-        if (settingMatch) {
-          updates.settingType = settingMatch[1].trim();
-          toastMsgs.push(`Setting: ${updates.settingType}`);
-        }
-
-        const toneMatch = data.text.match(/\[SET_TONE:\s*([^\]\n]+)\]/i);
-        if (toneMatch) {
-          updates.tone = toneMatch[1].trim();
-          toastMsgs.push(`Tone: ${updates.tone}`);
-        }
-
-        const rulesMatch = data.text.match(/\[SET_RULES:\s*([^\]]+)\]/i);
-        if (rulesMatch) {
-          updates.groundingRules = rulesMatch[1].trim();
-          toastMsgs.push("Reality Protocols");
-        }
-
-        const aestheticMatch = data.text.match(/\[SET_AESTHETIC:\s*(Literary|Structured|Chaos)\]/i);
-        if (aestheticMatch) {
-          const modeVal = aestheticMatch[1].trim();
-          updates.aestheticMode = (modeVal.charAt(0).toUpperCase() + modeVal.slice(1).toLowerCase()) as any;
-          toastMsgs.push(`Aesthetic: ${updates.aestheticMode}`);
-        }
-
-        const artStyleMatch = data.text.match(/\[SET_ART_STYLE:\s*([^\]\n]+)\]/i);
-        if (artStyleMatch) {
-          updates.artStyle = artStyleMatch[1].trim();
-          toastMsgs.push(`Art Style: ${updates.artStyle}`);
-        }
-
-        const paletteMatch = data.text.match(/\[SET_PALETTE:\s*([^\]]+)\]/i);
+        const modeMatch = fullText.match(/\[SET_MODE:\s*(SFW|NSFW)\]/i);
+        if (modeMatch) { updates.mode = modeMatch[1].toUpperCase() as Mode; toastMsgs.push(`Mode: ${updates.mode}`); }
+        const heatMatch = fullText.match(/\[SET_HEAT:\s*([1-5])\]/i);
+        if (heatMatch) { updates.heatLevel = parseInt(heatMatch[1], 10) as HeatLevel; toastMsgs.push(`Heat: ${updates.heatLevel}/5`); }
+        const titleMatch = fullText.match(/\[SET_TITLE:\s*([^\]\n]+)\]/i);
+        if (titleMatch) { updates.title = titleMatch[1].trim(); toastMsgs.push(`Title: "${updates.title}"`); }
+        const conceptMatch = fullText.match(/\[SET_CONCEPT:\s*([^\]]+)\]/i);
+        if (conceptMatch) { updates.concept = conceptMatch[1].trim(); toastMsgs.push("Premise Concept"); }
+        const settingMatch = fullText.match(/\[SET_SETTING:\s*([^\]\n]+)\]/i);
+        if (settingMatch) { updates.settingType = settingMatch[1].trim(); toastMsgs.push(`Setting: ${updates.settingType}`); }
+        const toneMatch = fullText.match(/\[SET_TONE:\s*([^\]\n]+)\]/i);
+        if (toneMatch) { updates.tone = toneMatch[1].trim(); toastMsgs.push(`Tone: ${updates.tone}`); }
+        const rulesMatch = fullText.match(/\[SET_RULES:\s*([^\]]+)\]/i);
+        if (rulesMatch) { updates.groundingRules = rulesMatch[1].trim(); toastMsgs.push("Reality Protocols"); }
+        const aestheticMatch = fullText.match(/\[SET_AESTHETIC:\s*(Literary|Structured|Chaos)\]/i);
+        if (aestheticMatch) { const modeVal = aestheticMatch[1].trim(); updates.aestheticMode = (modeVal.charAt(0).toUpperCase() + modeVal.slice(1).toLowerCase()) as any; toastMsgs.push(`Aesthetic: ${updates.aestheticMode}`); }
+        const artStyleMatch = fullText.match(/\[SET_ART_STYLE:\s*([^\]\n]+)\]/i);
+        if (artStyleMatch) { updates.artStyle = artStyleMatch[1].trim(); toastMsgs.push(`Art Style: ${updates.artStyle}`); }
+        const paletteMatch = fullText.match(/\[SET_PALETTE:\s*([^\]]+)\]/i);
         if (paletteMatch) {
           const colors = paletteMatch[1].split(",").map((c: string) => c.trim()).filter((c: string) => c.startsWith("#") && (c.length === 7 || c.length === 4));
-          if (colors.length >= 3) {
-            updates.palette = colors;
-            toastMsgs.push("Palette Config");
-          }
+          if (colors.length >= 3) { updates.palette = colors; toastMsgs.push("Palette Config"); }
         }
 
         setState(s => {
-          const nextState = {
-            ...s,
-            ...updates,
-            assistantHistory: [...s.assistantHistory, assistantMessage],
-            isAssistantLoading: false
-          };
-
-          // Update lastSyncedState for the values that were just updated by the AI,
-          // so we don't trigger the manual unsynced banner warnings
-          setLastSyncedState(ls => ({
-            ...ls,
-            ...updates,
-            step: s.step
-          }));
-
-          return nextState;
+          const h = [...s.assistantHistory];
+          if (replaceLast && h.length && h[h.length - 1].role === "assistant" && h[h.length - 1].streaming) {
+            h[h.length - 1] = assistantMessage;
+          } else {
+            h.push(assistantMessage);
+          }
+          setLastSyncedState(ls => ({ ...ls, ...updates, step: s.step }));
+          return { ...s, ...updates, assistantHistory: h, isAssistantLoading: false };
         });
 
         if (captured.length > 0) {
@@ -1083,29 +1065,83 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
         } else if (toastMsgs.length > 0) {
           triggerToast(`Matrix updated parameters: ${toastMsgs.join(", ")}`, "ai-to-ui");
         }
+        if (fullText.includes("[SYNC_PROCEED]") && state.step < STEPS.length - 1) setReadyToAdvance(true);
+        if (truncated) setResponseTruncated(true);
+      };
 
-        // The AI signals the step is complete — arm the soft advance-gate (prompt
-        // the user to continue) instead of auto-advancing.
-        if (data.text.includes("[SYNC_PROCEED]") && state.step < STEPS.length - 1) {
-          setReadyToAdvance(true);
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.includes("text/event-stream") && response.body) {
+        // Live token streaming via Server-Sent Events.
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        let acc = "";
+        let truncated = false;
+        let usage: any = undefined;
+        let streamErr: string | null = null;
+        let placeholderAdded = false;
+        let lastPaint = 0;
+
+        const paint = (force?: boolean) => {
+          const now = Date.now();
+          if (!force && now - lastPaint < 60) return; // throttle re-renders (~16fps)
+          lastPaint = now;
+          const shown = cleanStreamingText(acc) || "…";
+          setState(s => {
+            const h = [...s.assistantHistory];
+            if (placeholderAdded && h.length && h[h.length - 1].role === "assistant" && h[h.length - 1].streaming) {
+              h[h.length - 1] = { ...h[h.length - 1], content: shown };
+            } else {
+              h.push({ role: "assistant", content: shown, streaming: true });
+            }
+            return { ...s, assistantHistory: h };
+          });
+          placeholderAdded = true;
+        };
+
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let sep: number;
+          while ((sep = buf.indexOf("\n\n")) >= 0) {
+            const chunk = buf.slice(0, sep);
+            buf = buf.slice(sep + 2);
+            const dataLine = chunk.split("\n").find(l => l.startsWith("data:"));
+            if (!dataLine) continue;
+            const json = dataLine.slice(5).trim();
+            if (!json) continue;
+            let evt: any;
+            try { evt = JSON.parse(json); } catch { continue; }
+            if (typeof evt.delta === "string") { acc += evt.delta; paint(); }
+            else if (evt.done) { truncated = !!evt.truncated; usage = evt.usage; }
+            else if (evt.error) { streamErr = evt.error; }
+          }
         }
 
-        // The response hit the token wall — surface a Continue affordance.
-        if (data.truncated) {
-          setResponseTruncated(true);
+        if (streamErr) {
+          setState(s => {
+            const h = [...s.assistantHistory];
+            if (placeholderAdded && h.length && h[h.length - 1].role === "assistant" && h[h.length - 1].streaming) h.pop();
+            return { ...s, isAssistantLoading: false, assistantHistory: [...h, { role: "assistant", content: `ERROR_SIGNAL: ${streamErr}` }] };
+          });
+          return;
         }
-        // (Prompt-cache telemetry rides along on assistantMessage.usage and is
-        // rendered as a per-message chip under the bubble — see CollaboratorChat.)
+        paint(true);
+        finalize(acc, truncated, usage, true);
       } else {
-        throw new Error("Empty response from matrix");
+        // Legacy non-streamed JSON (graceful fallback) — process exactly as before.
+        const data = await response.json();
+        finalize(data.text, !!data.truncated, data.usage, false);
       }
     } catch (error: any) {
       console.error(error);
-      setState(s => ({ 
-        ...s, 
-        isAssistantLoading: false,
-        assistantHistory: [...s.assistantHistory, { role: "assistant", content: `ERROR_SIGNAL: ${error.message || "Unknown anomaly"}` }]
-      }));
+      setState(s => {
+        const h = [...s.assistantHistory];
+        // Drop a half-streamed placeholder so the error replaces it cleanly.
+        if (h.length && h[h.length - 1].role === "assistant" && h[h.length - 1].streaming) h.pop();
+        return { ...s, isAssistantLoading: false, assistantHistory: [...h, { role: "assistant", content: `ERROR_SIGNAL: ${error.message || "Unknown anomaly"}` }] };
+      });
     }
   };
 
@@ -2206,7 +2242,7 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
                     )}
                   </div>
                 ) : (
-                  <p className="whitespace-pre-wrap break-words">{m.content}</p>
+                  <p className="whitespace-pre-wrap break-words">{m.content}{m.streaming && <span className="inline-block w-[2px] h-[1.05em] ml-0.5 bg-accent align-text-bottom animate-pulse" />}</p>
                 )}
               </div>
               {m.role === "assistant" && !isError && m.usage && (m.usage.input + m.usage.output + m.usage.cacheRead + m.usage.cacheWrite) > 0 && (() => {
@@ -2238,7 +2274,7 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
                   <RefreshCw className="w-3 h-3" /> Retry
                 </button>
               )}
-              {m.role === "assistant" && onManualCapture && !isError && m.content.trim().length > 40 && (
+              {m.role === "assistant" && onManualCapture && !isError && !m.streaming && m.content.trim().length > 40 && (
                 <select
                   value=""
                   onChange={(e) => { if (e.target.value) onManualCapture(e.target.value as SingleSlotKey, m.content); }}
@@ -2253,7 +2289,7 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
             );
           })
         )}
-        {state.isAssistantLoading && (
+        {state.isAssistantLoading && !(state.assistantHistory.length > 0 && state.assistantHistory[state.assistantHistory.length - 1].streaming) && (
           <div className="flex items-center gap-3 text-accent animate-pulse pb-4">
             <div className="flex gap-1">
               <div className="w-1 h-1 bg-accent rounded-full animate-bounce" />

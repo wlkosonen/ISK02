@@ -235,6 +235,35 @@ async function startServer() {
         }
       }
 
+      // --- Streaming plumbing ----------------------------------------------
+      // Chat turns request stream:true to surface tokens as they arrive (long
+      // deliverables otherwise sit on a spinner for many seconds). Export and
+      // other machine calls omit the flag and get the legacy JSON response.
+      // Wire format: Server-Sent Events — {delta} per chunk, then a terminal
+      // {done, truncated, usage}. Errors BEFORE any byte streams are returned as
+      // a normal JSON error (client checks res.ok); errors mid-stream are sent
+      // as an {error} event.
+      const wantStream = req.body?.stream === true;
+      let sseOpen = false;
+      const sseInit = () => {
+        if (sseOpen) return;
+        res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+        res.setHeader("Cache-Control", "no-cache, no-transform");
+        res.setHeader("Connection", "keep-alive");
+        res.setHeader("X-Accel-Buffering", "no"); // disable proxy buffering (nginx/Render)
+        (res as any).flushHeaders?.();
+        sseOpen = true;
+      };
+      const sseSend = (obj: any) => { res.write(`data: ${JSON.stringify(obj)}\n\n`); };
+      const sseDelta = (t: string) => { if (t) { sseInit(); sseSend({ delta: t }); } };
+      const sseDone = (truncated: boolean, usage?: any) => { sseInit(); sseSend({ done: true, truncated, usage }); res.end(); };
+      // Pre-stream errors -> JSON (works for both modes since client checks res.ok
+      // before reading the body); mid-stream errors -> SSE error event.
+      const failOut = (status: number, message: string) => {
+        if (sseOpen) { sseSend({ error: message }); res.end(); }
+        else res.status(status).json({ error: message });
+      };
+
       if (aiProvider === "gemini") {
         const apiKey = settings.geminiApiKey?.trim() || process.env.GEMINI_API_KEY;
         if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY is not configured. Please supply an API key in the Model Settings menu." });
@@ -254,17 +283,28 @@ async function startServer() {
           }));
           contents.push({ role: "user", parts: [{ text: prompt }] });
 
-          const result = await ai.models.generateContent({
-            model: modelName,
-            contents: contents,
-            config: {
-              systemInstruction: fullSystem || "You are a professional creative writing collaborator.",
-              temperature: settings.temperature ?? 1,
-              topP: settings.topP,
-              topK: settings.topK,
-              maxOutputTokens: settings.maxTokens || 2048,
+          const geminiConfig = {
+            systemInstruction: fullSystem || "You are a professional creative writing collaborator.",
+            temperature: settings.temperature ?? 1,
+            topP: settings.topP,
+            topK: settings.topK,
+            maxOutputTokens: settings.maxTokens || 2048,
+          };
+
+          if (wantStream) {
+            const stream = await ai.models.generateContentStream({ model: modelName, contents, config: geminiConfig });
+            let truncated = false;
+            let any = false;
+            for await (const chunk of stream) {
+              const t = chunk.text;
+              if (t) { any = true; sseDelta(t); }
+              if ((chunk as any)?.candidates?.[0]?.finishReason === "MAX_TOKENS") truncated = true;
             }
-          });
+            if (!any) throw new Error("Empty response from Gemini");
+            return sseDone(truncated);
+          }
+
+          const result = await ai.models.generateContent({ model: modelName, contents, config: geminiConfig });
 
           const text = result.text;
           if (!text) throw new Error("Empty response from Gemini");
@@ -282,8 +322,8 @@ async function startServer() {
           } else if (errorDetail.includes("not found") || errorDetail.includes("model not found") || errorDetail.includes("404")) {
             errorMsg = `The selected Gemini model '${settings.model || "gemini-2.5-flash"}' was not found, or the API key lacks access. Check your Model Settings.`;
           }
-          
-          return res.status(400).json({ error: errorMsg });
+
+          return failOut(400, errorMsg);
         }
       } 
       
@@ -334,6 +374,44 @@ async function startServer() {
         let lastError = null;
 
         try {
+          if (wantStream) {
+            let wroteAny = false;
+            let streamTruncated = false;
+            let streamUsage: any = undefined;
+            let streamed = false;
+            for (const candidateModel of modelsToTry) {
+              try {
+                console.log("Attempting Anthropic stream with model: %s", candidateModel);
+                const astream = anthropic.messages.stream({
+                  model: candidateModel,
+                  max_tokens: settings.maxTokens || 4096,
+                  temperature: settings.temperature ?? 1,
+                  system: systemBlocks,
+                  messages: messages,
+                });
+                astream.on("text", (t: string) => { if (t) { wroteAny = true; sseDelta(t); } });
+                const finalMsg = await astream.finalMessage();
+                streamTruncated = finalMsg.stop_reason === "max_tokens";
+                const fu = finalMsg.usage;
+                streamUsage = fu ? {
+                  input: fu.input_tokens,
+                  output: fu.output_tokens,
+                  cacheRead: fu.cache_read_input_tokens ?? 0,
+                  cacheWrite: fu.cache_creation_input_tokens ?? 0,
+                } : undefined;
+                streamed = true;
+                break;
+              } catch (err: any) {
+                console.warn("Stream failed with Anthropic model %s:", candidateModel, err.message || err);
+                lastError = err;
+                if (wroteAny) throw err; // already streaming this model — cannot fall back mid-stream
+                continue;
+              }
+            }
+            if (!streamed) throw lastError || new Error("All candidate Anthropic models failed.");
+            return sseDone(streamTruncated, streamUsage);
+          }
+
           for (const candidateModel of modelsToTry) {
             try {
               console.log("Attempting Anthropic message generation with model: %s", candidateModel);
@@ -392,7 +470,7 @@ async function startServer() {
           // the user can act on it. (This previously rerouted to Gemini and
           // injected a "[SYSTEM NOTICE …]" string into the story text, which
           // could end up polluting exported deliverables — removed.)
-          return res.status(400).json({ error: errorMsg });
+          return failOut(400, errorMsg);
         }
       }
 
@@ -436,7 +514,7 @@ async function startServer() {
             body: JSON.stringify({
               model: modelName,
               messages: messages,
-              stream: false,
+              stream: wantStream,
               options: {
                 temperature: settings.temperature ?? 1.0,
                 num_predict: settings.maxTokens || 4096
@@ -447,6 +525,33 @@ async function startServer() {
           if (!response.ok) {
             const errorText = await response.text();
             throw new Error(`Ollama returned status ${response.status}: ${errorText || response.statusText}`);
+          }
+
+          if (wantStream && response.body) {
+            // Ollama streams newline-delimited JSON: {message:{content},done,done_reason}
+            const reader = (response.body as any).getReader();
+            const decoder = new TextDecoder();
+            let buf = "";
+            let truncated = false;
+            let any = false;
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buf += decoder.decode(value, { stream: true });
+              let nl: number;
+              while ((nl = buf.indexOf("\n")) >= 0) {
+                const line = buf.slice(0, nl).trim();
+                buf = buf.slice(nl + 1);
+                if (!line) continue;
+                let obj: any;
+                try { obj = JSON.parse(line); } catch { continue; }
+                const t = obj?.message?.content;
+                if (t) { any = true; sseDelta(t); }
+                if (obj?.done && obj?.done_reason === "length") truncated = true;
+              }
+            }
+            if (!any) throw new Error("Empty response from Ollama");
+            return sseDone(truncated);
           }
 
           const responseData = (await response.json()) as any;
@@ -460,9 +565,7 @@ async function startServer() {
           return res.json({ text, truncated });
         } catch (ollamaErr: any) {
           console.error("Local Ollama bridge failed:", ollamaErr);
-          return res.status(500).json({
-            error: `Could not connect to Ollama at ${target}. Error details: ${ollamaErr.message || ollamaErr}. Please verify that Ollama is running ('ollama serve') and accessible from the container.`
-          });
+          return failOut(500, `Could not connect to Ollama at ${target}. Error details: ${ollamaErr.message || ollamaErr}. Please verify that Ollama is running ('ollama serve') and accessible from the container.`);
         }
       }
 
@@ -499,7 +602,7 @@ async function startServer() {
               messages,
               temperature: settings.temperature ?? 1,
               max_tokens: settings.maxTokens || 4096,
-              stream: false
+              stream: wantStream
             })
           });
 
@@ -516,6 +619,35 @@ async function startServer() {
             throw new Error(msg);
           }
 
+          if (wantStream && response.body) {
+            // OpenRouter streams OpenAI-style SSE: "data: {choices:[{delta:{content}}]}" lines, ending with "data: [DONE]".
+            const reader = (response.body as any).getReader();
+            const decoder = new TextDecoder();
+            let buf = "";
+            let truncated = false;
+            let any = false;
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buf += decoder.decode(value, { stream: true });
+              let nl: number;
+              while ((nl = buf.indexOf("\n")) >= 0) {
+                const line = buf.slice(0, nl).trim();
+                buf = buf.slice(nl + 1);
+                if (!line.startsWith("data:")) continue;
+                const data = line.slice(5).trim();
+                if (!data || data === "[DONE]") continue;
+                let obj: any;
+                try { obj = JSON.parse(data); } catch { continue; }
+                const t = obj?.choices?.[0]?.delta?.content;
+                if (t) { any = true; sseDelta(t); }
+                if (obj?.choices?.[0]?.finish_reason === "length") truncated = true;
+              }
+            }
+            if (!any) throw new Error("Empty response from OpenRouter (the model may have returned nothing — try another model).");
+            return sseDone(truncated);
+          }
+
           const responseData = (await response.json()) as any;
           const text = responseData?.choices?.[0]?.message?.content;
 
@@ -527,7 +659,7 @@ async function startServer() {
           return res.json({ text, truncated });
         } catch (orErr: any) {
           console.error("OpenRouter bridge failed:", orErr);
-          return res.status(400).json({ error: orErr.message || String(orErr) });
+          return failOut(400, orErr.message || String(orErr));
         }
       }
 
