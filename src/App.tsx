@@ -2526,6 +2526,18 @@ function HelpModal({ onClose }: { onClose: () => void }) {
           </section>
 
           <section className="space-y-2">
+            <H>The rhythm: set, then Sync</H>
+            <p>Each step has its own <span className="text-text-main">on-screen controls</span> — pickers, sliders, toggles, text fields (mode, setting, palette, art style, grounding rules, and so on). The collaborator chat on the right doesn't see those changes <span className="italic">as you make them</span>. That's deliberate: it lets you tinker freely without the AI reacting to every half-made choice.</p>
+            <p>So the rhythm for every step is simple:</p>
+            <ol className="space-y-1.5 pl-1 list-decimal list-inside marker:text-accent">
+              <li>Make <span className="text-text-main">all</span> your choices on the current step — pick the palette, the setting, whatever that step offers.</li>
+              <li>Hit <span className="text-text-main">Sync ↺</span> (above the chat) to hand those choices to the collaborator in one go.</li>
+              <li>Now chat, refine, or advance — the AI is working from exactly what you set.</li>
+            </ol>
+            <p className="mt-1.5 p-2.5 rounded-lg bg-[#fbbf24]/10 border border-[#fbbf24]/25 text-[#fde68a]">💡 Watch the little status dot above the chat: it glows <span className="font-bold text-[#fbbf24]">amber — "Settings Changed"</span> when you have edits the AI hasn't seen yet, and <span className="font-bold text-[#10b981]">green — "Synced"</span> once it's caught up. <span className="font-bold">Amber = hit Sync.</span> Syncing after you've finished a page (not mid-way) keeps the collaborator from guessing or asking about things you've already decided.</p>
+          </section>
+
+          <section className="space-y-2">
             <H>Choosing a model (the engine)</H>
             <p>The AI work is done by a language model. You pick which one in <span className="text-text-main">Settings</span> (the ⚙ icon, top-right). There are four options:</p>
             <ul className="space-y-1.5 pl-1">
