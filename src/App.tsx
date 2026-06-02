@@ -2739,36 +2739,47 @@ function StatusMonitor({ state }: { state: StoryState }) {
             </h3>
             <div className="rounded-xl border border-border bg-bg/50 divide-y divide-border/40">
               {([
-                ["Title & Summary", state.deliverables.titleSummary, false],
-                ["Plot Card", state.deliverables.plotCard, false],
-                ["Prompt Plot", state.deliverables.promptPlot, true],
-                ["Guidelines", state.deliverables.guidelines, true],
-                ["Reminders", state.deliverables.reminders, true],
-                ["Player Persona", state.deliverables.playerPersona, true],
-                ["Scenarios", state.deliverables.scenarios, false],
-                ["Image Prompts", state.deliverables.imagePrompts, false],
-              ] as [string, string, boolean][]).map(([label, content, counts]) => (
+                ["Title & Summary", state.deliverables.titleSummary, false, null],
+                ["Plot Card", state.deliverables.plotCard, false, null],
+                ["Prompt Plot", state.deliverables.promptPlot, true, state.capOverrides.promptPlot ? null : 2500],
+                ["Guidelines", state.deliverables.guidelines, true, state.capOverrides.guidelines ? null : 3000],
+                ["Reminders", state.deliverables.reminders, true, state.capOverrides.reminders ? null : 800],
+                ["Player Persona", state.deliverables.playerPersona, true, 500],
+                ["Scenarios", state.deliverables.scenarios, false, null],
+                ["Image Prompts", state.deliverables.imagePrompts, false, null],
+              ] as [string, string, boolean, number | null][]).map(([label, content, counts, cap]) => {
+                const t = counts && content ? estimateTokens(content) : 0;
+                const over = !!(cap && t > cap);
+                return (
                 <div key={label} className="flex items-center justify-between px-2.5 py-1.5 text-[9px]">
                   <span className="flex items-center gap-1.5">
                     <span className={`inline-block w-1.5 h-1.5 rounded-full ${content ? "bg-[#10b981]" : "bg-text-dim/30"}`} />
                     <span className={content ? "text-text-main" : "text-text-dim"}>{label}</span>
                     {!counts && <span className="text-[7px] text-text-dim/60 uppercase tracking-wide">(no count)</span>}
+                    {over && <span className="text-[7px] text-[#f43f5e] font-black uppercase tracking-wide">over §21 cap</span>}
                   </span>
-                  <span className="font-mono text-text-dim">
-                    {content ? (counts ? `${fmtK(estimateTokens(content))}t` : "✓") : "—"}
+                  <span className={`font-mono ${over ? "text-[#f43f5e] font-bold" : "text-text-dim"}`}>
+                    {content ? (counts ? `${fmtK(t)}t${cap ? ` / ${fmtK(cap)}` : ""}` : "✓") : "—"}
                   </span>
                 </div>
-              ))}
-              {state.deliverables.characters.map((c) => (
+                );
+              })}
+              {state.deliverables.characters.map((c) => {
+                const charCap = state.capOverrides.characters ? null : 1500;
+                const t = c.desc ? estimateTokens(c.desc) : 0;
+                const over = !!(charCap && t > charCap);
+                return (
                 <div key={c.name} className="flex items-center justify-between px-2.5 py-1.5 text-[9px]">
                   <span className="flex items-center gap-1.5 min-w-0">
                     <span className={`inline-block w-1.5 h-1.5 rounded-full ${c.desc ? "bg-[#10b981]" : "bg-text-dim/30"}`} />
                     <span className="text-text-main truncate">{c.name}</span>
                     <span className="text-[7px] text-text-dim/60 uppercase tracking-wide">{c.card ? "card+desc" : c.desc ? "desc" : "card"}</span>
+                    {over && <span className="text-[7px] text-[#f43f5e] font-black uppercase tracking-wide shrink-0">over §21 cap</span>}
                   </span>
-                  <span className="font-mono text-text-dim shrink-0">{c.desc ? `${fmtK(estimateTokens(c.desc))}t` : "✓"}</span>
+                  <span className={`font-mono shrink-0 ${over ? "text-[#f43f5e] font-bold" : "text-text-dim"}`}>{c.desc ? `${fmtK(t)}t${charCap ? ` / ${fmtK(charCap)}` : ""}` : "✓"}</span>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </section>
 
