@@ -2569,13 +2569,15 @@ function HelpModal({ onClose }: { onClose: () => void }) {
 
           <section className="space-y-2">
             <H>Running local models (Ollama)</H>
-            <p>Local models are free, private, and need no key — but you install and run them yourself. The short version:</p>
+            <p className="p-2.5 rounded-lg bg-[#f87171]/10 border border-[#f87171]/30 text-[#fecaca]">⚠️ <span className="font-bold">Important — this does NOT work on the website.</span> If you're reading this on the hosted site (a public web address), the <span className="text-text-main">Local Ollama</span> option can't reach a model on your computer — the website's server lives somewhere else entirely. Local models only work when you <span className="font-bold">run Aether_Core on your own machine</span> (self-hosting). If you just want to start now with no setup, pick <span className="text-text-main">Google Gemini</span> or a <span className="text-[#10b981] font-bold">:free</span> OpenRouter model instead — those work right here in the browser.</p>
+            <p>To use local models you self-host the app, then run Ollama next to it. It's free, private, and offline — but it's a developer-ish setup. Roughly:</p>
             <ol className="space-y-1.5 pl-1 list-decimal list-inside marker:text-accent">
-              <li>Install Ollama from <Link href="https://ollama.com">ollama.com</Link>.</li>
-              <li>Download a model: open a terminal and run <code className="bg-black/30 px-1 rounded text-[11px]">ollama pull llama3</code>.</li>
-              <li>In Settings, choose <span className="text-text-main">Local Ollama</span> — it auto-detects installed models.</li>
+              <li>Get the code: download or clone it from <Link href="https://github.com/wlkosonen/ISK02">GitHub</Link> (the green <span className="text-text-main">Code</span> button → <span className="text-text-main">Download ZIP</span>, or <code className="bg-black/30 px-1 rounded text-[11px]">git clone</code>).</li>
+              <li>Install <Link href="https://www.docker.com/products/docker-desktop/">Docker Desktop</Link>, then in the project folder run <code className="bg-black/30 px-1 rounded text-[11px]">docker compose up --build</code>. Open <code className="bg-black/30 px-1 rounded text-[11px]">http://localhost:3010</code> — that's your own copy.</li>
+              <li>Install <Link href="https://ollama.com">Ollama</Link> and pull a model: <code className="bg-black/30 px-1 rounded text-[11px]">ollama pull llama3</code>. Start it so the container can reach it: <code className="bg-black/30 px-1 rounded text-[11px]">OLLAMA_HOST=0.0.0.0 ollama serve</code>.</li>
+              <li>In <span className="text-text-main">your local copy's</span> Settings, choose <span className="text-text-main">Local Ollama</span> (base URL preset to <code className="bg-black/30 px-1 rounded text-[11px]">http://host.docker.internal:11434</code>) — it auto-detects installed models.</li>
             </ol>
-            <p className="text-[11px] text-text-dim">If you run this app via Docker, set the base URL to <code className="bg-black/30 px-1 rounded text-[11px]">http://host.docker.internal:11434</code> and start Ollama with <code className="bg-black/30 px-1 rounded text-[11px]">OLLAMA_HOST=0.0.0.0</code> so the container can reach it. Local models are smaller than the big cloud ones, so output quality varies — but it's free and stays on your machine.</p>
+            <p className="text-[11px] text-text-dim">Full self-host notes are in the GitHub <Link href="https://github.com/wlkosonen/ISK02#run-with-docker-recommended-for-self-hosting--local-models">README</Link>. Local models are smaller than the big cloud ones, so output quality varies — but it's free and stays on your machine.</p>
           </section>
 
           <section className="space-y-2">
