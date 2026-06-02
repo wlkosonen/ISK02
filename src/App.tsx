@@ -71,10 +71,11 @@ function cleanStreamingText(raw: string): string {
   return t.replace(/\n{3,}/g, "\n\n").trim();
 }
 
-// Captured story-package deliverables. The five "counting" fields (promptPlot,
-// guidelines, reminders, playerPersona, characters[].desc) are what USCS §21.1
-// counts toward the 20k platform ceiling. The rest are part of the export but
-// do NOT count toward the budget.
+// Captured story-package deliverables. The "counting" fields (promptPlot,
+// guidelines, reminders, playerPersona, characters[].desc, firstMessages[].content)
+// all count toward the 20k platform ceiling — including first messages, which ISK0
+// counts too. The rest (HTML cards, scenarios planning, image prompts) are part of
+// the export but do NOT count toward the budget.
 interface CharacterDeliverable {
   name: string;
   desc: string;   // Part B — AI prompt description (COUNTS toward budget)
@@ -90,11 +91,12 @@ interface Deliverables {
   scenarios: string;
   imagePrompts: string;
   characters: CharacterDeliverable[];
+  firstMessages: { label: string; content: string }[];   // one per scenario variant — COUNTS
 }
 
 const EMPTY_DELIVERABLES: Deliverables = {
   titleSummary: "", plotCard: "", promptPlot: "", guidelines: "",
-  reminders: "", playerPersona: "", scenarios: "", imagePrompts: "", characters: []
+  reminders: "", playerPersona: "", scenarios: "", imagePrompts: "", characters: [], firstMessages: []
 };
 
 // Single-value slots that can be captured manually from a chat message (fallback
@@ -368,7 +370,7 @@ const DELIVERABLE_LABELS: Record<string, string> = {
 const BLOCK_RE = /<<<USCS_BLOCK\s+([A-Z_]+)(?::\s*([^>\n]+?))?\s*>>>[ \t]*\r?\n?([\s\S]*?)\r?\n?[ \t]*<<<END USCS_BLOCK>>>/g;
 
 function captureDeliverables(text: string, current: Deliverables): { next: Deliverables; captured: string[]; cleaned: string } {
-  const next: Deliverables = { ...current, characters: current.characters.map(c => ({ ...c })) };
+  const next: Deliverables = { ...current, characters: current.characters.map(c => ({ ...c })), firstMessages: current.firstMessages.map(f => ({ ...f })) };
   const captured: string[] = [];
   let m: RegExpExecArray | null;
   BLOCK_RE.lastIndex = 0;
@@ -384,6 +386,15 @@ function captureDeliverables(text: string, current: Deliverables): { next: Deliv
       if (!ch) { ch = { name, desc: "", card: "" }; next.characters.push(ch); }
       if (type === "CHAR_DESC") { ch.desc = content; captured.push(`${name} (description)`); }
       else { ch.card = content; captured.push(`${name} (card)`); }
+      continue;
+    }
+
+    if (type === "FIRST_MESSAGE" || type === "FIRST_MESSAGES") {
+      const label = name || `${next.firstMessages.length + 1}`;
+      let fm = next.firstMessages.find(f => f.label.toLowerCase() === label.toLowerCase());
+      if (!fm) { fm = { label, content: "" }; next.firstMessages.push(fm); }
+      fm.content = content;
+      captured.push(`First Message ${label}`);
       continue;
     }
 
@@ -412,7 +423,7 @@ function captureDeliverables(text: string, current: Deliverables): { next: Deliv
 
 // Tokens that count toward the USCS §21.1 platform ceiling.
 function countingPackageTokens(d: Deliverables): number {
-  const counted = [d.promptPlot, d.guidelines, d.reminders, d.playerPersona, ...d.characters.map(c => c.desc)]
+  const counted = [d.promptPlot, d.guidelines, d.reminders, d.playerPersona, ...d.characters.map(c => c.desc), ...d.firstMessages.map(f => f.content)]
     .filter(Boolean).join("\n");
   return estimateTokens(counted);
 }
@@ -1557,7 +1568,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
               </div>
 
               {state.step >= 1 && (
-                <div className="border-t border-border/40 pt-4 mt-auto shrink-0">
+                <div className="border-t-2 border-accent/30 pt-4 mt-auto shrink-0">
                   <StatusMonitor state={state} />
                 </div>
               )}
@@ -2646,73 +2657,80 @@ function StatusMonitor({ state }: { state: StoryState }) {
   const pctOfMax = Math.min(100, state.tokenBudgetMax > 0 ? (estTokens / state.tokenBudgetMax) * 100 : 0);
   const barColor = overBudget ? "#f43f5e" : inRange ? "#14b8a6" : "#64748b";
 
-  return (
-    <div className="border border-border bg-[#131316]/95 rounded-2xl overflow-hidden shadow-xl">
-      {/* Static header + live package-budget number */}
-      <div className="px-4 py-2.5 flex items-center justify-between border-b border-border bg-white/5">
-        <div className="flex items-center gap-2">
-          <Zap className="w-3.5 h-3.5 text-accent" />
-          <span className="text-[10px] font-black uppercase tracking-wider text-accent">Token Budget</span>
-        </div>
-        <span className="font-mono text-[11px] font-black" style={{ color: barColor }}>
-          ≈{fmtK(estTokens)} <span className="text-text-muted font-normal">/ {fmtK(state.tokenBudgetMin)}–{fmtK(state.tokenBudgetMax)}</span>
+  const fmtN = (n: number) => n.toLocaleString();
+  // One token row. cap=null → no cap shown/flagged.
+  const tokRow = (key: string, label: string, content: string, cap: number | null, sub?: string) => {
+    const t = content ? estimateTokens(content) : 0;
+    const over = !!(cap && t > cap);
+    return (
+      <div key={key} className="flex items-center justify-between py-1">
+        <span className="flex items-center gap-2 min-w-0">
+          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${content ? "bg-[#10b981]" : "bg-text-dim/40"}`} />
+          <span className={`truncate ${content ? "text-text-main" : "text-text-muted"}`}>{label}</span>
+          {sub && <span className="text-[8px] text-text-dim uppercase tracking-wide shrink-0">{sub}</span>}
+          {over && <span className="text-[8px] text-[#f43f5e] font-black uppercase shrink-0">over cap</span>}
         </span>
+        <span className={`font-mono shrink-0 ${over ? "text-[#f43f5e] font-bold" : content ? "text-text-main" : "text-text-dim"}`}>
+          {content ? `${fmtN(t)}${cap ? ` / ${fmtN(cap)}` : ""}` : "—"}
+        </span>
+      </div>
+    );
+  };
+  const charCap = state.capOverrides.characters ? null : 1500;
+
+  return (
+    <div className="space-y-3 text-[11px]">
+      {/* Header */}
+      <div className="flex items-center gap-2">
+        <Zap className="w-3.5 h-3.5 text-accent" />
+        <span className="text-[11px] font-black uppercase tracking-wider text-accent">Token Summary</span>
       </div>
 
       {/* Budget gauge */}
-      <div className="px-4 pt-3" title="§21.1 package only (Prompt Plot + Guidelines + Reminders + Player Persona + character AI descriptions) vs your target. ~4 chars/token estimate.">
-        <div className="h-1.5 w-full bg-border rounded-full overflow-hidden">
-          <div className="h-full transition-all duration-700 ease-out" style={{ width: `${pctOfMax}%`, backgroundColor: barColor }} />
-        </div>
-        <p className="text-[8px] font-mono text-text-muted uppercase tracking-widest mt-1.5">§21.1 package · HTML &amp; images excluded{state.budgetTierMode && <span className="text-[#fbbf24] font-bold"> · §21 tier</span>}</p>
+      <div className="h-1.5 w-full bg-border rounded-full overflow-hidden" title="Counts toward the 20k platform ceiling. ~4 chars/token estimate.">
+        <div className="h-full transition-all duration-700 ease-out" style={{ width: `${pctOfMax}%`, backgroundColor: barColor }} />
       </div>
 
-      {/* Per-block breakdown — the panel's one job: token tracking */}
-      <div className="p-3 pt-2.5">
-        <div className="divide-y divide-border/40 max-h-[340px] overflow-y-auto custom-scrollbar pr-1">
-          {([
-            ["Title & Summary", state.deliverables.titleSummary, false, null],
-            ["Plot Card", state.deliverables.plotCard, false, null],
-            ["Prompt Plot", state.deliverables.promptPlot, true, state.capOverrides.promptPlot ? null : 2500],
-            ["Guidelines", state.deliverables.guidelines, true, state.capOverrides.guidelines ? null : 3000],
-            ["Reminders", state.deliverables.reminders, true, state.capOverrides.reminders ? null : 800],
-            ["Player Persona", state.deliverables.playerPersona, true, 500],
-            ["Scenarios", state.deliverables.scenarios, false, null],
-            ["Image Prompts", state.deliverables.imagePrompts, false, null],
-          ] as [string, string, boolean, number | null][]).map(([label, content, counts, cap]) => {
-            const t = counts && content ? estimateTokens(content) : 0;
-            const over = !!(cap && t > cap);
-            return (
-            <div key={label} className="flex items-center justify-between py-1.5 text-[10px]">
-              <span className="flex items-center gap-2 min-w-0">
-                <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${content ? "bg-[#10b981]" : "bg-text-dim/40"}`} />
-                <span className={content ? "text-text-main" : "text-text-muted"}>{label}</span>
-                {over && <span className="text-[8px] text-[#f43f5e] font-black uppercase tracking-wide shrink-0">over cap</span>}
-              </span>
-              <span className={`font-mono shrink-0 ${over ? "text-[#f43f5e] font-bold" : content && counts ? "text-text-main" : "text-text-dim"}`}>
-                {content ? (counts ? `${fmtK(t)}t${cap ? ` / ${fmtK(cap)}` : ""}` : "✓") : "—"}
-              </span>
-            </div>
-            );
-          })}
-          {state.deliverables.characters.map((c) => {
-            const charCap = state.capOverrides.characters ? null : 1500;
-            const t = c.desc ? estimateTokens(c.desc) : 0;
-            const over = !!(charCap && t > charCap);
-            return (
-            <div key={c.name} className="flex items-center justify-between py-1.5 text-[10px]">
-              <span className="flex items-center gap-2 min-w-0">
-                <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${c.desc ? "bg-[#10b981]" : "bg-text-dim/40"}`} />
-                <span className="text-text-main truncate">{c.name}</span>
-                <span className="text-[8px] text-text-muted uppercase tracking-wide shrink-0">{c.card ? "card+desc" : c.desc ? "desc" : "card"}</span>
-                {over && <span className="text-[8px] text-[#f43f5e] font-black uppercase tracking-wide shrink-0">over cap</span>}
-              </span>
-              <span className={`font-mono shrink-0 ${over ? "text-[#f43f5e] font-bold" : c.desc ? "text-text-main" : "text-text-dim"}`}>{c.desc ? `${fmtK(t)}t${charCap ? ` / ${fmtK(charCap)}` : ""}` : "✓"}</span>
-            </div>
-            );
-          })}
+      <div className="max-h-[400px] overflow-y-auto custom-scrollbar pr-1 space-y-3">
+        {/* AI instruction blocks */}
+        <div className="space-y-0.5">
+          {tokRow("pp", "Prompt Plot", state.deliverables.promptPlot, state.capOverrides.promptPlot ? null : 2500)}
+          {tokRow("gl", "Guidelines", state.deliverables.guidelines, state.capOverrides.guidelines ? null : 3000)}
+          {tokRow("rm", "Reminders", state.deliverables.reminders, state.capOverrides.reminders ? null : 800)}
         </div>
-        <p className="text-[8px] font-mono text-text-dim uppercase tracking-widest mt-2.5">●&nbsp;captured · ○&nbsp;pending · "—"&nbsp;not&nbsp;made · "✓"&nbsp;not&nbsp;counted</p>
+
+        {/* Characters — player persona + cast, the way ISK0 counts them */}
+        <div className="space-y-0.5">
+          <p className="text-[9px] font-black uppercase tracking-widest text-accent/70 mb-0.5">Characters</p>
+          {tokRow("persona", "Player Persona", state.deliverables.playerPersona, 500)}
+          {state.deliverables.characters.map((c) => tokRow(`c-${c.name}`, c.name, c.desc, charCap, c.card ? "+card" : undefined))}
+          {state.deliverables.characters.length === 0 && <p className="text-[10px] text-text-dim italic py-0.5">No cast yet</p>}
+        </div>
+
+        {/* First Messages — count toward the cap on ISK0 */}
+        <div className="space-y-0.5">
+          <p className="text-[9px] font-black uppercase tracking-widest text-accent/70 mb-0.5">First Messages <span className="text-text-dim font-medium normal-case tracking-normal">(Scenarios)</span></p>
+          {state.deliverables.firstMessages.length === 0
+            ? <p className="text-[10px] text-text-dim italic py-0.5">None drafted yet</p>
+            : state.deliverables.firstMessages.map((f) => tokRow(`fm-${f.label}`, `First Message ${f.label}`, f.content, null))}
+        </div>
+
+        {/* Estimated total */}
+        <div className="flex items-center justify-between pt-2 border-t border-border/60">
+          <span className="text-xs font-black uppercase tracking-wide text-text-main">Estimated Total</span>
+          <span className="font-mono text-xs font-black" style={{ color: barColor }}>{fmtN(estTokens)} <span className="text-text-muted font-normal text-[10px]">/ {fmtK(state.tokenBudgetMax)}</span></span>
+        </div>
+        {overBudget && (
+          <div className="text-[10px] text-[#fbbf24] bg-[#fbbf24]/10 border border-[#fbbf24]/25 rounded-lg px-2.5 py-1.5 leading-snug">
+            Over your {fmtK(state.tokenBudgetMax)} target. Hard platform ceiling is 20k — trim over-cap blocks.
+          </div>
+        )}
+
+        {/* Captured but excluded from the budget (HTML / visual blocks) */}
+        <p className="text-[9px] text-text-dim leading-relaxed">
+          <span className="uppercase tracking-widest font-bold text-text-muted">Not counted:</span>{" "}
+          {([["Title & Summary", state.deliverables.titleSummary], ["Plot Card", state.deliverables.plotCard], ["Scenarios", state.deliverables.scenarios], ["Image Prompts", state.deliverables.imagePrompts]] as [string, string][]).map(([l, v]) => `${v ? "✓" : "○"} ${l}`).join("  ·  ")}
+        </p>
       </div>
     </div>
   );
@@ -4306,7 +4324,7 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
               onClick={() => {
                 const query = state.step === 9 ? "[WORKSHOP ACTION — SCENARIO & SYSTEM PLANNING] Based on our locked premise, propose: (1) 2–3 scenario VARIANTS — distinct alternate openings/entry points that all lead into the same core story (these become our First Messages later); (2) the three-act STRUCTURE with early/mid/late hooks (this becomes the Prompt Plot's pacing/phase structure); and (3) a recommendation on whether the story benefits from optional MODULES, a timekeeping system, or a status dashboard. Capture the finished scenario variants wrapped in <<<USCS_BLOCK SCENARIOS>>> … <<<END USCS_BLOCK>>>." :
                               state.step === 10 ? "Structure the prompt plot instructions and include Architect Protocols." :
-                              state.step === 13 ? "Draft the opening First Message for each scenario variant we defined — one authored opening per variant, per the USCS First Message rules. Capture each finished message." :
+                              state.step === 13 ? "Draft the opening First Message for each scenario variant we defined — one authored opening per variant, per the USCS First Message rules. Wrap EACH finished message in its own <<<USCS_BLOCK FIRST_MESSAGE: N>>> … <<<END USCS_BLOCK>>> (numbered 1, 2, 3… per scenario) so they're captured and counted toward the budget." :
                               "Build detailed stable diffusion image prompts for our main cast.";
                 askAssistant(query);
               }}
