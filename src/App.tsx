@@ -1569,7 +1569,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
 
               {state.step >= 1 && (
                 <div className="border-t-2 border-accent/30 pt-4 mt-auto shrink-0">
-                  <StatusMonitor state={state} />
+                  <StatusMonitor state={state} onTighten={askAssistant} />
                 </div>
               )}
             </motion.nav>
@@ -2646,7 +2646,7 @@ function HelpModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-function StatusMonitor({ state }: { state: StoryState }) {
+function StatusMonitor({ state, onTighten }: { state: StoryState; onTighten?: (p: string) => void }) {
   // Counts ONLY the captured §21.1 package blocks (Prompt Plot + Guidelines +
   // Reminders + Player Persona + each character's AI description) — not workshop
   // chatter or non-counting HTML/image blocks. ~4 chars/token estimate.
@@ -2658,21 +2658,32 @@ function StatusMonitor({ state }: { state: StoryState }) {
   const barColor = overBudget ? "#f43f5e" : inRange ? "#14b8a6" : "#64748b";
 
   const fmtN = (n: number) => n.toLocaleString();
-  // One token row. cap=null → no cap shown/flagged.
-  const tokRow = (key: string, label: string, content: string, cap: number | null, sub?: string) => {
+  // One token row. cap=null → no cap shown/flagged. opts.type enables a
+  // "Tighten to cap" action (re-emits that block compressed) when over.
+  const tokRow = (key: string, label: string, content: string, cap: number | null, opts?: { sub?: string; type?: string; name?: string }) => {
     const t = content ? estimateTokens(content) : 0;
     const over = !!(cap && t > cap);
     return (
-      <div key={key} className="flex items-center justify-between py-1">
-        <span className="flex items-center gap-2 min-w-0">
-          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${content ? "bg-[#10b981]" : "bg-text-dim/40"}`} />
-          <span className={`truncate ${content ? "text-text-main" : "text-text-muted"}`}>{label}</span>
-          {sub && <span className="text-[8px] text-text-dim uppercase tracking-wide shrink-0">{sub}</span>}
-          {over && <span className="text-[8px] text-[#f43f5e] font-black uppercase shrink-0">over cap</span>}
-        </span>
-        <span className={`font-mono shrink-0 ${over ? "text-[#f43f5e] font-bold" : content ? "text-text-main" : "text-text-dim"}`}>
-          {content ? `${fmtN(t)}${cap ? ` / ${fmtN(cap)}` : ""}` : "—"}
-        </span>
+      <div key={key}>
+        <div className="flex items-center justify-between py-1">
+          <span className="flex items-center gap-2 min-w-0">
+            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${content ? "bg-[#10b981]" : "bg-text-dim/40"}`} />
+            <span className={`truncate ${content ? "text-text-main" : "text-text-muted"}`}>{label}</span>
+            {opts?.sub && <span className="text-[8px] text-text-dim uppercase tracking-wide shrink-0">{opts.sub}</span>}
+            {over && <span className="text-[8px] text-[#f43f5e] font-black uppercase shrink-0">over cap</span>}
+          </span>
+          <span className={`font-mono shrink-0 ${over ? "text-[#f43f5e] font-bold" : content ? "text-text-main" : "text-text-dim"}`}>
+            {content ? `${fmtN(t)}${cap ? ` / ${fmtN(cap)}` : ""}` : "—"}
+          </span>
+        </div>
+        {over && onTighten && opts?.type && (
+          <button
+            onClick={() => onTighten(`[WORKSHOP ACTION — TIGHTEN TO CAP] "${label}" is over its §21 cap (~${fmtN(t)} tokens vs the ${fmtN(cap!)} limit). Compress it to AT OR UNDER ${fmtN(cap!)} tokens without losing essential meaning — cut redundancy and filler, tighten the prose, drop the lowest-value detail, but keep every required section. Re-emit the FULL tightened block wrapped in <<<USCS_BLOCK ${opts.name ? `${opts.type}: ${opts.name}` : opts.type}>>> … <<<END USCS_BLOCK>>>; keep only a one-line note in chat.`)}
+            className="w-full mb-1.5 py-1 rounded bg-[#fbbf24]/10 border border-[#fbbf24]/30 text-[#fbbf24] text-[9px] font-black uppercase tracking-widest hover:bg-[#fbbf24]/20 transition-colors animate-pulse"
+          >
+            ⚠ Tighten to {fmtN(cap!)} →
+          </button>
+        )}
       </div>
     );
   };
@@ -2694,16 +2705,16 @@ function StatusMonitor({ state }: { state: StoryState }) {
       <div className="max-h-[400px] overflow-y-auto custom-scrollbar pr-1 space-y-3">
         {/* AI instruction blocks */}
         <div className="space-y-0.5">
-          {tokRow("pp", "Prompt Plot", state.deliverables.promptPlot, state.capOverrides.promptPlot ? null : 2500)}
-          {tokRow("gl", "Guidelines", state.deliverables.guidelines, state.capOverrides.guidelines ? null : 3000)}
-          {tokRow("rm", "Reminders", state.deliverables.reminders, state.capOverrides.reminders ? null : 800)}
+          {tokRow("pp", "Prompt Plot", state.deliverables.promptPlot, state.capOverrides.promptPlot ? null : 2500, { type: "PROMPT_PLOT" })}
+          {tokRow("gl", "Guidelines", state.deliverables.guidelines, state.capOverrides.guidelines ? null : 3000, { type: "GUIDELINES" })}
+          {tokRow("rm", "Reminders", state.deliverables.reminders, state.capOverrides.reminders ? null : 800, { type: "REMINDERS" })}
         </div>
 
         {/* Characters — player persona + cast, the way ISK0 counts them */}
         <div className="space-y-0.5">
           <p className="text-[9px] font-black uppercase tracking-widest text-accent/70 mb-0.5">Characters</p>
-          {tokRow("persona", "Player Persona", state.deliverables.playerPersona, 500)}
-          {state.deliverables.characters.map((c) => tokRow(`c-${c.name}`, c.name, c.desc, charCap, c.card ? "+card" : undefined))}
+          {tokRow("persona", "Player Persona", state.deliverables.playerPersona, 500, { type: "PLAYER_PERSONA" })}
+          {state.deliverables.characters.map((c) => tokRow(`c-${c.name}`, c.name, c.desc, charCap, { sub: c.card ? "+card" : undefined, type: "CHAR_DESC", name: c.name }))}
           {state.deliverables.characters.length === 0 && <p className="text-[10px] text-text-dim italic py-0.5">No cast yet</p>}
         </div>
 
