@@ -1639,7 +1639,8 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
               {/* Resize Handle for Docked View */}
               {!isChatDetached && isXL && (
                 <div 
-                  className="absolute left-0 top-0 bottom-0 w-1 cursor-ew-resize hover:bg-accent/40 transition-colors z-[80]"
+                  className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize bg-border/30 hover:bg-accent/50 transition-colors z-[80]"
+                  title="Drag to resize chat"
                   onMouseDown={(e) => {
                     e.preventDefault();
                     const startX = e.clientX;
@@ -2679,7 +2680,7 @@ function StatusMonitor({ state }: { state: StoryState }) {
       </div>
 
       {isOpen ? (
-        <div className="p-4 space-y-4 max-h-[320px] overflow-y-auto scrollbar-thin scrollbar-thumb-border text-[10px] leading-relaxed">
+        <div className="p-4 space-y-4 max-h-[320px] overflow-y-auto custom-scrollbar text-[10px] leading-relaxed">
           {/* Core Tuning */}
           <section className="space-y-2">
             <h3 className="text-[8px] uppercase font-black tracking-[0.2em] text-label flex items-center gap-1.5">
@@ -3691,7 +3692,7 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
               <h3 className="text-xs font-black uppercase tracking-[0.3em] text-text-main">Or start from a template <span className="text-text-dim normal-case tracking-normal font-medium">(expand to preview, then load into the editor)</span></h3>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-start">
               {GROUNDING_TEMPLATES.map((tpl) => {
                 const active = state.groundingRules === tpl.rules;
                 return (
@@ -4011,7 +4012,7 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
               <span className="text-[10px] font-mono uppercase tracking-widest text-text-dim">No characters captured yet — finished sheets from the collaborator will appear here.</span>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(320px,1fr))] gap-6">
               {state.deliverables.characters.map((char, i) => (
                 <div key={i} className="bg-card border border-border rounded-3xl relative overflow-hidden group">
                   <div className="absolute top-0 left-0 w-1.5 h-full bg-accent opacity-40 group-hover:opacity-100 transition-opacity z-10" />

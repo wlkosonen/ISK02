@@ -34,3 +34,30 @@
   to { transform: rotate(360deg); }
 }
 .animate-spin-slow { animation: spin-slow 12s linear infinite; }
+
+/* Visible accent scrollbar for scroll areas (signals there's more content).
+   These class names were used throughout the app but never defined, so every
+   scroll region fell back to the faint native scrollbar. */
+.custom-scrollbar,
+.cs-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(20, 184, 166, 0.45) transparent;
+}
+.custom-scrollbar::-webkit-scrollbar,
+.cs-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.custom-scrollbar::-webkit-scrollbar-track,
+.cs-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb,
+.cs-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(20, 184, 166, 0.38);
+  border-radius: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover,
+.cs-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(20, 184, 166, 0.65);
+}
