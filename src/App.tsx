@@ -125,6 +125,7 @@ interface StoryState {
   aestheticMode: "Literary" | "Structured" | "Chaos";
   groundingRules: string;
   title: string;
+  summary: string;
   tokenBudgetMin: number;
   tokenBudgetMax: number;
   budgetTierMode: boolean;
@@ -286,6 +287,7 @@ const DEFAULT_STATE: StoryState = {
   aestheticMode: "Structured",
   groundingRules: "",
   title: "",
+  summary: "",
   tokenBudgetMin: 7000,
   tokenBudgetMax: 10000,
   budgetTierMode: false,
@@ -486,6 +488,7 @@ export default function App() {
     aestheticMode: "Structured" as "Literary" | "Structured" | "Chaos",
     groundingRules: "",
     title: "",
+    summary: "",
     tokenBudgetMin: 7000,
     tokenBudgetMax: 10000,
     budgetTierMode: false,
@@ -761,6 +764,7 @@ export default function App() {
     state.aestheticMode !== lastSyncedState.aestheticMode ||
     state.groundingRules !== lastSyncedState.groundingRules ||
     state.title !== lastSyncedState.title ||
+    state.summary !== lastSyncedState.summary ||
     state.tokenBudgetMin !== lastSyncedState.tokenBudgetMin ||
     state.tokenBudgetMax !== lastSyncedState.tokenBudgetMax ||
     state.budgetTierMode !== lastSyncedState.budgetTierMode ||
@@ -786,6 +790,7 @@ export default function App() {
     if (state.aestheticMode !== lastSyncedState.aestheticMode) updatedFields.push(`Aesthetic Mode: ${state.aestheticMode}`);
     if (state.groundingRules !== lastSyncedState.groundingRules) updatedFields.push(`Grounding Rules modified`);
     if (state.title !== lastSyncedState.title) updatedFields.push(`Title: ${state.title || "Untitled"}`);
+    if (state.summary !== lastSyncedState.summary) updatedFields.push(`Narrative Summary modified`);
     if (state.tokenBudgetMin !== lastSyncedState.tokenBudgetMin || state.tokenBudgetMax !== lastSyncedState.tokenBudgetMax) updatedFields.push(`Token Budget: ~${state.tokenBudgetMin / 1000}k–${state.tokenBudgetMax / 1000}k`);
     if (state.budgetTierMode !== lastSyncedState.budgetTierMode) updatedFields.push(`Budget-Tier Mode: ${state.budgetTierMode ? "ON" : "OFF"}`);
     if (JSON.stringify(state.capOverrides) !== JSON.stringify(lastSyncedState.capOverrides)) updatedFields.push(`§21 cap overrides changed`);
@@ -803,6 +808,7 @@ export default function App() {
       aestheticMode: state.aestheticMode,
       groundingRules: state.groundingRules,
       title: state.title,
+      summary: state.summary,
       tokenBudgetMin: state.tokenBudgetMin,
       tokenBudgetMax: state.tokenBudgetMax,
       budgetTierMode: state.budgetTierMode,
@@ -854,6 +860,9 @@ export default function App() {
 
     if (state.title) established.push(`Draft Title: "${state.title}"`);
     else pending.push("Title");
+
+    if (state.summary) established.push(`Narrative Summary (20-word discovery hook): "${state.summary}"`);
+    else pending.push("Narrative Summary (20-word hook)");
 
     // Budget is chosen on Concept Intake. Only report it if the creator actually
     // moved it off the default range (or turned on Budget-Tier Mode); otherwise
@@ -956,6 +965,7 @@ You have direct, two-way control over the workshop UI. Whenever you want to sugg
 ✦ [SET_SETTING: <Setting Name>] (e.g., [SET_SETTING: Fantasy / High Fantasy] or [SET_SETTING: Isekai] or [SET_SETTING: Post-Apocalyptic / Survival])
 ✦ [SET_TITLE: <Title Text>]
 ✦ [SET_CONCEPT: <Concept Text>]
+✦ [SET_SUMMARY: <~20-word user-facing discovery hook — the Title & Summary step's narrative summary, NOT the full premise>]
 ✦ [SET_TONE: <Tone Text>]
 ✦ [SET_RULES: <Grounding Rules Text>]
 ✦ [SET_PALETTE: #HEX1, #HEX2, #HEX3, #HEX4, #HEX5]
@@ -1044,6 +1054,8 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
         if (titleMatch) { updates.title = titleMatch[1].trim(); toastMsgs.push(`Title: "${updates.title}"`); }
         const conceptMatch = fullText.match(/\[SET_CONCEPT:\s*([^\]]+)\]/i);
         if (conceptMatch) { updates.concept = conceptMatch[1].trim(); toastMsgs.push("Premise Concept"); }
+        const summaryMatch = fullText.match(/\[SET_SUMMARY:\s*([^\]]+)\]/i);
+        if (summaryMatch) { updates.summary = summaryMatch[1].trim(); toastMsgs.push("Narrative Summary"); }
         const settingMatch = fullText.match(/\[SET_SETTING:\s*([^\]\n]+)\]/i);
         if (settingMatch) { updates.settingType = settingMatch[1].trim(); toastMsgs.push(`Setting: ${updates.settingType}`); }
         const toneMatch = fullText.match(/\[SET_TONE:\s*([^\]\n]+)\]/i);
@@ -1346,7 +1358,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
       mode: null, heatLevel: 1, isDMOnly: false, concept: "", settingType: "", tone: "",
       artStyle: "Anime/VN Style", imageService: "Midjourney",
       palette: ["#1a1a24", "#f8f8f8", "#14b8a6", "#f43f5e", "#fbbf24"],
-      aestheticMode: "Structured", groundingRules: "", title: "",
+      aestheticMode: "Structured", groundingRules: "", title: "", summary: "",
       tokenBudgetMin: 7000, tokenBudgetMax: 10000, budgetTierMode: false,
       capOverrides: { promptPlot: false, guidelines: false, reminders: false, characters: false },
       step: 0
@@ -3801,12 +3813,12 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
               />
             </div>
             <div className="space-y-3">
-              <label className="text-[10px] uppercase tracking-[0.2em] font-black text-accent ml-2">Narrative_Summary</label>
-              <textarea 
+              <label className="text-[10px] uppercase tracking-[0.2em] font-black text-accent ml-2">Narrative_Summary <span className="text-text-dim normal-case tracking-normal font-medium">— the ~20-word discovery hook, not the full premise</span></label>
+              <textarea
                 className="w-full h-48 bg-card border border-border rounded-xl p-6 font-serif text-lg leading-relaxed focus:border-accent transition-all resize-none shadow-inner"
-                value={state.concept}
-                onChange={(e) => setState(s => ({ ...s, concept: e.target.value }))}
-                placeholder="A recursive loop of betrayal set against the backdrop of a dying star..."
+                value={state.summary}
+                onChange={(e) => setState(s => ({ ...s, summary: e.target.value }))}
+                placeholder="A short, user-facing hook — a reason to click, not the whole plot. Pick one in chat and the collaborator drops it here, or type your own."
               />
             </div>
           </div>
