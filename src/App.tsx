@@ -1723,19 +1723,21 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-xl bg-header border border-border rounded-3xl p-8 shadow-2xl "
+              className="relative w-full max-w-xl max-h-[90dvh] overflow-y-auto overscroll-contain bg-header border border-border rounded-3xl px-5 pb-6 sm:px-8 sm:pb-8 shadow-2xl custom-scrollbar"
             >
               <div className="absolute top-0 left-0 w-full h-1 bg-accent" />
-              <div className="flex justify-between items-start mb-8">
+              {/* Sticky header keeps the close button reachable on tall/mobile screens */}
+              <div className="flex justify-between items-start gap-3 mb-8 sticky top-0 z-20 bg-header/95 backdrop-blur-sm pt-5 sm:pt-8 -mx-5 px-5 sm:-mx-8 sm:px-8 pb-3 border-b border-border/60">
                 <div className="space-y-1 text-left">
                   <h2 className="text-xl font-black uppercase tracking-tighter">Model_Configuration</h2>
                   <p className="text-[10px] text-label font-bold uppercase tracking-widest">Aether_Core System Settings</p>
                 </div>
-                <button 
+                <button
                   onClick={() => setShowSettings(false)}
-                  className="p-2 hover:bg-white/5 rounded-lg text-label hover:text-white transition-all"
+                  aria-label="Close settings"
+                  className="shrink-0 p-2 -mr-1 hover:bg-white/5 rounded-lg text-label hover:text-white transition-all"
                 >
-                  <ChevronRight className="w-5 h-5 rotate-180" />
+                  <X className="w-5 h-5" />
                 </button>
               </div>
 
