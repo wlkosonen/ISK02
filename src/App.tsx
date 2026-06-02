@@ -1048,8 +1048,15 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
         if (settingMatch) { updates.settingType = settingMatch[1].trim(); toastMsgs.push(`Setting: ${updates.settingType}`); }
         const toneMatch = fullText.match(/\[SET_TONE:\s*([^\]\n]+)\]/i);
         if (toneMatch) { updates.tone = toneMatch[1].trim(); toastMsgs.push(`Tone: ${updates.tone}`); }
-        const rulesMatch = fullText.match(/\[SET_RULES:\s*([^\]]+)\]/i);
-        if (rulesMatch) { updates.groundingRules = rulesMatch[1].trim(); toastMsgs.push("Reality Protocols"); }
+        // SET_RULES carries a large multiline payload that can itself contain "]"
+        // (e.g. "[PROTOCOL_01]"). The robust form captures up to the ']' that ends
+        // the tag — the one followed by end-of-message or another [TAG] — so inner
+        // brackets don't truncate it. Fall back to the simple form if needed.
+        let rulesContent: string | null = null;
+        const rulesRobust = fullText.match(/\[SET_RULES:\s*([\s\S]*?)\]\s*(?=\[|$)/i);
+        if (rulesRobust) rulesContent = rulesRobust[1];
+        else { const m = fullText.match(/\[SET_RULES:\s*([^\]]+)\]/i); if (m) rulesContent = m[1]; }
+        if (rulesContent !== null && rulesContent.trim()) { updates.groundingRules = rulesContent.trim(); toastMsgs.push("Reality Protocols"); }
         const aestheticMatch = fullText.match(/\[SET_AESTHETIC:\s*(Literary|Structured|Chaos)\]/i);
         if (aestheticMatch) { const modeVal = aestheticMatch[1].trim(); updates.aestheticMode = (modeVal.charAt(0).toUpperCase() + modeVal.slice(1).toLowerCase()) as any; toastMsgs.push(`Aesthetic: ${updates.aestheticMode}`); }
         const artStyleMatch = fullText.match(/\[SET_ART_STYLE:\s*([^\]\n]+)\]/i);
@@ -3598,6 +3605,20 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
         }
       ];
 
+      const groundingIcon = (name: string, cls: string) => {
+        switch (name) {
+          case "Cpu": return <Cpu className={cls} />;
+          case "ShieldAlert": return <ShieldAlert className={cls} />;
+          case "Terminal": return <Terminal className={cls} />;
+          case "Compass": return <Compass className={cls} />;
+          case "Sparkles": return <Sparkles className={cls} />;
+          case "Zap": return <Zap className={cls} />;
+          case "Shield": return <Shield className={cls} />;
+          case "AlertTriangle": return <AlertTriangle className={cls} />;
+          default: return null;
+        }
+      };
+
       return (
         <div className="space-y-12 py-10 font-sans">
           {/* Section Header */}
@@ -3649,131 +3670,111 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
             </div>
           </button>
 
-          {/* Template Selection Grid */}
-          <div className="space-y-5">
+          {/* Template pills — expand to preview, then load into the editor */}
+          <div className="space-y-4">
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 bg-accent rounded-full" />
-              <h3 className="text-xs font-black uppercase tracking-[0.3em] text-text-main">Or start from a template <span className="text-text-dim normal-case tracking-normal font-medium">(click to load, then edit or refine with the collaborator)</span></h3>
+              <h3 className="text-xs font-black uppercase tracking-[0.3em] text-text-main">Or start from a template <span className="text-text-dim normal-case tracking-normal font-medium">(expand to preview, then load into the editor)</span></h3>
             </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              {GROUNDING_TEMPLATES.map((tpl) => (
-                <div 
-                  key={tpl.id} 
-                  className={`p-6 border rounded-2xl flex flex-col justify-between transition-all relative overflow-hidden group ${
-                    state.groundingRules === tpl.rules 
-                      ? "border-accent bg-accent/5 shadow-[0_0_20px_rgba(20,184,166,0.15)]" 
-                      : "border-border bg-card hover:border-accent/40"
-                  }`}
-                >
-                  <div className="absolute top-0 right-0 p-3 opacity-10">
-                    {tpl.icon === "Cpu" && <Cpu className="w-12 h-12" />}
-                    {tpl.icon === "ShieldAlert" && <ShieldAlert className="w-12 h-12" />}
-                    {tpl.icon === "Terminal" && <Terminal className="w-12 h-12" />}
-                    {tpl.icon === "Compass" && <Compass className="w-12 h-12" />}
-                    {tpl.icon === "Sparkles" && <Sparkles className="w-12 h-12" />}
-                    {tpl.icon === "Zap" && <Zap className="w-12 h-12" />}
-                    {tpl.icon === "Shield" && <Shield className="w-12 h-12" />}
-                    {tpl.icon === "AlertTriangle" && <AlertTriangle className="w-12 h-12" />}
-                  </div>
 
-                  <div className="space-y-3 mb-6">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 bg-header/40 border border-border rounded-lg">
-                        {tpl.icon === "Cpu" && <Cpu className="w-4 h-4 text-accent" />}
-                        {tpl.icon === "ShieldAlert" && <ShieldAlert className="w-4 h-4 text-accent" />}
-                        {tpl.icon === "Terminal" && <Terminal className="w-4 h-4 text-accent" />}
-                        {tpl.icon === "Compass" && <Compass className="w-4 h-4 text-accent" />}
-                        {tpl.icon === "Sparkles" && <Sparkles className="w-4 h-4 text-accent" />}
-                        {tpl.icon === "Zap" && <Zap className="w-4 h-4 text-accent" />}
-                        {tpl.icon === "Shield" && <Shield className="w-4 h-4 text-accent" />}
-                        {tpl.icon === "AlertTriangle" && <AlertTriangle className="w-4 h-4 text-accent" />}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {GROUNDING_TEMPLATES.map((tpl) => {
+                const active = state.groundingRules === tpl.rules;
+                return (
+                  <details key={tpl.id} className={`group/pill rounded-2xl border transition-all overflow-hidden ${active ? "border-accent bg-accent/5" : "border-border bg-card hover:border-accent/40"}`}>
+                    <summary className="cursor-pointer list-none flex items-center gap-3 p-4 select-none">
+                      <div className="p-2 bg-header/40 border border-border rounded-lg shrink-0">
+                        {groundingIcon(tpl.icon, "w-4 h-4 text-accent")}
                       </div>
-                      <div>
-                        <span className="text-[8px] font-bold uppercase tracking-widest text-accent font-mono">{tpl.genre}</span>
-                        <h4 className="text-sm font-black uppercase tracking-tight text-text-main">{tpl.title}</h4>
+                      <div className="min-w-0 flex-1">
+                        <span className="text-[8px] font-bold uppercase tracking-widest text-accent font-mono block">{tpl.genre}</span>
+                        <h4 className="text-sm font-black uppercase tracking-tight text-text-main truncate">{tpl.title}</h4>
                       </div>
+                      {active && <span className="text-[8px] font-black uppercase tracking-widest text-accent font-mono shrink-0">In use</span>}
+                      <ChevronRight className="w-4 h-4 text-text-dim shrink-0 transition-transform group-open/pill:rotate-90" />
+                    </summary>
+                    <div className="px-4 pb-4 pt-3 space-y-3 border-t border-border">
+                      <p className="text-xs text-text-dim leading-relaxed">{tpl.description}</p>
+                      <pre className="text-[11px] font-mono leading-relaxed text-text-muted bg-black/20 p-3 rounded-lg whitespace-pre-wrap max-h-48 overflow-y-auto custom-scrollbar">{tpl.rules}</pre>
+                      <button
+                        onClick={() => setState(s => ({ ...s, groundingRules: tpl.rules }))}
+                        className={`w-full py-2.5 rounded-lg border text-[9px] font-black uppercase tracking-widest transition-all ${active ? "bg-accent text-bg border-accent shadow-[0_4px_12px_rgba(20,184,166,0.3)]" : "bg-header/20 border-border text-text-muted hover:border-accent hover:text-accent hover:bg-accent/10"}`}
+                      >
+                        {active ? "✓ Loaded into editor" : "Use this template"}
+                      </button>
                     </div>
-                    <p className="text-xs text-text-dim leading-relaxed">{tpl.description}</p>
-                  </div>
-
-                  <button 
-                    onClick={() => setState(s => ({ ...s, groundingRules: tpl.rules }))}
-                    className={`w-full py-2.5 rounded-lg border text-[9px] font-black uppercase tracking-widest transition-all ${
-                      state.groundingRules === tpl.rules 
-                        ? "bg-accent text-bg border-accent shadow-[0_4px_12px_rgba(20,184,166,0.3)]" 
-                        : "bg-header/20 border-border text-text-muted hover:border-accent hover:text-accent hover:bg-accent/10"
-                    }`}
-                  >
-                    {state.groundingRules === tpl.rules ? "DEPLOYED_ACTIVE" : "DEPLOY_PROTOCOL"}
-                  </button>
-                </div>
-              ))}
+                  </details>
+                );
+              })}
             </div>
           </div>
 
-          {/* Interactive Workspace Area */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            {/* Editor Textarea */}
-            <div className="lg:col-span-2 space-y-3">
-              <div className="flex justify-between items-center px-1">
-                <div className="flex items-center gap-2">
-                  <Terminal className="w-3.5 h-3.5 text-accent" />
-                  <span className="text-[10px] font-black uppercase tracking-widest text-text-main">SYSTEM_RULES_DOC</span>
-                </div>
+          {/* Compact active-ruleset editor */}
+          <div className="space-y-3">
+            <div className="flex justify-between items-center px-1">
+              <div className="flex items-center gap-2">
+                <Terminal className="w-3.5 h-3.5 text-accent" />
+                <span className="text-[10px] font-black uppercase tracking-widest text-text-main">Active Reality Protocols</span>
+              </div>
+              <div className="flex items-center gap-4">
+                {state.groundingRules && isSyncNeeded && syncDeskstateToAI && (
+                  <button
+                    onClick={syncDeskstateToAI}
+                    className="text-[9px] font-black uppercase tracking-wider text-amber-400 hover:text-amber-300 flex items-center gap-1 animate-pulse"
+                  >
+                    ↺ Sync to collaborator
+                  </button>
+                )}
                 {state.groundingRules && (
-                  <button 
+                  <button
                     onClick={() => setState(s => ({ ...s, groundingRules: "" }))}
                     className="text-[9px] font-black uppercase tracking-wider text-red-400 hover:underline"
                   >
-                    Clear_Buffer
+                    Clear
                   </button>
                 )}
               </div>
-              
-              <div className="relative group">
-                <textarea 
-                  value={state.groundingRules}
-                  onChange={(e) => setState(s => ({ ...s, groundingRules: e.target.value }))}
-                  className="w-full h-[360px] bg-card border border-border rounded-2xl p-6 focus:border-accent focus:outline-none transition-all font-mono text-xs leading-loose custom-scrollbar shadow-inner"
-                  placeholder="[PROTOCOL_01] DO NOT introduce arbitrary magic systems into contemporary realities.
-[PROTOCOL_02] INSTEAD, build tension from real-world status structures and physical obstacles.
-
-[PROTOCOL_03] DO NOT ..."
-                />
-                <div className="absolute bottom-4 right-6 text-[8px] font-mono text-text-muted opacity-30 tracking-widest">
-                  {state.groundingRules ? `BUFFER_SIZE::${state.groundingRules.length}_CHARS` : "BUFFER::EMPTY"}
-                </div>
-              </div>
             </div>
 
-            {/* Logical Contrast Examples */}
-            <div className="bg-header/20 border border-border p-6 rounded-3xl space-y-6">
-              <div className="space-y-1">
-                <span className="text-[8px] font-bold text-accent font-mono uppercase tracking-[0.2em]">DEMONSTRATION</span>
-                <h4 className="text-xs font-black uppercase tracking-wider">Continuity Integrity</h4>
+            <div className="relative">
+              <textarea
+                value={state.groundingRules}
+                onChange={(e) => setState(s => ({ ...s, groundingRules: e.target.value }))}
+                className="w-full h-[260px] bg-card border border-border rounded-2xl p-6 focus:border-accent focus:outline-none transition-all font-mono text-xs leading-loose custom-scrollbar shadow-inner"
+                placeholder={`Click "Design your own with the collaborator" above and the AI drafts rules straight into here — or expand a template and hit "Use this".
+
+[PROTOCOL_01] DO NOT introduce arbitrary magic into a grounded setting.
+[PROTOCOL_02] INSTEAD, build tension from real-world stakes and physical obstacles.`}
+              />
+              <div className="absolute bottom-4 right-6 text-[8px] font-mono text-text-muted opacity-30 tracking-widest">
+                {state.groundingRules ? `BUFFER_SIZE::${state.groundingRules.length}_CHARS` : "BUFFER::EMPTY"}
               </div>
+            </div>
+            <p className="text-[10px] text-text-dim px-1">This is your live ruleset — the collaborator fills it when you co-design, templates load into it, and you can edit directly. Hit <span className="text-text-muted font-bold">Sync</span> when you're happy so the collaborator gets the final version.</p>
+          </div>
 
-              <div className="space-y-4">
-                {/* Improper Example */}
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2 text-red-400 text-[9px] font-bold uppercase tracking-wider">
-                    <span className="w-1.5 h-1.5 rounded-full bg-red-400" /> BROKEN (No Fences)
-                  </div>
-                  <p className="text-xs italic text-text-dim leading-relaxed bg-black/20 p-3.5 rounded-xl border border-red-500/10 font-sans">
-                    "When the space ranger runs out of ammunition, he closes his eyes, gathers the elements, and casts a solar light shield to block the oncoming turret fire."
-                  </p>
+          {/* Logical Contrast Examples (reference) */}
+          <div className="bg-header/20 border border-border p-6 rounded-3xl space-y-4">
+            <div className="space-y-1">
+              <span className="text-[8px] font-bold text-accent font-mono uppercase tracking-[0.2em]">DEMONSTRATION — WHY THIS MATTERS</span>
+              <h4 className="text-xs font-black uppercase tracking-wider">Continuity Integrity</h4>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-red-400 text-[9px] font-bold uppercase tracking-wider">
+                  <span className="w-1.5 h-1.5 rounded-full bg-red-400" /> BROKEN (No Fences)
                 </div>
-
-                {/* Grounded Example */}
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2 text-accent text-[9px] font-bold uppercase tracking-wider">
-                    <span className="w-1.5 h-1.5 rounded-full bg-accent" /> GROUNDED (Protocols Active)
-                  </div>
-                  <p className="text-xs italic text-text-muted leading-relaxed bg-black/20 p-3.5 rounded-xl border border-accent/10 font-sans">
-                    "When the space ranger runs out of ammunition, he rips the high-insulation copper coolant pipe off the generator wall to redirect superheated exhaust, steaming the hallway blind."
-                  </p>
+                <p className="text-xs italic text-text-dim leading-relaxed bg-black/20 p-3.5 rounded-xl border border-red-500/10 font-sans">
+                  "When the space ranger runs out of ammunition, he closes his eyes, gathers the elements, and casts a solar light shield to block the oncoming turret fire."
+                </p>
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-accent text-[9px] font-bold uppercase tracking-wider">
+                  <span className="w-1.5 h-1.5 rounded-full bg-accent" /> GROUNDED (Protocols Active)
                 </div>
+                <p className="text-xs italic text-text-muted leading-relaxed bg-black/20 p-3.5 rounded-xl border border-accent/10 font-sans">
+                  "When the space ranger runs out of ammunition, he rips the high-insulation copper coolant pipe off the generator wall to redirect superheated exhaust, steaming the hallway blind."
+                </p>
               </div>
             </div>
           </div>
