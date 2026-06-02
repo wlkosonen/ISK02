@@ -3973,7 +3973,7 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
         <div className="space-y-10">
           <div className="space-y-3 text-center">
             <h2 className="text-4xl font-black uppercase tracking-tighter">Persona_Matrices</h2>
-            <p className="text-text-muted font-medium text-sm max-w-xl mx-auto">Build the cast one character at a time with the collaborator. Each finished sheet — its HTML card and AI prompt description — appears here as it's captured.</p>
+            <p className="text-text-muted font-medium text-sm max-w-xl mx-auto">Build the cast one character at a time. First shape each character's narration guidance — personality, wants, speech & mannerisms, lore — with the collaborator. The user-facing HTML card comes last, once they're fully defined.</p>
           </div>
 
           {/* Primary action: construct the next character — top & centre */}
@@ -3983,10 +3983,10 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
             </div>
             <div className="space-y-1">
               <h3 className="text-sm font-black uppercase tracking-[0.3em]">Construct New Persona</h3>
-              <p className="text-xs text-text-dim max-w-sm">Have the collaborator build the next character's full sheet — Part A HTML card + Part B AI prompt description. Build and confirm one fully before the next.</p>
+              <p className="text-xs text-text-dim max-w-sm">Develop the next character's narration guidance — who they are, what they want, how they speak, their lore. The HTML card comes afterwards, once they're defined.</p>
             </div>
             <button
-              onClick={() => askAssistant(`[WORKSHOP ACTION — BUILD NEXT CHARACTER] Let's build the next character's FULL sheet together, following the injected USCS Character Sheet spec. Propose the character (or continue from the cast we've discussed), then produce BOTH parts: the Part A user-facing HTML card wrapped in <<<USCS_BLOCK CHAR_CARD: Name>>> … <<<END USCS_BLOCK>>> using my locked palette and ${state.aestheticMode} aesthetic, and the Part B AI prompt description wrapped in <<<USCS_BLOCK CHAR_DESC: Name>>> … <<<END USCS_BLOCK>>> (respect §21 caps: ≤1500 primary / ≤800 supporting). Build and confirm ONE character fully before the next.`)}
+              onClick={() => askAssistant(`[WORKSHOP ACTION — BUILD NEXT CHARACTER] Let's develop the next character's NARRATION GUIDANCE together — the substance the deployed AI needs to play them: personality, wants/goals, fears, speech & mannerisms, relationships to {{user}} and the cast, and the relevant lore — following the injected USCS Character Sheet "Part B" spec (respect §21 caps: ≤1500 tokens primary / ≤800 supporting). Propose the character (or continue from the cast we've discussed) and refine it WITH me; when it's solid, capture it as <<<USCS_BLOCK CHAR_DESC: Name>>> … <<<END USCS_BLOCK>>>. Do NOT produce the HTML card yet — we generate that separately once the character is fully defined. Build and confirm ONE character before the next.`)}
               disabled={state.isAssistantLoading}
               className="px-6 py-2 bg-accent/20 border border-accent/40 text-accent rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-accent/30 transition-all font-mono disabled:opacity-50"
             >
@@ -4008,37 +4008,50 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
                     <div className="flex justify-between items-start gap-3">
                       <h4 className="text-2xl font-black tracking-tighter uppercase min-w-0 truncate">{char.name}</h4>
                       <div className="flex gap-1.5 shrink-0">
+                        <span className={`text-[8px] font-mono font-bold uppercase tracking-widest px-2 py-1 rounded border ${char.desc ? "bg-accent/15 text-accent border-accent/30" : "bg-header text-text-dim border-border"}`}>Guidance {char.desc ? "✓" : "—"}</span>
                         <span className={`text-[8px] font-mono font-bold uppercase tracking-widest px-2 py-1 rounded border ${char.card ? "bg-accent/15 text-accent border-accent/30" : "bg-header text-text-dim border-border"}`}>Card {char.card ? "✓" : "—"}</span>
-                        <span className={`text-[8px] font-mono font-bold uppercase tracking-widest px-2 py-1 rounded border ${char.desc ? "bg-accent/15 text-accent border-accent/30" : "bg-header text-text-dim border-border"}`}>Desc {char.desc ? "✓" : "—"}</span>
                       </div>
                     </div>
 
-                    {/* Part A — real HTML card, sandboxed */}
-                    {char.card ? (
-                      <iframe
-                        title={`Character Card — ${char.name}`}
-                        sandbox=""
-                        className="w-full h-[380px] rounded-2xl border border-border"
-                        style={{ backgroundColor: state.palette[0] || "#18181b" }}
-                        srcDoc={char.card}
-                      />
+                    {/* The character itself — narration guidance (Part B), shown prominently */}
+                    {char.desc ? (
+                      <div className="space-y-1.5">
+                        <span className="text-[9px] font-black uppercase tracking-widest text-accent">Narration Guidance <span className="text-text-dim font-medium normal-case tracking-normal">— personality · wants · speech · lore</span></span>
+                        <pre className="text-[11px] font-mono leading-relaxed text-text-muted bg-header/20 border border-border rounded-xl p-4 whitespace-pre-wrap max-h-[340px] overflow-y-auto custom-scrollbar">{char.desc}</pre>
+                      </div>
                     ) : (
-                      <div className="h-[110px] rounded-2xl border border-dashed border-border flex items-center justify-center text-[9px] font-mono uppercase tracking-widest text-text-dim">No HTML card captured yet</div>
+                      <div className="rounded-xl border border-dashed border-border p-4 text-[10px] font-mono uppercase tracking-widest text-text-dim text-center">No guidance captured yet — build this character's personality, wants, speech &amp; lore in chat.</div>
                     )}
 
-                    {/* Part B — AI prompt description, expandable */}
-                    {char.desc && (
-                      <details className="group/desc rounded-xl border border-border bg-header/20">
+                    {/* The user-facing HTML card — the FINAL artifact, after the guidance */}
+                    {char.card ? (
+                      <details className="group/card rounded-xl border border-border bg-header/20">
                         <summary className="cursor-pointer list-none flex items-center gap-2 p-3 text-[10px] font-black uppercase tracking-widest text-text-muted">
-                          <ChevronRight className="w-3.5 h-3.5 transition-transform group-open/desc:rotate-90" /> AI Prompt Description (Part B)
+                          <ChevronRight className="w-3.5 h-3.5 transition-transform group-open/card:rotate-90" /> Preview HTML card
                         </summary>
-                        <pre className="px-3 pb-3 text-[11px] font-mono leading-relaxed text-text-muted whitespace-pre-wrap max-h-56 overflow-y-auto custom-scrollbar">{char.desc}</pre>
+                        <div className="p-3 pt-0">
+                          <iframe
+                            title={`Character Card — ${char.name}`}
+                            sandbox=""
+                            className="w-full h-[360px] rounded-xl border border-border"
+                            style={{ backgroundColor: state.palette[0] || "#18181b" }}
+                            srcDoc={char.card}
+                          />
+                        </div>
                       </details>
-                    )}
+                    ) : char.desc ? (
+                      <button
+                        onClick={() => askAssistant(`[WORKSHOP ACTION — CHARACTER HTML CARD] The narration guidance for "${char.name}" is defined — now produce their user-facing Part A HTML card based on it, using my locked palette and ${state.aestheticMode} aesthetic, per the injected USCS HTML spec. Emit it wrapped in <<<USCS_BLOCK CHAR_CARD: ${char.name}>>> … <<<END USCS_BLOCK>>> so it loads into the preview here. Keep only a brief note in chat.`)}
+                        disabled={state.isAssistantLoading}
+                        className="w-full py-2.5 rounded-lg border border-accent/40 bg-accent/10 text-accent text-[9px] font-black uppercase tracking-widest hover:bg-accent/20 transition-all disabled:opacity-50"
+                      >
+                        ✦ Generate HTML card →
+                      </button>
+                    ) : null}
 
-                    {/* Refine this character (replaces the dead Edit_Profile) */}
+                    {/* Refine the guidance in chat (replaces the dead Edit_Profile) */}
                     <button
-                      onClick={() => askAssistant(`[WORKSHOP ACTION — REFINE CHARACTER] Let's refine "${char.name}". Briefly note what's already in their sheet and ask what I'd like to change (or suggest improvements). When we update, re-emit the affected block — <<<USCS_BLOCK CHAR_CARD: ${char.name}>>> for the HTML card and/or <<<USCS_BLOCK CHAR_DESC: ${char.name}>>> for the AI prompt description — so the captured sheet here updates.`)}
+                      onClick={() => askAssistant(`[WORKSHOP ACTION — REFINE CHARACTER] Let's refine "${char.name}"'s narration guidance. Briefly note what's already defined and ask what I'd like to change — personality, wants, fears, speech & mannerisms, relationships, or lore. When we update, re-emit <<<USCS_BLOCK CHAR_DESC: ${char.name}>>> … <<<END USCS_BLOCK>>>${char.card ? ` (and re-emit <<<USCS_BLOCK CHAR_CARD: ${char.name}>>> only if the visible card needs to reflect the change)` : ""} so the captured sheet here updates.`)}
                       disabled={state.isAssistantLoading}
                       className="w-full py-2.5 rounded-lg border border-border text-[9px] font-black uppercase tracking-widest text-text-muted hover:border-accent hover:text-accent hover:bg-accent/10 transition-all disabled:opacity-50"
                     >
