@@ -933,7 +933,8 @@ ${STEPS.map((s, i) => `    ${i + 1}. ${s}${i === state.step ? "   ← CURRENT ST
 - Concept: ${state.concept || "Variable"}
 - Tone: ${state.tone || "Undefined"}
 - Reality Protocols / Grounding Rules:
-${state.groundingRules || "No strict rules established yet."}
+${state.groundingRules || "No strict rules established yet."}${state.groundingRules ? `
+  ⚠️ These grounding rules ALREADY EXIST in the creator's on-screen editor and ARE the World Grounding deliverable. Do NOT regenerate them, do NOT restate the full list back, and do NOT invent a separate or parallel ruleset — treat them as locked. If the creator asks to change ONE rule: reply with just that single revised rule in prose, then emit ONE [SET_RULES: <complete updated ruleset>] to update the editor. If they're satisfied, acknowledge in a sentence and signal readiness — never re-print the whole ruleset.` : ""}
 - Target Instruction-Package Budget: ~${state.tokenBudgetMin / 1000}k–${state.tokenBudgetMax / 1000}k tokens. This counts ONLY the AI instruction package (Prompt Plot + Prompt Guidelines + AI Reminders + Character AI prompt descriptions + Player Persona), per USCS §21.1. HTML cards and image/location prompts do NOT count.
   HOW TO HIT THIS BUDGET: The per-block §21 caps (Prompt Plot ≤2500, Guidelines ≤3000, Reminders ≤800, Player Persona ≤500, each character ≤1500 primary / ≤800 supporting) are HARD ceilings — NEVER inflate a block beyond its cap to reach a number. The fixed blocks total ~6,800 tokens at most; the rest of the budget comes from CAST SIZE (USCS guide: ~2 chars ≈ 8–10k, ~4 ≈ 12–15k, ~6 ≈ 16–19k) plus any optional systems. If the chosen budget cannot be met within the caps at the current number of characters, say so and suggest adjusting the cast — do not bloat individual blocks. A higher budget means a larger ensemble, not a bigger Prompt Plot.${state.budgetTierMode ? `
 - BUDGET-TIER MODE: ACTIVE (story targets free/budget models such as DeepSeek/Ministral/GLM). Apply the USCS Section 21 budget-tier optimizations throughout: use concrete state-based triggers instead of session-number pacing; require a mandatory status block at the start of every response; add a worked example for any rule that contradicts a model's default training; enforce strict document separation (facts in Plot, behavior in Guidelines, non-negotiables in Reminders — never duplicated); and follow the §21 trim-priority order if over budget.` : ""}${relaxedCaps ? `
@@ -966,6 +967,8 @@ Example use in your reply:
 [SET_PALETTE: #0C0F12, #E2E8F0, #14B8A6, #F43F5E, #E2E8F0]
 [SET_AESTHETIC: Structured]
 What do you think of this visual approach?"
+
+LARGE PAYLOADS — emit ONCE, inside the tag only: for big values (especially [SET_RULES] and [SET_CONCEPT]), put the full text ONLY inside the tag — do NOT also paste the same content as readable prose in your message. The workshop loads it straight into the on-screen editor where the creator reads and edits it; duplicating it wastes tokens and risks your reply being cut off mid-tag (an unclosed tag fails to load at all). Briefly say what you set or changed, then emit the single tag.
 
 DIAGNOSTIC WORKSHOP RESPONSE MANDATE:
 1. Actively guide and collaborate with the user *exclusively* on the deliverables for the CURRENT STEP: "${STEPS[state.step]}". Use discussion, suggestions, and drafts.
