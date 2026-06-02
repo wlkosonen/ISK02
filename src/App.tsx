@@ -835,8 +835,16 @@ export default function App() {
     if (state.concept) established.push(`Narrative Premise: "${state.concept}"`);
     else pending.push("Narrative Premise / Concept");
 
-    if (state.artStyle !== d.artStyle || state.aestheticMode !== d.aestheticMode) established.push(`Visual Art Style: ${state.artStyle} (${state.aestheticMode} approach)`);
+    const visualTouched = state.artStyle !== d.artStyle || state.aestheticMode !== d.aestheticMode;
+    if (visualTouched) established.push(`Visual Art Style: ${state.artStyle} (${state.aestheticMode} approach)`);
     else pending.push("Visual Art Style / Aesthetic");
+
+    // Image generation service is a UI dropdown (defaults to Midjourney). Convey
+    // it once the creator is engaging the visual steps (or has changed it) so the
+    // model writes image prompts in the right syntax at the Image Prompts step —
+    // we stripped the chat "which service?" ask from the Art Style build-order.
+    if (visualTouched || state.imageService !== d.imageService) established.push(`Image Generation Service: ${state.imageService} (write ALL image prompts in this service's syntax)`);
+    else pending.push("Image Generation Service");
 
     if (state.palette.join(",") !== d.palette.join(",")) established.push(`HEX Palette: [${state.palette.join(", ")}]`);
     else pending.push("Colour Palette");

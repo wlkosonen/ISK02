@@ -75,7 +75,7 @@ The verbatim USCS v6.1 specification governing the CURRENT step follows below. T
 // it on the UI. We strip ONLY those offer/ask lines from the injected text; all
 // Dungeon Mind mechanics and sections remain fully intact.
 const TRACK_OFFER_LINE_RES: RegExp[] = [
-  /ALSO OFFER/i,
+  /^\s*ALSO OFFER/i,   // anchored: the directive header only, NOT a mid-sentence "also offer:" (e.g. STEP 4's image-analysis line)
   /Are you building a full story/i,
   /If DM-only\s*:/i,
   /ALTERNATE ENTRY POINT\s*[—–-]\s*DUNGEON MIND ONLY/i,
@@ -86,6 +86,68 @@ function stripTrackOffer(text: string): string {
     .split(/\r?\n/)
     .filter(line => !TRACK_OFFER_LINE_RES.some(re => re.test(line)))
     .join("\n");
+}
+
+// The Concept Intake build-order block (Section 2, STEP 2) tells the AI to also
+// ask "What is the setting?" and "What tone are they going for?" — but in
+// Aether_Core both have DEDICATED later UI steps (Setting & Tone). The framework
+// intends a light premise-capture at intake and a hard lock at Step 3; here that
+// reads as the model jumping ahead with a redundant questionnaire (it even says
+// "we'll lock this later" while asking). We strip ONLY those two solicitation
+// lines from the Concept Intake step text — STEP-SCOPED, so Step 3 keeps them.
+// Hook / characters / cast-size / entry points / emotional archetype stay (cast
+// size legitimately belongs here — it sizes the token budget + sheet count).
+const CONCEPT_FORWARD_ASK_RES: RegExp[] = [
+  /What is the setting\?/i,
+  /What tone are they going for/i,
+];
+function stripConceptForwardAsks(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .filter(line => !CONCEPT_FORWARD_ASK_RES.some(re => re.test(line)))
+    .join("\n");
+}
+
+// Step-scoped PARAGRAPH strips: drop whole blank-line-delimited blocks whose
+// first non-empty line matches. Same "don't solicit things owned by a dedicated
+// UI control or a later step" rationale as the setting/tone strip — these blocks
+// of build-order text instruct the model to ask about choices the creator
+// already makes via on-screen controls, or that belong to much later steps.
+const STEP_PARAGRAPH_STRIPS: Record<number, RegExp[]> = {
+  // Art Style Profile (uiStep 3): Aesthetic Mode and Image Generation Service
+  // are both UI controls ON this step (button toggle + dropdown), so asking in
+  // chat is redundant and reads as jumping ahead. Reference-image upload is not
+  // supported in this app at all, so drop those offers entirely rather than
+  // dangle a capability that doesn't exist. (imageService value is carried to
+  // the model via the deskstate sync instead — see App.tsx syncDeskstateToAI.)
+  3: [
+    /^ALSO:\s*Ask about Aesthetic Mode/i,
+    /^IMAGE GENERATION SERVICE:/i,
+    /^HTML VISUAL REFERENCE OPTION:/i,
+    /^If the AI model is capable of image analysis/i,
+  ],
+  // Title & Summary (uiStep 6): the 20-word CHARACTER summaries are written with
+  // the Character Sheets (uiStep 8, two steps later in the v6.0 reorder); asking
+  // for them here means summarising characters that don't exist yet. Section 10
+  // (injected at Character Sheets) carries the 20-word-summary rule there.
+  6: [
+    /^CHARACTER SUMMARIES/i,
+  ],
+  // Plot Card (uiStep 7): premature character-image-URL solicitation — images are
+  // produced ~7 steps later (Image Prompts) and there's no image-upload path here.
+  7: [
+    /^IMAGE PLACEMENT NOTE:/i,
+  ],
+};
+function stripParagraphs(text: string, startRes: RegExp[]): string {
+  if (!startRes.length) return text;
+  return text
+    .split(/\n[ \t]*\n/)
+    .filter(p => {
+      const first = (p.split(/\r?\n/).find(l => l.trim().length > 0) || "").trim();
+      return !startRes.some(re => re.test(first));
+    })
+    .join("\n\n");
 }
 
 interface ParsedDoc {
@@ -242,7 +304,12 @@ export function buildStepContext(uiStep: number): string {
   const parts: string[] = [CORE_PREAMBLE];
 
   const stepIds = STEP_BLOCKS[uiStep] || [];
-  const stepText = stripTrackOffer(stepIds.map(id => doc.steps.get(id)).filter(Boolean).join("\n\n")).trim();
+  let stepText = stripTrackOffer(stepIds.map(id => doc.steps.get(id)).filter(Boolean).join("\n\n")).trim();
+  // Concept Intake (uiStep 1): also drop the setting/tone solicitation — they
+  // have dedicated later UI steps, so asking here reads as jumping ahead.
+  if (uiStep === 1) stepText = stripConceptForwardAsks(stepText).trim();
+  // Other step-scoped paragraph strips (redundant-with-UI / later-step asks).
+  if (STEP_PARAGRAPH_STRIPS[uiStep]) stepText = stripParagraphs(stepText, STEP_PARAGRAPH_STRIPS[uiStep]).trim();
   if (stepText) {
     parts.push(
       "================================================================================\n" +
