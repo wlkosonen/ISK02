@@ -40,10 +40,10 @@ const STEP_BLOCKS: Record<number, string[]> = {
 // UI step index -> verbatim detail SECTION id(s) the step depends on.
 const DETAIL_SECTIONS: Record<number, string[]> = {
   0: ["3-modes", "4"],      // modes + heat (NOT setting types) + compliance
-  1: ["22", "3-settings"],  // emotional architecture (§22.4) + setting types
+  1: ["22"],                // emotional architecture (§22.4) ONLY — setting types belong to Step 2, injecting them here makes weak models present the setting menu prematurely
   2: ["3-settings"],        // setting types / mode lock
-  3: ["12"],                // image gen & art style profiles
-  4: ["5"],                 // HTML reference (palette / card visual identity)
+  3: ["12-style"],          // art style PROFILE only (NOT image-prompt syntax — that's Step 14; split avoids weak models emitting render syntax early)
+  4: ["5-palette"],         // palette/visual-identity tail of Section 5 only (NOT full card-construction reference — that's Step 7; split saves ~1k tokens/turn + avoids early card drafting)
   5: ["15", "3-settings"],  // naming protocol + world grounding setting rules
   6: [],                    // title/summary — build-order block is sufficient
   7: ["16", "5"],           // plot card templates + HTML reference
@@ -156,6 +156,66 @@ function load(): ParsedDoc {
         } else {
           sections.set("3-modes", sec3);
           sections.set("3-settings", sec3);
+        }
+      }
+    }
+
+    // Section 12 ("IMAGE GENERATION PROMPTS & ART STYLE PROFILES") bundles two
+    // steps' worth of content: a short "Art Style Statement" definition (relevant
+    // at the Art Style Profile step) and the full per-service image-prompt syntax
+    // (MidJourney/SD/NovelAI/DALL-E/Flux + per-character prompt briefs) which is
+    // the LATER Image Prompts step's job. Injecting the whole thing at Art Style
+    // made weak models start emitting render syntax / quizzing on aspect ratios.
+    // Register a virtual "12-style" = just the Art Style Statement block. The full
+    // "12" stays for the Image Prompts step. Falls back to full section if the
+    // seam headers can't be found (doc edited).
+    {
+      const sec12 = sections.get("12");
+      if (sec12) {
+        const l12 = sec12.split(/\r?\n/);
+        const startIdx = l12.findIndex(l => /^ART STYLE STATEMENT/i.test(l.trim()));
+        const endIdx = l12.findIndex(l => /^PER-SERVICE SYNTAX RULES/i.test(l.trim()));
+        if (startIdx >= 0 && endIdx > startIdx) {
+          const styleBlock = l12.slice(startIdx, endIdx).join("\n").trim();
+          sections.set(
+            "12-style",
+            "================================================================================\n" +
+            "USCS v6.1 — SECTION 12 (ART STYLE PROFILE: THE ART STYLE STATEMENT)\n" +
+            "================================================================================\n" +
+            styleBlock
+          );
+        } else {
+          sections.set("12-style", sec12);
+        }
+      }
+    }
+
+    // Section 5 ("HTML REFERENCE") is ~1,200 lines of plot/character card
+    // construction (rules, build patterns 1-9/A-F, card structure) plus a tail
+    // covering aesthetic modes, typography and the colour/palette rules. Only the
+    // tail is relevant at the Palette & Identity step; the card-construction bulk
+    // belongs to the later Plot Card / Character Sheet steps (and is a heavy token
+    // cost on every palette turn). Register a virtual "5-palette" = the tail from
+    // the "5.12 — AESTHETIC MODES" header to the end of section 5. The full "5"
+    // stays for the Plot Card step. Falls back to full section if seam not found.
+    {
+      const sec5 = sections.get("5");
+      if (sec5) {
+        const l5 = sec5.split(/\r?\n/);
+        const idx = l5.findIndex(l => /^5\.12\s*[—–-]\s*AESTHETIC MODES/i.test(l.trim()));
+        if (idx > 0) {
+          let headStart = idx;
+          while (headStart > 0 && /^[=\s]*$/.test(l5[headStart - 1])) headStart--;
+          const tail = l5.slice(headStart).join("\n").trim();
+          sections.set(
+            "5-palette",
+            "================================================================================\n" +
+            "USCS v6.1 — SECTION 5 (PALETTE & VISUAL IDENTITY EXCERPT: AESTHETIC MODES, TYPOGRAPHY, COLOUR & PALETTE RULES)\n" +
+            "================================================================================\n" +
+            tail
+          );
+        } else {
+          sections.set("5-palette", sec5);
         }
       }
     }
