@@ -254,7 +254,7 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 
 // Version of THIS app (the Aether_Core tool), distinct from the USCS framework
 // version it implements. Bump this when you ship changes.
-const APP_VERSION = "0.5.0";
+const APP_VERSION = "0.6.0";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
 const USCS_VERSION = "6.1";
 
@@ -450,6 +450,7 @@ function downloadTextFile(filename: string, content: string) {
 export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const [showVersionHistory, setShowVersionHistory] = useState(false);
   const [showRestoreNotice, setShowRestoreNotice] = useState(SESSION_RESTORED);
   const [favourites, setFavourites] = useState<Record<string, string[]>>(loadFavourites);
 
@@ -1748,6 +1749,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
           </button>
           <div className="hidden md:flex gap-6 uppercase tracking-widest font-bold text-[9px] text-text-dim">
             <span>VERSION {APP_VERSION}</span>
+            <button onClick={() => setShowVersionHistory(true)} className="text-accent hover:text-white uppercase tracking-widest transition-colors">History</button>
           </div>
         </div>
         
@@ -2137,6 +2139,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
       {/* Help / How-To */}
       <AnimatePresence>
         {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
+        {showVersionHistory && <VersionHistoryModal onClose={() => setShowVersionHistory(false)} />}
       </AnimatePresence>
 
       {/* Real-time sync notifications */}
@@ -2522,6 +2525,80 @@ function MainInterfaceChat({ state, askAssistant, preview, isSyncNeeded, syncDes
           <ChatInput onSend={askAssistant} isLoading={state.isAssistantLoading} variant="large" />
         </div>
       </div>
+    </div>
+  );
+}
+
+function VersionHistoryModal({ onClose }: { onClose: () => void }) {
+  const releases: { v: string; title: string; items: string[] }[] = [
+    {
+      v: "0.6.0", title: "Workflow restructuring & ISK0 alignment",
+      items: [
+        "World Grounding redesigned — expandable template pills + one live editor; robust rule parser.",
+        "Character Sheets rebuilt around the narration guidance first, HTML card last; shows the real captured cast.",
+        "\"Scenarios\" step renamed \"Scenario & System Planning\" with a clear ISK0 field-destination map.",
+        "Guidelines & Reminders gained one-click \"assemble\" triggers.",
+        "First Messages are now tracked and counted toward the token budget.",
+        "Telemetry rebuilt as an ISK0-style Token Summary with §21 cap warnings + one-click \"tighten to cap\".",
+        "Advance button now also flashes on plain-language completion; UI polish across scrollbars, resize handle, responsive cards.",
+      ],
+    },
+    {
+      v: "0.5.0", title: "Streaming, caching & live previews",
+      items: [
+        "AI responses stream in live across all four providers.",
+        "Anthropic prompt caching + a per-message cache chip.",
+        "Live sandboxed HTML preview of the Plot Card with palette iteration.",
+        "Many prompt fixes to stop weaker models jumping ahead.",
+      ],
+    },
+    {
+      v: "0.3.0", title: "Public launch & security",
+      items: [
+        "Deployed live on Render (bring-your-own-key).",
+        "Security hardening pass; in-chat Retry for failed / rate-limited sends.",
+      ],
+    },
+    {
+      v: "0.2.0", title: "Core workshop",
+      items: [
+        "Per-step USCS v6.1 loader; four AI providers; structured deliverable capture.",
+        "Token-budget tracking and multi-part export.",
+      ],
+    },
+  ];
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
+      <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }} className="relative w-full max-w-lg max-h-[88vh] flex flex-col bg-header border border-border rounded-3xl shadow-2xl overflow-hidden">
+        <div className="absolute top-0 left-0 w-full h-1 bg-accent" />
+        <div className="flex justify-between items-start p-8 pb-4 shrink-0">
+          <div className="space-y-1 text-left">
+            <h2 className="text-xl font-black uppercase tracking-tighter flex items-center gap-2"><Zap className="w-5 h-5 text-accent" /> Version History</h2>
+            <p className="text-[10px] text-label font-bold uppercase tracking-widest">Aether_Core · currently v{APP_VERSION}</p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-white/5 rounded-lg text-label hover:text-white transition-all">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="px-8 pb-8 overflow-y-auto custom-scrollbar space-y-6 text-left">
+          {releases.map((r) => (
+            <section key={r.v} className="space-y-2">
+              <div className="flex items-baseline gap-2">
+                <span className="text-sm font-black text-accent font-mono">v{r.v}</span>
+                <span className="text-xs font-bold text-text-main uppercase tracking-wide">{r.title}</span>
+              </div>
+              <ul className="space-y-1.5 text-[13px] text-text-muted leading-relaxed">
+                {r.items.map((it, i) => <li key={i} className="flex gap-2"><span className="text-accent shrink-0">•</span><span>{it}</span></li>)}
+              </ul>
+            </section>
+          ))}
+        </div>
+        <div className="px-8 py-4 border-t border-border shrink-0 flex justify-end">
+          <button onClick={onClose} className="px-8 py-2.5 bg-accent text-black rounded-lg text-xs font-black uppercase tracking-[0.2em] hover:bg-white transition-all">Got it</button>
+        </div>
+      </motion.div>
     </div>
   );
 }
