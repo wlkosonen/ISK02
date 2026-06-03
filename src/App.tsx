@@ -34,7 +34,9 @@ import {
   RefreshCw,
   Eye,
   EyeOff,
-  Star
+  Star,
+  Copy,
+  Check
 } from "lucide-react";
 
 // --- Types ---
@@ -245,7 +247,7 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 
 // Version of THIS app (the Aether_Core tool), distinct from the USCS framework
 // version it implements. Bump this when you ship changes.
-const APP_VERSION = "0.6.1";
+const APP_VERSION = "0.6.2";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
 const USCS_VERSION = "6.1";
 
@@ -2501,6 +2503,13 @@ function MainInterfaceChat({ state, askAssistant, preview, isSyncNeeded, syncDes
 function VersionHistoryModal({ onClose }: { onClose: () => void }) {
   const releases: { v: string; title: string; items: string[] }[] = [
     {
+      v: "0.6.2", title: "One-click copy for deliverables",
+      items: [
+        "Every row in the Token Summary now has a small copy icon — grab a single block (Prompt Plot, Guidelines, a character, etc.) to clipboard without a full export.",
+        "Preview panels gained \"Copy HTML\" / copy buttons: Plot Card, character cards, Guidelines and Reminders — handy for testing a piece in a playroom or sharing on Discord mid-session.",
+      ],
+    },
+    {
       v: "0.6.1", title: "Custom-limit fix & chat cleanup",
       items: [
         "Custom section-limit fields now accept typed numbers freely (the floor only applies when you leave the field) — previously a keystroke snapped the value to the minimum.",
@@ -2699,6 +2708,53 @@ function HelpModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+// Tiny copy-to-clipboard control with a brief "copied" confirmation. Used to
+// grab an individual deliverable (raw text or HTML) mid-session without running
+// a full package export. `variant="icon"` is the compact Token-Summary form;
+// `variant="button"` is the labelled form used in preview panels.
+function CopyButton({ text, label = "Copy", title, variant = "icon" }: { text: string; label?: string; title?: string; variant?: "icon" | "button" }) {
+  const [copied, setCopied] = useState(false);
+  const doCopy = async () => {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // Fallback for non-secure contexts / older browsers
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); } catch { /* give up silently */ }
+      document.body.removeChild(ta);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1400);
+  };
+  if (variant === "button") {
+    return (
+      <button
+        onClick={doCopy}
+        title={title || "Copy to clipboard"}
+        className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-border bg-bg hover:border-accent text-[10px] font-black uppercase tracking-widest text-text-muted hover:text-accent transition-all active:scale-95"
+      >
+        {copied ? <Check className="w-3 h-3 text-[#10b981]" /> : <Copy className="w-3 h-3" />}
+        {copied ? "Copied" : label}
+      </button>
+    );
+  }
+  return (
+    <button
+      onClick={doCopy}
+      title={title || "Copy this block to clipboard"}
+      className="shrink-0 p-0.5 rounded text-text-dim hover:text-accent transition-colors"
+    >
+      {copied ? <Check className="w-3 h-3 text-[#10b981]" /> : <Copy className="w-3 h-3" />}
+    </button>
+  );
+}
+
 function StatusMonitor({ state, onTighten }: { state: StoryState; onTighten?: (p: string) => void }) {
   // Counts ONLY the captured §21.1 package blocks (Prompt Plot + Guidelines +
   // Reminders + Player Persona + each character's AI description) — not workshop
@@ -2728,8 +2784,11 @@ function StatusMonitor({ state, onTighten }: { state: StoryState; onTighten?: (p
             {opts?.sub && <span className="text-[8px] text-text-dim uppercase tracking-wide shrink-0">{opts.sub}</span>}
             {over && <span className="text-[8px] text-[#f43f5e] font-black uppercase shrink-0">over cap</span>}
           </span>
-          <span className={`font-mono shrink-0 ${over ? "text-[#f43f5e] font-bold" : content ? "text-text-main" : "text-text-dim"}`}>
-            {content ? `${fmtN(t)}${cap ? ` / ${fmtN(cap)}` : ""}` : "—"}
+          <span className="flex items-center gap-1.5 shrink-0">
+            <span className={`font-mono ${over ? "text-[#f43f5e] font-bold" : content ? "text-text-main" : "text-text-dim"}`}>
+              {content ? `${fmtN(t)}${cap ? ` / ${fmtN(cap)}` : ""}` : "—"}
+            </span>
+            {content && <CopyButton text={content} title={`Copy ${label} to clipboard`} />}
           </span>
         </div>
         {over && onTighten && opts?.type && (
@@ -3901,7 +3960,10 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
                 <div className="space-y-2">
                   <div className="flex items-center justify-between px-1">
                     <span className="text-[10px] font-black uppercase tracking-widest text-accent flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5" /> Live Plot Card — captured HTML</span>
-                    <span className="text-[8px] font-mono text-text-dim uppercase tracking-widest">sandboxed · scripts off</span>
+                    <div className="flex items-center gap-2.5">
+                      <span className="text-[8px] font-mono text-text-dim uppercase tracking-widest">sandboxed · scripts off</span>
+                      <CopyButton variant="button" label="Copy HTML" text={state.deliverables.plotCard} title="Copy the raw Plot Card HTML (paste into a playroom or test render)" />
+                    </div>
                   </div>
                   <iframe
                     title="Plot Card Preview"
@@ -4076,7 +4138,10 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
                     {/* The character itself — narration guidance (Part B), shown prominently */}
                     {char.desc ? (
                       <div className="space-y-1.5">
-                        <span className="text-[9px] font-black uppercase tracking-widest text-accent">Narration Guidance <span className="text-text-dim font-medium normal-case tracking-normal">— personality · wants · speech · lore</span></span>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[9px] font-black uppercase tracking-widest text-accent">Narration Guidance <span className="text-text-dim font-medium normal-case tracking-normal">— personality · wants · speech · lore</span></span>
+                          <CopyButton text={char.desc} title={`Copy ${char.name}'s narration guidance`} />
+                        </div>
                         <pre className="text-[11px] font-mono leading-relaxed text-text-muted bg-header/20 border border-border rounded-xl p-4 whitespace-pre-wrap max-h-[340px] overflow-y-auto custom-scrollbar">{char.desc}</pre>
                       </div>
                     ) : (
@@ -4086,8 +4151,11 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
                     {/* The user-facing HTML card — the FINAL artifact, after the guidance */}
                     {char.card ? (
                       <details className="group/card rounded-xl border border-border bg-header/20">
-                        <summary className="cursor-pointer list-none flex items-center gap-2 p-3 text-[10px] font-black uppercase tracking-widest text-text-muted">
-                          <ChevronRight className="w-3.5 h-3.5 transition-transform group-open/card:rotate-90" /> Preview HTML card
+                        <summary className="cursor-pointer list-none flex items-center justify-between gap-2 p-3 text-[10px] font-black uppercase tracking-widest text-text-muted">
+                          <span className="flex items-center gap-2"><ChevronRight className="w-3.5 h-3.5 transition-transform group-open/card:rotate-90" /> Preview HTML card</span>
+                          <span onClick={(e) => e.preventDefault()}>
+                            <CopyButton variant="button" label="Copy HTML" text={char.card} title={`Copy ${char.name}'s card HTML`} />
+                          </span>
                         </summary>
                         <div className="p-3 pt-0">
                           <iframe
@@ -4306,7 +4374,10 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
 
           {state.deliverables.guidelines && (
             <div className="space-y-2">
-              <span className="text-[10px] font-black uppercase tracking-widest text-accent flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5" /> Captured Guidelines — your assembled output</span>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] font-black uppercase tracking-widest text-accent flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5" /> Captured Guidelines — your assembled output</span>
+                <CopyButton variant="button" text={state.deliverables.guidelines} title="Copy the Guidelines block to clipboard" />
+              </div>
               <pre className="text-[11px] font-mono leading-relaxed text-text-muted bg-header/20 border border-border rounded-2xl p-5 whitespace-pre-wrap max-h-[420px] overflow-y-auto custom-scrollbar">{state.deliverables.guidelines}</pre>
             </div>
           )}
@@ -4401,7 +4472,10 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
 
           {state.deliverables.reminders && (
             <div className="space-y-2">
-              <span className="text-[10px] font-black uppercase tracking-widest text-accent flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5" /> Captured Reminders — your assembled output</span>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] font-black uppercase tracking-widest text-accent flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5" /> Captured Reminders — your assembled output</span>
+                <CopyButton variant="button" text={state.deliverables.reminders} title="Copy the Reminders block to clipboard" />
+              </div>
               <pre className="text-[11px] font-mono leading-relaxed text-text-muted bg-header/20 border border-border rounded-2xl p-5 whitespace-pre-wrap max-h-[360px] overflow-y-auto custom-scrollbar">{state.deliverables.reminders}</pre>
             </div>
           )}
