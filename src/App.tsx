@@ -99,6 +99,10 @@ const EMPTY_DELIVERABLES: Deliverables = {
   reminders: "", playerPersona: "", scenarios: "", imagePrompts: "", characters: [], firstMessages: []
 };
 
+// §21 base per-section token caps (defaults). A creator-set custom limit overrides
+// the default for that block; null = use the default.
+const SECTION_CAPS = { promptPlot: 2500, guidelines: 3000, reminders: 800, characters: 1500 } as const;
+
 // Single-value slots that can be captured manually from a chat message (fallback
 // for when the AI forgets the sentinels). Character blocks rely on AI tagging.
 type SingleSlotKey = "titleSummary" | "plotCard" | "promptPlot" | "guidelines" | "reminders" | "playerPersona" | "scenarios" | "imagePrompts";
@@ -133,7 +137,7 @@ interface StoryState {
   budgetTierMode: boolean;
   // Per-component overrides: relax the §21 cap for these blocks (richer output),
   // while the 20k total platform ceiling still holds.
-  capOverrides: { promptPlot: boolean; guidelines: boolean; reminders: boolean; characters: boolean };
+  customLimits: { promptPlot: number | null; guidelines: number | null; reminders: number | null; characters: number | null };
   leanGuidelines: boolean;   // Guidelines step "Compact mode" — assemble a leaner rule set
   deliverables: Deliverables;
   assistantHistory: Message[];
@@ -293,7 +297,7 @@ const DEFAULT_STATE: StoryState = {
   tokenBudgetMin: 7000,
   tokenBudgetMax: 10000,
   budgetTierMode: false,
-  capOverrides: { promptPlot: false, guidelines: false, reminders: false, characters: false },
+  customLimits: { promptPlot: null, guidelines: null, reminders: null, characters: null },
   leanGuidelines: false,
   deliverables: EMPTY_DELIVERABLES,
   assistantHistory: [],
@@ -331,7 +335,7 @@ function loadInitialState(): StoryState {
         isAssistantLoading: false,
         modelSettings: { ...DEFAULT_STATE.modelSettings, ...(parsed.modelSettings || {}) },
         deliverables: { ...EMPTY_DELIVERABLES, ...(parsed.deliverables || {}) },
-        capOverrides: { ...DEFAULT_STATE.capOverrides, ...(parsed.capOverrides || {}) },
+        customLimits: { ...DEFAULT_STATE.customLimits, ...(parsed.customLimits || {}) },
       };
     }
   } catch (err) {
@@ -504,7 +508,7 @@ export default function App() {
     tokenBudgetMin: 7000,
     tokenBudgetMax: 10000,
     budgetTierMode: false,
-    capOverrides: { promptPlot: false, guidelines: false, reminders: false, characters: false },
+    customLimits: { promptPlot: null, guidelines: null, reminders: null, characters: null },
     step: 0
   });
 
@@ -780,7 +784,7 @@ export default function App() {
     state.tokenBudgetMin !== lastSyncedState.tokenBudgetMin ||
     state.tokenBudgetMax !== lastSyncedState.tokenBudgetMax ||
     state.budgetTierMode !== lastSyncedState.budgetTierMode ||
-    JSON.stringify(state.capOverrides) !== JSON.stringify(lastSyncedState.capOverrides) ||
+    JSON.stringify(state.customLimits) !== JSON.stringify(lastSyncedState.customLimits) ||
     state.step !== lastSyncedState.step;
 
   // Editing a deskstate field after the AI marked the step complete invalidates
@@ -805,7 +809,7 @@ export default function App() {
     if (state.summary !== lastSyncedState.summary) updatedFields.push(`Narrative Summary modified`);
     if (state.tokenBudgetMin !== lastSyncedState.tokenBudgetMin || state.tokenBudgetMax !== lastSyncedState.tokenBudgetMax) updatedFields.push(`Token Budget: ~${state.tokenBudgetMin / 1000}k–${state.tokenBudgetMax / 1000}k`);
     if (state.budgetTierMode !== lastSyncedState.budgetTierMode) updatedFields.push(`Budget-Tier Mode: ${state.budgetTierMode ? "ON" : "OFF"}`);
-    if (JSON.stringify(state.capOverrides) !== JSON.stringify(lastSyncedState.capOverrides)) updatedFields.push(`§21 cap overrides changed`);
+    if (JSON.stringify(state.customLimits) !== JSON.stringify(lastSyncedState.customLimits)) updatedFields.push(`Custom section limits changed`);
     if (state.step !== lastSyncedState.step) updatedFields.push(`Moved to Step: ${state.step + 1} (${STEPS[state.step]})`);
 
     setLastSyncedState({
@@ -824,7 +828,7 @@ export default function App() {
       tokenBudgetMin: state.tokenBudgetMin,
       tokenBudgetMax: state.tokenBudgetMax,
       budgetTierMode: state.budgetTierMode,
-      capOverrides: { ...state.capOverrides },
+      customLimits: { ...state.customLimits },
       step: state.step
     });
 
@@ -911,12 +915,12 @@ Acknowledge the established parameters, leave everything under NOT YET DECIDED u
     // error bubble are NOT replayed to the model.
     const requestHistory = requestHistoryOverride ?? state.assistantHistory;
 
-    const co = state.capOverrides;
-    const relaxedCaps = [
-      co.promptPlot && "Prompt Plot",
-      co.guidelines && "Guidelines",
-      co.reminders && "Reminders",
-      co.characters && "Character sheets",
+    const cl = state.customLimits;
+    const customLimitLines = [
+      cl.promptPlot != null && `Prompt Plot ≤${cl.promptPlot}`,
+      cl.guidelines != null && `Guidelines ≤${cl.guidelines}`,
+      cl.reminders != null && `Reminders ≤${cl.reminders}`,
+      cl.characters != null && `each character ≤${cl.characters}`,
     ].filter(Boolean).join(", ");
     // 1. Immediately update UI with user message and loading state
     const userMessage: Message = { role: "user", content: prompt };
@@ -958,8 +962,8 @@ ${state.groundingRules || "No strict rules established yet."}${state.groundingRu
   ⚠️ These grounding rules ALREADY EXIST in the creator's on-screen editor and ARE the World Grounding deliverable. Do NOT regenerate them, do NOT restate the full list back, and do NOT invent a separate or parallel ruleset — treat them as locked. If the creator asks to change ONE rule: reply with just that single revised rule in prose, then emit ONE [SET_RULES: <complete updated ruleset>] to update the editor. If they're satisfied, acknowledge in a sentence and signal readiness — never re-print the whole ruleset.` : ""}
 - Target Instruction-Package Budget: ~${state.tokenBudgetMin / 1000}k–${state.tokenBudgetMax / 1000}k tokens. This counts ONLY the AI instruction package (Prompt Plot + Prompt Guidelines + AI Reminders + Character AI prompt descriptions + Player Persona), per USCS §21.1. HTML cards and image/location prompts do NOT count.
   HOW TO HIT THIS BUDGET: The per-block §21 caps (Prompt Plot ≤2500, Guidelines ≤3000, Reminders ≤800, Player Persona ≤500, each character ≤1500 primary / ≤800 supporting) are HARD ceilings — NEVER inflate a block beyond its cap to reach a number. The fixed blocks total ~6,800 tokens at most; the rest of the budget comes from CAST SIZE (USCS guide: ~2 chars ≈ 8–10k, ~4 ≈ 12–15k, ~6 ≈ 16–19k) plus any optional systems. If the chosen budget cannot be met within the caps at the current number of characters, say so and suggest adjusting the cast — do not bloat individual blocks. A higher budget means a larger ensemble, not a bigger Prompt Plot.${state.budgetTierMode ? `
-- BUDGET-TIER MODE: ACTIVE (story targets free/budget models such as DeepSeek/Ministral/GLM). Apply the USCS Section 21 budget-tier optimizations throughout: use concrete state-based triggers instead of session-number pacing; require a mandatory status block at the start of every response; add a worked example for any rule that contradicts a model's default training; enforce strict document separation (facts in Plot, behavior in Guidelines, non-negotiables in Reminders — never duplicated); and follow the §21 trim-priority order if over budget.` : ""}${relaxedCaps ? `
-- §21 CAP OVERRIDE (creator-set): This OVERRIDES the "never inflate a block" rule above, but ONLY for these components: ${relaxedCaps}. For these you MAY exceed the standard §21 per-component cap to deliver richer, more detailed content. ALL OTHER components keep their §21 caps. The 20,000-token TOTAL platform ceiling is still a HARD limit — never exceed it; if the richer overridden blocks push the total up, trim lower-priority NON-overridden content first (§21 trim order). Reminder: a larger Prompt Plot or Guidelines costs tokens on EVERY turn of the deployed story, so spend that allowance deliberately.` : ""}
+- BUDGET-TIER MODE: ACTIVE (story targets free/budget models such as DeepSeek/Ministral/GLM). Apply the USCS Section 21 budget-tier optimizations throughout: use concrete state-based triggers instead of session-number pacing; require a mandatory status block at the start of every response; add a worked example for any rule that contradicts a model's default training; enforce strict document separation (facts in Plot, behavior in Guidelines, non-negotiables in Reminders — never duplicated); and follow the §21 trim-priority order if over budget.` : ""}${customLimitLines ? `
+- CREATOR-SET SECTION LIMITS (override the standard §21 caps for these blocks): ${customLimitLines}. Treat each as that block's target ceiling instead of the default. If a limit is LOWER than the default, produce a leaner block — fewer rules, condensed detail — to fit it. If HIGHER, you MAY add richer, more detailed content. All other blocks keep their §21 defaults. The 20,000-token TOTAL platform ceiling still applies — never exceed it. Reminder: a larger Prompt Plot or Guidelines costs tokens on EVERY turn of the deployed story.` : ""}
 ${STEP_MANDATES[state.step] ? `
 ================================================================================
 MANDATORY OUTPUT CHECKLIST FOR THIS STEP — DO NOT ABBREVIATE OR SKIP
@@ -1372,7 +1376,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
       palette: ["#1a1a24", "#f8f8f8", "#14b8a6", "#f43f5e", "#fbbf24"],
       aestheticMode: "Structured", groundingRules: "", title: "", summary: "",
       tokenBudgetMin: 7000, tokenBudgetMax: 10000, budgetTierMode: false,
-      capOverrides: { promptPlot: false, guidelines: false, reminders: false, characters: false },
+      customLimits: { promptPlot: null, guidelines: null, reminders: null, characters: null },
       step: 0
     });
     setResponseTruncated(false);
@@ -2739,15 +2743,12 @@ function StatusMonitor({ state, onTighten }: { state: StoryState; onTighten?: (p
   const fmtN = (n: number) => n.toLocaleString();
   // One token row. cap=null → no cap shown/flagged. opts.type enables a
   // "Tighten to cap" action (re-emits that block compressed) when over.
-  // One token row. `cap` is the §21 BASE cap (null = uncapped block like first
-  // messages). opts.overridden = the creator turned the §21 override ON for this
-  // block: we still SHOW the base cap as a reference (amber "uncapped") so the
-  // size context isn't hidden — but no "over cap" alarm or Tighten button.
-  const tokRow = (key: string, label: string, content: string, cap: number | null, opts?: { sub?: string; type?: string; name?: string; overridden?: boolean }) => {
+  // One token row. `cap` = the EFFECTIVE limit for this block (the creator's
+  // custom limit if set, else the §21 default; null = uncapped, e.g. first
+  // messages). Over the limit → red "over cap" + a Tighten action.
+  const tokRow = (key: string, label: string, content: string, cap: number | null, opts?: { sub?: string; type?: string; name?: string }) => {
     const t = content ? estimateTokens(content) : 0;
-    const overridden = !!opts?.overridden;
-    const over = !!(cap && !overridden && t > cap);     // hard over-cap → alarm + Tighten
-    const overBase = !!(cap && overridden && content && t > cap); // uncapped but past base → amber number
+    const over = !!(cap && t > cap);
     return (
       <div key={key}>
         <div className="flex items-center justify-between py-1">
@@ -2756,9 +2757,8 @@ function StatusMonitor({ state, onTighten }: { state: StoryState; onTighten?: (p
             <span className={`truncate ${content ? "text-text-main" : "text-text-muted"}`}>{label}</span>
             {opts?.sub && <span className="text-[8px] text-text-dim uppercase tracking-wide shrink-0">{opts.sub}</span>}
             {over && <span className="text-[8px] text-[#f43f5e] font-black uppercase shrink-0">over cap</span>}
-            {overridden && content && <span className="text-[8px] text-[#fbbf24]/80 font-bold uppercase tracking-wide shrink-0">uncapped</span>}
           </span>
-          <span className={`font-mono shrink-0 ${over ? "text-[#f43f5e] font-bold" : overBase ? "text-[#fbbf24]" : content ? "text-text-main" : "text-text-dim"}`}>
+          <span className={`font-mono shrink-0 ${over ? "text-[#f43f5e] font-bold" : content ? "text-text-main" : "text-text-dim"}`}>
             {content ? `${fmtN(t)}${cap ? ` / ${fmtN(cap)}` : ""}` : "—"}
           </span>
         </div>
@@ -2790,16 +2790,16 @@ function StatusMonitor({ state, onTighten }: { state: StoryState; onTighten?: (p
       <div className="max-h-[400px] overflow-y-auto custom-scrollbar pr-1 space-y-3">
         {/* AI instruction blocks */}
         <div className="space-y-0.5">
-          {tokRow("pp", "Prompt Plot", state.deliverables.promptPlot, 2500, { type: "PROMPT_PLOT", overridden: state.capOverrides.promptPlot })}
-          {tokRow("gl", "Guidelines", state.deliverables.guidelines, 3000, { type: "GUIDELINES", overridden: state.capOverrides.guidelines })}
-          {tokRow("rm", "Reminders", state.deliverables.reminders, 800, { type: "REMINDERS", overridden: state.capOverrides.reminders })}
+          {tokRow("pp", "Prompt Plot", state.deliverables.promptPlot, state.customLimits.promptPlot ?? SECTION_CAPS.promptPlot, { type: "PROMPT_PLOT" })}
+          {tokRow("gl", "Guidelines", state.deliverables.guidelines, state.customLimits.guidelines ?? SECTION_CAPS.guidelines, { type: "GUIDELINES" })}
+          {tokRow("rm", "Reminders", state.deliverables.reminders, state.customLimits.reminders ?? SECTION_CAPS.reminders, { type: "REMINDERS" })}
         </div>
 
         {/* Characters — player persona + cast, the way ISK0 counts them */}
         <div className="space-y-0.5">
           <p className="text-[9px] font-black uppercase tracking-widest text-accent/70 mb-0.5">Characters</p>
           {tokRow("persona", "Player Persona", state.deliverables.playerPersona, 500, { type: "PLAYER_PERSONA" })}
-          {state.deliverables.characters.map((c) => tokRow(`c-${c.name}`, c.name, c.desc, 1500, { sub: c.card ? "+card" : undefined, type: "CHAR_DESC", name: c.name, overridden: state.capOverrides.characters }))}
+          {state.deliverables.characters.map((c) => tokRow(`c-${c.name}`, c.name, c.desc, state.customLimits.characters ?? SECTION_CAPS.characters, { sub: c.card ? "+card" : undefined, type: "CHAR_DESC", name: c.name }))}
           {state.deliverables.characters.length === 0 && <p className="text-[10px] text-text-dim italic py-0.5">No cast yet</p>}
         </div>
 
@@ -3319,33 +3319,36 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
                 </div>
               </button>
 
-              {/* Relax §21 per-component caps */}
-              <div className="space-y-2 pt-3 border-t border-border/40">
-                <p className="text-[9px] uppercase tracking-[0.2em] font-black text-label">Relax §21 caps <span className="text-text-dim/60 normal-case tracking-normal">— advanced</span></p>
-                <p className="text-[11px] text-text-dim leading-snug">
-                  Let specific blocks exceed their §21 size cap for richer detail. The <span className="text-text-muted">20k platform total still applies</span> — the AI trims elsewhere to fit. Note: a bigger Prompt Plot / Guidelines costs tokens on every turn of the deployed story.
-                </p>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  {([
-                    ["promptPlot", "Prompt Plot"],
-                    ["guidelines", "Guidelines"],
-                    ["reminders", "Reminders"],
-                    ["characters", "Char Sheets"],
-                  ] as [keyof StoryState["capOverrides"], string][]).map(([key, label]) => {
-                    const on = state.capOverrides[key];
-                    return (
-                      <button
-                        key={key}
-                        onClick={() => setState(s => ({ ...s, capOverrides: { ...s.capOverrides, [key]: !s.capOverrides[key] } }))}
-                        className={`p-2 rounded-lg border text-left transition-all ${on ? "border-[#f43f5e]/50 bg-[#f43f5e]/10" : "border-border bg-bg hover:border-text-dim"}`}
-                      >
-                        <span className={`block text-[10px] font-black uppercase tracking-tight ${on ? "text-[#f43f5e]" : "text-text-muted"}`}>{label}</span>
-                        <span className={`block text-[8px] font-mono mt-0.5 ${on ? "text-[#f43f5e]/80" : "text-text-dim"}`}>{on ? "UNCAPPED" : "§21 cap"}</span>
-                      </button>
-                    );
-                  })}
+              {/* Advanced — per-section custom limits (collapsed by default) */}
+              <details className="pt-3 border-t border-border/40 group/cl">
+                <summary className="cursor-pointer list-none flex items-center gap-1.5 text-[9px] uppercase tracking-[0.2em] font-black text-label hover:text-text-muted transition-colors">
+                  <ChevronRight className="w-3 h-3 shrink-0 transition-transform group-open/cl:rotate-90" /> Advanced · custom section limits
+                </summary>
+                <div className="space-y-2 pt-2.5">
+                  <p className="text-[11px] text-text-dim leading-snug">
+                    Set your own token target per block (blank = the §21 default). The <span className="text-text-muted">Token Summary</span> tracks &amp; warns against these, and <span className="text-text-muted">Tighten</span> compresses to them. The 20k platform total still applies. For leaner guidelines, also flip <span className="text-text-muted">Compact mode</span> on the Guidelines step — that tells the AI <span className="italic">how</span> to trim, not just the target.
+                  </p>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {([
+                      ["promptPlot", "Prompt Plot", 2500],
+                      ["guidelines", "Guidelines", 3000],
+                      ["reminders", "Reminders", 800],
+                      ["characters", "Per character", 1500],
+                    ] as [keyof StoryState["customLimits"], string, number][]).map(([key, label, dflt]) => (
+                      <div key={key} className="p-2 rounded-lg border border-border bg-bg space-y-1">
+                        <label className="block text-[9px] font-black uppercase tracking-tight text-text-muted">{label}</label>
+                        <input
+                          type="number" min={200} max={20000} step={100}
+                          value={state.customLimits[key] ?? ""}
+                          onChange={(e) => { const v = e.target.value === "" ? null : Math.min(20000, Math.max(200, parseInt(e.target.value) || 0)); setState(s => ({ ...s, customLimits: { ...s.customLimits, [key]: v } })); }}
+                          placeholder={`${dflt}`}
+                          className="w-full bg-card border border-border rounded px-2 py-1 text-[11px] font-mono text-text-main focus:border-accent focus:outline-none"
+                        />
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              </details>
             </div>
           </div>
         </div>
