@@ -78,7 +78,11 @@ async function startServer() {
   // Override with the PORT env var if needed.
   const PORT = Number(process.env.PORT) || (process.env.NODE_ENV === "production" ? 3000 : 3010);
 
-  app.use(express.json());
+  // Default body limit is 100kb — far too small here: every /api/assistant
+  // request carries the full chat history + deskstate + captured deliverables
+  // (Prompt Plot, Guidelines, character sheets, etc.), which easily exceeds
+  // 100kb on a deep story and 413s ("PayloadTooLargeError"). 25mb is plenty.
+  app.use(express.json({ limit: "25mb" }));
 
   // Basic denial-of-service guard (CWE-770 / CodeQL js/missing-rate-limiting):
   // cap requests per client IP across every route — the static file server and
