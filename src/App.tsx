@@ -245,7 +245,7 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 
 // Version of THIS app (the Aether_Core tool), distinct from the USCS framework
 // version it implements. Bump this when you ship changes.
-const APP_VERSION = "0.6.0";
+const APP_VERSION = "0.6.1";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
 const USCS_VERSION = "6.1";
 
@@ -2500,6 +2500,13 @@ function MainInterfaceChat({ state, askAssistant, preview, isSyncNeeded, syncDes
 
 function VersionHistoryModal({ onClose }: { onClose: () => void }) {
   const releases: { v: string; title: string; items: string[] }[] = [
+    {
+      v: "0.6.1", title: "Custom-limit fix & chat cleanup",
+      items: [
+        "Custom section-limit fields now accept typed numbers freely (the floor only applies when you leave the field) — previously a keystroke snapped the value to the minimum.",
+        "Removed the per-message \"Capture as…\" dropdown from chat; automatic capture handles this reliably and the control only caused confusion.",
+      ],
+    },
     {
       v: "0.6.0", title: "Workflow restructuring & ISK0 alignment",
       items: [
