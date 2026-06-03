@@ -134,6 +134,7 @@ interface StoryState {
   // Per-component overrides: relax the §21 cap for these blocks (richer output),
   // while the 20k total platform ceiling still holds.
   capOverrides: { promptPlot: boolean; guidelines: boolean; reminders: boolean; characters: boolean };
+  leanGuidelines: boolean;   // Guidelines step "Compact mode" — assemble a leaner rule set
   deliverables: Deliverables;
   assistantHistory: Message[];
   isAssistantLoading: boolean;
@@ -293,6 +294,7 @@ const DEFAULT_STATE: StoryState = {
   tokenBudgetMax: 10000,
   budgetTierMode: false,
   capOverrides: { promptPlot: false, guidelines: false, reminders: false, characters: false },
+  leanGuidelines: false,
   deliverables: EMPTY_DELIVERABLES,
   assistantHistory: [],
   isAssistantLoading: false,
@@ -4179,8 +4181,22 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
             </p>
           </div>
 
+          {/* Compact mode — density dial for the guidelines (jargon-free explainer) */}
           <button
-            onClick={() => askAssistant(`[WORKSHOP ACTION — ASSEMBLE GUIDELINES] Assemble the complete Prompt Guidelines for the deployed AI now, per the injected USCS §7 spec. OPEN with the one-paragraph emotional mandate (§22.4). Include AT LEAST 15 rules, and weave in: our locked World Grounding rules, the NPC Social Web & Anti-Harem architecture (§7A) for our cast, the Status Dashboard rules (§7B) if we enabled one, and character-specific voice/behaviour/speech rules now that the sheets exist. Respect the §21 cap (≤3000 tokens). Emit the finished block wrapped in <<<USCS_BLOCK GUIDELINES>>> … <<<END USCS_BLOCK>>>; keep only a brief note in chat.`)}
+            onClick={() => setState(s => ({ ...s, leanGuidelines: !s.leanGuidelines }))}
+            className="w-full flex items-start gap-3 p-4 rounded-2xl border border-border bg-card hover:border-accent/30 transition-all text-left"
+          >
+            <div className={`w-9 h-5 rounded-full shrink-0 relative transition-colors mt-0.5 ${state.leanGuidelines ? "bg-accent" : "bg-border"}`}>
+              <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${state.leanGuidelines ? "left-[18px]" : "left-0.5"}`} />
+            </div>
+            <div className="min-w-0">
+              <div className="text-[11px] font-black uppercase tracking-[0.15em] text-text-main">Compact mode {state.leanGuidelines ? <span className="text-accent">· ON</span> : <span className="text-text-dim">· OFF</span>}</div>
+              <p className="text-[11px] text-text-dim leading-snug mt-1">The Guidelines are the rulebook your story-AI re-reads on <span className="text-text-muted">every single message</span> — so a bigger rulebook costs more tokens on every turn of the finished story. <span className="text-text-muted">Compact mode</span> builds a leaner one: fewer, tighter rules and a condensed cast-relationship map, roughly half the size. Great with strong models (Claude / GPT-4-class) that fill in the gaps — leave it OFF for weaker / free models, which behave better with the fuller, more spelled-out version.</p>
+            </div>
+          </button>
+
+          <button
+            onClick={() => askAssistant(`[WORKSHOP ACTION — ASSEMBLE GUIDELINES] Assemble the complete Prompt Guidelines for the deployed AI now, per the injected USCS §7 spec. OPEN with the one-paragraph emotional mandate (§22.4). ${state.leanGuidelines ? "COMPACT BUILD — keep it lean: ~15 essential rules, each terse (1–2 sentences, no worked examples); condense the NPC Social Web (§7A) to a short relationship map plus only the rules that actually change behaviour (skip the full subsection treatment); list any active modules as a brief reference. Prioritise the highest-impact guidance and drop low-value elaboration — aim for roughly HALF the length of a full build (target ≤3000 tokens)." : "Include AT LEAST 15 rules, and weave in: our locked World Grounding rules, the NPC Social Web & Anti-Harem architecture (§7A) for our cast, the Status Dashboard rules (§7B) if we enabled one, and character-specific voice/behaviour/speech rules now that the sheets exist. Respect the §21 cap (≤3000 tokens)."} Emit the finished block wrapped in <<<USCS_BLOCK GUIDELINES>>> … <<<END USCS_BLOCK>>>; keep only a brief note in chat.`)}
             disabled={state.isAssistantLoading}
             className="w-full p-5 rounded-2xl border border-accent bg-accent/10 hover:bg-accent/15 transition-all flex items-center gap-4 shadow-[0_0_24px_rgba(20,184,166,0.18)] disabled:opacity-50 active:scale-[0.995] text-left"
           >
@@ -4188,8 +4204,8 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
               <Sparkles className="w-6 h-6 text-accent" />
             </div>
             <div className="min-w-0">
-              <div className="text-sm font-black uppercase tracking-[0.15em] text-accent">{state.deliverables.guidelines ? "Re-assemble Guidelines" : "Assemble Guidelines with the collaborator"}</div>
-              <div className="text-xs text-text-muted mt-0.5">Builds the full §7 rule set from your grounding rules, social web, dashboard &amp; character sheets — opens with the emotional mandate.</div>
+              <div className="text-sm font-black uppercase tracking-[0.15em] text-accent">{state.deliverables.guidelines ? "Re-assemble Guidelines" : "Assemble Guidelines with the collaborator"}{state.leanGuidelines ? " · compact" : ""}</div>
+              <div className="text-xs text-text-muted mt-0.5">{state.leanGuidelines ? "Builds a COMPACT rule set (~half size) from your grounding rules, cast & sheets — opens with the emotional mandate." : "Builds the full §7 rule set from your grounding rules, social web, dashboard & character sheets — opens with the emotional mandate."}</div>
             </div>
           </button>
 
