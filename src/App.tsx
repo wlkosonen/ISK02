@@ -2737,9 +2737,15 @@ function StatusMonitor({ state, onTighten }: { state: StoryState; onTighten?: (p
   const fmtN = (n: number) => n.toLocaleString();
   // One token row. cap=null → no cap shown/flagged. opts.type enables a
   // "Tighten to cap" action (re-emits that block compressed) when over.
-  const tokRow = (key: string, label: string, content: string, cap: number | null, opts?: { sub?: string; type?: string; name?: string }) => {
+  // One token row. `cap` is the §21 BASE cap (null = uncapped block like first
+  // messages). opts.overridden = the creator turned the §21 override ON for this
+  // block: we still SHOW the base cap as a reference (amber "uncapped") so the
+  // size context isn't hidden — but no "over cap" alarm or Tighten button.
+  const tokRow = (key: string, label: string, content: string, cap: number | null, opts?: { sub?: string; type?: string; name?: string; overridden?: boolean }) => {
     const t = content ? estimateTokens(content) : 0;
-    const over = !!(cap && t > cap);
+    const overridden = !!opts?.overridden;
+    const over = !!(cap && !overridden && t > cap);     // hard over-cap → alarm + Tighten
+    const overBase = !!(cap && overridden && content && t > cap); // uncapped but past base → amber number
     return (
       <div key={key}>
         <div className="flex items-center justify-between py-1">
@@ -2748,8 +2754,9 @@ function StatusMonitor({ state, onTighten }: { state: StoryState; onTighten?: (p
             <span className={`truncate ${content ? "text-text-main" : "text-text-muted"}`}>{label}</span>
             {opts?.sub && <span className="text-[8px] text-text-dim uppercase tracking-wide shrink-0">{opts.sub}</span>}
             {over && <span className="text-[8px] text-[#f43f5e] font-black uppercase shrink-0">over cap</span>}
+            {overridden && content && <span className="text-[8px] text-[#fbbf24]/80 font-bold uppercase tracking-wide shrink-0">uncapped</span>}
           </span>
-          <span className={`font-mono shrink-0 ${over ? "text-[#f43f5e] font-bold" : content ? "text-text-main" : "text-text-dim"}`}>
+          <span className={`font-mono shrink-0 ${over ? "text-[#f43f5e] font-bold" : overBase ? "text-[#fbbf24]" : content ? "text-text-main" : "text-text-dim"}`}>
             {content ? `${fmtN(t)}${cap ? ` / ${fmtN(cap)}` : ""}` : "—"}
           </span>
         </div>
@@ -2764,7 +2771,6 @@ function StatusMonitor({ state, onTighten }: { state: StoryState; onTighten?: (p
       </div>
     );
   };
-  const charCap = state.capOverrides.characters ? null : 1500;
 
   return (
     <div className="space-y-3 text-[11px]">
@@ -2782,16 +2788,16 @@ function StatusMonitor({ state, onTighten }: { state: StoryState; onTighten?: (p
       <div className="max-h-[400px] overflow-y-auto custom-scrollbar pr-1 space-y-3">
         {/* AI instruction blocks */}
         <div className="space-y-0.5">
-          {tokRow("pp", "Prompt Plot", state.deliverables.promptPlot, state.capOverrides.promptPlot ? null : 2500, { type: "PROMPT_PLOT" })}
-          {tokRow("gl", "Guidelines", state.deliverables.guidelines, state.capOverrides.guidelines ? null : 3000, { type: "GUIDELINES" })}
-          {tokRow("rm", "Reminders", state.deliverables.reminders, state.capOverrides.reminders ? null : 800, { type: "REMINDERS" })}
+          {tokRow("pp", "Prompt Plot", state.deliverables.promptPlot, 2500, { type: "PROMPT_PLOT", overridden: state.capOverrides.promptPlot })}
+          {tokRow("gl", "Guidelines", state.deliverables.guidelines, 3000, { type: "GUIDELINES", overridden: state.capOverrides.guidelines })}
+          {tokRow("rm", "Reminders", state.deliverables.reminders, 800, { type: "REMINDERS", overridden: state.capOverrides.reminders })}
         </div>
 
         {/* Characters — player persona + cast, the way ISK0 counts them */}
         <div className="space-y-0.5">
           <p className="text-[9px] font-black uppercase tracking-widest text-accent/70 mb-0.5">Characters</p>
           {tokRow("persona", "Player Persona", state.deliverables.playerPersona, 500, { type: "PLAYER_PERSONA" })}
-          {state.deliverables.characters.map((c) => tokRow(`c-${c.name}`, c.name, c.desc, charCap, { sub: c.card ? "+card" : undefined, type: "CHAR_DESC", name: c.name }))}
+          {state.deliverables.characters.map((c) => tokRow(`c-${c.name}`, c.name, c.desc, 1500, { sub: c.card ? "+card" : undefined, type: "CHAR_DESC", name: c.name, overridden: state.capOverrides.characters }))}
           {state.deliverables.characters.length === 0 && <p className="text-[10px] text-text-dim italic py-0.5">No cast yet</p>}
         </div>
 
