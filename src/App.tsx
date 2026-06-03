@@ -3344,12 +3344,38 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
       );
 
     case 2: // Setting & Tone
+      const isCustomSetting = !!state.settingType && !SETTING_TYPES.includes(state.settingType);
       return (
         <div className="space-y-10 py-12">
           <div className="text-center space-y-4">
             <h2 className="text-4xl font-black tracking-tighter uppercase drop-shadow-xl font-sans">World_Matrix</h2>
             <p className="text-text-muted max-w-xl mx-auto font-medium">Define the world rules and atmospheric register.</p>
           </div>
+
+          {/* Custom setting — creativity first, top & centre */}
+          <div className="max-w-2xl mx-auto w-full p-6 rounded-2xl border border-accent bg-accent/5 space-y-3 shadow-[0_0_24px_rgba(20,184,166,0.12)]">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-accent" />
+              <h3 className="text-sm font-black uppercase tracking-[0.15em] text-accent">Describe your own setting</h3>
+            </div>
+            <p className="text-xs text-text-muted leading-relaxed">Something specific in mind? Write it here and shape it with the collaborator — the presets below are just starting points.</p>
+            <input
+              type="text"
+              value={isCustomSetting ? state.settingType : ""}
+              onChange={(e) => setState(s => ({ ...s, settingType: e.target.value }))}
+              placeholder="e.g. A derelict generation ship whose crew worships the engine as a god…"
+              className="w-full bg-card border border-border rounded-xl p-4 focus:border-accent focus:outline-none transition-all text-sm"
+            />
+            <button
+              onClick={() => askAssistant(`[WORKSHOP ACTION — CUSTOM SETTING] I want a custom setting, not one of the presets: "${state.settingType}". Let's develop it together — help me sharpen it into a coherent, evocative setting (genre feel, what exists and what doesn't, the atmosphere); ask whatever you need, and when it's solid emit [SET_SETTING: <short setting name/phrase>] so it locks into my UI.`)}
+              disabled={state.isAssistantLoading || !(isCustomSetting && state.settingType.trim())}
+              className="w-full py-2.5 rounded-lg bg-accent text-black text-[10px] font-black uppercase tracking-widest hover:bg-white transition-all disabled:opacity-40"
+            >
+              Develop with collaborator →
+            </button>
+          </div>
+
+          <h3 className="text-[10px] uppercase tracking-[0.3em] font-black text-label text-center">Or pick a setting type</h3>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {SETTING_TYPES.map((type) => (
@@ -3385,11 +3411,35 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
       );
 
     case 3: // Art Style Profile
+      const isCustomStyle = !!state.artStyle && !ART_STYLE_TEMPLATES.includes(state.artStyle) && state.artStyle !== DEFAULT_STATE.artStyle;
       return (
         <div className="space-y-10 py-12">
           <div className="space-y-4">
             <h2 className="text-4xl font-black uppercase tracking-tighter">Art_Style_Schema</h2>
             <p className="text-text-muted font-medium">Establish the visual identity for images and HTML cards.</p>
+          </div>
+
+          {/* Custom art style — describe your own, top & centre */}
+          <div className="max-w-2xl mx-auto w-full p-6 rounded-2xl border border-accent bg-accent/5 space-y-3 shadow-[0_0_24px_rgba(20,184,166,0.12)]">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-accent" />
+              <h3 className="text-sm font-black uppercase tracking-[0.15em] text-accent">Describe your own art style</h3>
+            </div>
+            <p className="text-xs text-text-muted leading-relaxed">Picture a specific look? Write it and refine it with the collaborator — the templates below are just examples.</p>
+            <input
+              type="text"
+              value={isCustomStyle ? state.artStyle : ""}
+              onChange={(e) => setState(s => ({ ...s, artStyle: e.target.value }))}
+              placeholder="e.g. Muted watercolour with heavy ink outlines; weathered, painterly, melancholic…"
+              className="w-full bg-card border border-border rounded-xl p-4 focus:border-accent focus:outline-none transition-all text-sm"
+            />
+            <button
+              onClick={() => askAssistant(`[WORKSHOP ACTION — CUSTOM ART STYLE] I want a custom art style, not a template: "${state.artStyle}". Let's refine it into a precise Art Style Statement (medium, rendering quality, line/colour/lighting approach, mood, any influences); ask what you need, and when it's solid emit [SET_ART_STYLE: <short style name/phrase>] so it locks into my UI.`)}
+              disabled={state.isAssistantLoading || !(isCustomStyle && state.artStyle.trim())}
+              className="w-full py-2.5 rounded-lg bg-accent text-black text-[10px] font-black uppercase tracking-widest hover:bg-white transition-all disabled:opacity-40"
+            >
+              Develop with collaborator →
+            </button>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
