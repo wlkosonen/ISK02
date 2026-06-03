@@ -103,20 +103,6 @@ const EMPTY_DELIVERABLES: Deliverables = {
 // the default for that block; null = use the default.
 const SECTION_CAPS = { promptPlot: 2500, guidelines: 3000, reminders: 800, characters: 1500 } as const;
 
-// Single-value slots that can be captured manually from a chat message (fallback
-// for when the AI forgets the sentinels). Character blocks rely on AI tagging.
-type SingleSlotKey = "titleSummary" | "plotCard" | "promptPlot" | "guidelines" | "reminders" | "playerPersona" | "scenarios" | "imagePrompts";
-const CAPTURE_SLOTS: { key: SingleSlotKey; label: string }[] = [
-  { key: "titleSummary", label: "Title & Summary" },
-  { key: "plotCard", label: "Plot Card" },
-  { key: "promptPlot", label: "Prompt Plot" },
-  { key: "guidelines", label: "Guidelines" },
-  { key: "reminders", label: "Reminders" },
-  { key: "playerPersona", label: "Player Persona" },
-  { key: "scenarios", label: "Scenarios" },
-  { key: "imagePrompts", label: "Image Prompts" },
-];
-
 interface StoryState {
   step: number;
   mode: Mode | null;
@@ -1351,16 +1337,6 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
     }
   };
 
-  // Manual capture fallback: assign a chat message's content to a package slot
-  // (used when the AI forgets the auto-capture sentinels).
-  const manualCapture = (key: SingleSlotKey, content: string) => {
-    const clean = stripSyncTags(content).trim();
-    if (!clean) return;
-    setState(s => ({ ...s, deliverables: { ...s.deliverables, [key]: clean } }));
-    const label = CAPTURE_SLOTS.find(slot => slot.key === key)?.label || key;
-    triggerToast(`✓ Captured to package: ${label}`, "ui-to-ai");
-  };
-
   // Start fresh: wipe the story, chat and captured deliverables, but KEEP the
   // provider, API keys and favourites so testing/new stories don't re-enter them.
   const startNewProject = () => {
@@ -1689,7 +1665,6 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                 onSnapshot={saveSnapshot}
                 isExporting={isExporting}
                 exportProgress={exportProgress}
-                onManualCapture={manualCapture}
                 readyToAdvance={readyToAdvance}
                 onAdvance={nextStep}
                 responseTruncated={responseTruncated}
@@ -2185,7 +2160,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
   );
 }
 
-function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDetached, setIsDetached, isSyncNeeded, syncDeskstateToAI, onExport, onSnapshot, isExporting, exportProgress, onManualCapture, readyToAdvance, onAdvance, responseTruncated, onContinue, onRetry }: {
+function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDetached, setIsDetached, isSyncNeeded, syncDeskstateToAI, onExport, onSnapshot, isExporting, exportProgress, readyToAdvance, onAdvance, responseTruncated, onContinue, onRetry }: {
   state: StoryState,
   setState: React.Dispatch<React.SetStateAction<StoryState>>,
   askAssistant: (p: string) => Promise<void>,
@@ -2198,7 +2173,6 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
   onSnapshot?: () => void,
   isExporting?: boolean,
   exportProgress?: string,
-  onManualCapture?: (key: SingleSlotKey, content: string) => void,
   readyToAdvance?: boolean,
   onAdvance?: () => void,
   responseTruncated?: boolean,
@@ -2330,17 +2304,6 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
                 >
                   <RefreshCw className="w-3 h-3" /> Retry
                 </button>
-              )}
-              {m.role === "assistant" && onManualCapture && !isError && !m.streaming && m.content.trim().length > 40 && (
-                <select
-                  value=""
-                  onChange={(e) => { if (e.target.value) onManualCapture(e.target.value as SingleSlotKey, m.content); }}
-                  title="Manually capture this message into a package slot (fallback if auto-capture missed it)"
-                  className="text-[8px] font-mono uppercase tracking-widest bg-bg border border-border rounded px-1.5 py-1 text-text-dim hover:text-text-main focus:outline-none focus:border-accent cursor-pointer"
-                >
-                  <option value="">📌 Capture as…</option>
-                  {CAPTURE_SLOTS.map(slot => <option key={slot.key} value={slot.key}>{slot.label}</option>)}
-                </select>
               )}
             </div>
             );
