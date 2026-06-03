@@ -3340,7 +3340,22 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
                         <input
                           type="number" min={200} max={20000} step={100}
                           value={state.customLimits[key] ?? ""}
-                          onChange={(e) => { const v = e.target.value === "" ? null : Math.min(20000, Math.max(200, parseInt(e.target.value) || 0)); setState(s => ({ ...s, customLimits: { ...s.customLimits, [key]: v } })); }}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            if (raw === "") { setState(s => ({ ...s, customLimits: { ...s.customLimits, [key]: null } })); return; }
+                            const n = parseInt(raw, 10);
+                            if (Number.isNaN(n)) return;
+                            // Only clamp the ceiling while typing — applying the 200 floor here
+                            // would snap partial entries (e.g. "5") up to 200 and block free typing.
+                            setState(s => ({ ...s, customLimits: { ...s.customLimits, [key]: Math.min(20000, n) } }));
+                          }}
+                          onBlur={(e) => {
+                            const raw = e.target.value;
+                            if (raw === "") return;
+                            const n = parseInt(raw, 10);
+                            const v = Number.isNaN(n) ? null : Math.min(20000, Math.max(200, n));
+                            setState(s => ({ ...s, customLimits: { ...s.customLimits, [key]: v } }));
+                          }}
                           placeholder={`${dflt}`}
                           className="w-full bg-card border border-border rounded px-2 py-1 text-[11px] font-mono text-text-main focus:border-accent focus:outline-none"
                         />
