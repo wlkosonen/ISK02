@@ -64,7 +64,7 @@ interface Message {
 function cleanStreamingText(raw: string): string {
   let t = raw;
   // Completed capture blocks -> compact note
-  t = t.replace(/<<<USCS_BLOCK\s+([A-Z_]+)(?::[^>\n]*)?>>>[\s\S]*?<<<END USCS_BLOCK>>>/g, (_m, type) => `\n〔✓ ${type} captured〕\n`);
+  t = t.replace(/<<<USCS_BLOCK\s+([A-Z_]+)(?::[^>\n]*)?>>>[\s\S]*?<<<END\s+USCS_BLOCK(?:[ \t:]+[^>\n]*)?>>>/g, (_m, type) => `\n〔✓ ${type} captured〕\n`);
   // In-progress (still streaming, unclosed) capture block at the tail -> spinner note
   t = t.replace(/<<<USCS_BLOCK\s+([A-Z_]+)(?::[^>\n]*)?>>>[\s\S]*$/g, (_m, type) => `\n〔⏳ generating ${type}…〕\n`);
   // Strip control + completed SET_* tags
@@ -83,6 +83,19 @@ interface CharacterDeliverable {
   desc: string;   // Part B — AI prompt description (COUNTS toward budget)
   card: string;   // Part A — HTML card (does NOT count)
 }
+// Dungeon Mind (DM) config — a SEPARATE deliverable set (USCS §27). The DM is a
+// game-mechanics agent (dice/stats/inventory/rules) the creator attaches to a
+// storyline on ISK0; these seven fields mirror ISK0's DM editor. Not part of the
+// story package and NOT subject to the 20k story-package ceiling.
+interface DMConfig {
+  name: string;             // Field 1 — config name
+  model: string;            // Field 2 — recommended ISK0 DM model (a note, not our provider)
+  statSchema: string;       // Field 7 — stat list (modes: Numeric/Text/Enum; Alive always present)
+  gameRules: string;        // Field 3 — ruleset (cap 10,000 tok)
+  gameRuleReminder: string; // Field 4 — 3–5 must-never-forget rules (~500 tok)
+  instruction: string;      // Field 5 — bridge telling the story-AI when to invoke the DM
+  playerGuide: string;      // Field 6 — player-facing guide (max 1000 CHARACTERS)
+}
 interface Deliverables {
   titleSummary: string;
   plotCard: string;
@@ -94,22 +107,38 @@ interface Deliverables {
   imagePrompts: string;
   characters: CharacterDeliverable[];
   firstMessages: { label: string; content: string }[];   // one per scenario variant — COUNTS
+  dmConfig: DMConfig;     // Dungeon Mind config (USCS §27) — only built on DM tracks
 }
+
+const EMPTY_DM_CONFIG: DMConfig = {
+  name: "", model: "", statSchema: "", gameRules: "", gameRuleReminder: "", instruction: "", playerGuide: "",
+};
 
 const EMPTY_DELIVERABLES: Deliverables = {
   titleSummary: "", plotCard: "", promptPlot: "", guidelines: "",
-  reminders: "", playerPersona: "", scenarios: "", imagePrompts: "", characters: [], firstMessages: []
+  reminders: "", playerPersona: "", scenarios: "", imagePrompts: "", characters: [], firstMessages: [],
+  dmConfig: { ...EMPTY_DM_CONFIG },
 };
 
 // §21 base per-section token caps (defaults). A creator-set custom limit overrides
 // the default for that block; null = use the default.
 const SECTION_CAPS = { promptPlot: 2500, guidelines: 3000, reminders: 800, characters: 1500 } as const;
 
+// Dungeon Mind platform caps (USCS §27). Game Rules / Reminder are token caps;
+// Player Guide is a CHARACTER cap (special-cased — the platform measures chars).
+const DM_CAPS = { gameRules: 10000, gameRuleReminder: 500, playerGuideChars: 1000 } as const;
+
+// Which pipeline the creator is building. "story" = the 16-step narrative package
+// (default). "dm-only" = just a Dungeon Mind game-mechanics config (USCS §27), no
+// story. "story-dm" = a full story package WITH a DM attached (story steps then DM
+// steps). Replaces the old isDMOnly boolean (which was a mislabeled story stub).
+type WorkshopTrack = "story" | "dm-only" | "story-dm";
+
 interface StoryState {
   step: number;
   mode: Mode | null;
   heatLevel: HeatLevel;
-  isDMOnly: boolean;
+  workshopTrack: WorkshopTrack;
   concept: string;
   settingType: string;
   tone: string;
@@ -160,6 +189,60 @@ const STEPS = [
   "Image Prompts",
   "Compliance & Assembly"
 ];
+
+// Dungeon Mind build pipeline (USCS §27.4). Index here = the DM sub-step passed to
+// the server to fetch the matching Section 27 slice (buildDMStepContext).
+const DM_STEPS = [
+  "DM Concept & Scope",
+  "Stat Schema",
+  "Game Rules",
+  "Game Rule Reminder",
+  "Story-AI Instruction",
+  "Player Guide",
+  "Name & Model",
+  "DM Final Review",
+];
+
+const TRACK_LABELS: Record<WorkshopTrack, string> = {
+  "story": "Full Story Package",
+  "dm-only": "Dungeon Mind only",
+  "story-dm": "Story + Dungeon Mind",
+};
+
+// A planned step in the active pipeline. EXACTLY one of story/dm is set, OR
+// combined=true (the story-dm coherence wrap-up). `story` indexes STEPS + the
+// renderStep switch; `dm` indexes DM_STEPS + renderDMStep.
+interface PlannedStep { label: string; story?: number; dm?: number; combined?: boolean }
+
+// The ordered step plan for a track. This is the single source of truth for what
+// runs where — decoupling a step's PLAN POSITION (state.step) from the story/DM
+// sub-index used to fetch its content, which lets story-dm interleave the two.
+function getStepPlan(track: WorkshopTrack): PlannedStep[] {
+  if (track === "dm-only") {
+    return [{ label: STEPS[0], story: 0 }, ...DM_STEPS.map((label, i) => ({ label, dm: i }))];
+  }
+  if (track === "story-dm") {
+    // Mode Selection → Concept Intake → (pull DM Scope + Stat Schema EARLY so the
+    // real stat names exist before Guidelines/Prompt Plot) → rest of the story →
+    // remaining DM fields after assembly → a final Story + DM coherence review.
+    const plan: PlannedStep[] = [
+      { label: STEPS[0], story: 0 },        // Mode Selection
+      { label: STEPS[1], story: 1 },        // Concept Intake
+      { label: DM_STEPS[0], dm: 0 },        // DM Concept & Scope
+      { label: DM_STEPS[1], dm: 1 },        // Stat Schema
+    ];
+    for (let i = 2; i < STEPS.length; i++) plan.push({ label: STEPS[i], story: i }); // Setting & Tone … Compliance & Assembly
+    for (let i = 2; i < DM_STEPS.length; i++) plan.push({ label: DM_STEPS[i], dm: i }); // Game Rules … DM Final Review
+    plan.push({ label: "Story + DM Review", combined: true });
+    return plan;
+  }
+  return STEPS.map((label, i) => ({ label, story: i }));
+}
+
+// Label list for the active track (used for the pipeline UI, progress dots, etc.).
+function getActiveSteps(track: WorkshopTrack): string[] {
+  return getStepPlan(track).map(p => p.label);
+}
 
 // Per-step OUTPUT COMPLETENESS gates for the heavy craft steps. The full spec is
 // already injected server-side (verbatim USCS sections); this is a terse checklist
@@ -247,7 +330,7 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 
 // Version of THIS app (the Aether_Core tool), distinct from the USCS framework
 // version it implements. Bump this when you ship changes.
-const APP_VERSION = "0.7.0";
+const APP_VERSION = "0.9.1";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
 const USCS_VERSION = "6.1";
 
@@ -271,7 +354,7 @@ const DEFAULT_STATE: StoryState = {
   step: 0,
   mode: null,
   heatLevel: 1,
-  isDMOnly: false,
+  workshopTrack: "story",
   concept: "",
   settingType: "",
   tone: "",
@@ -305,6 +388,15 @@ const DEFAULT_STATE: StoryState = {
 // the user they're resuming an old story rather than starting fresh).
 let SESSION_RESTORED = false;
 
+// Resolve the workshop track from persisted/loaded data, migrating the legacy
+// isDMOnly boolean. A valid new value wins; otherwise default to the story track.
+function migrateTrack(parsed: any): WorkshopTrack {
+  if (parsed?.workshopTrack === "dm-only" || parsed?.workshopTrack === "story-dm" || parsed?.workshopTrack === "story") {
+    return parsed.workshopTrack;
+  }
+  return "story";
+}
+
 function loadInitialState(): StoryState {
   if (typeof window === "undefined") return DEFAULT_STATE;
   try {
@@ -321,8 +413,11 @@ function loadInitialState(): StoryState {
         ...parsed,
         // Never restore a transient "loading" flag from a previous session.
         isAssistantLoading: false,
+        // Migrate the legacy isDMOnly boolean: the old toggle produced a story
+        // package regardless, so map any prior session to the story track.
+        workshopTrack: migrateTrack(parsed),
         modelSettings: { ...DEFAULT_STATE.modelSettings, ...(parsed.modelSettings || {}) },
-        deliverables: { ...EMPTY_DELIVERABLES, ...(parsed.deliverables || {}) },
+        deliverables: { ...EMPTY_DELIVERABLES, ...(parsed.deliverables || {}), dmConfig: { ...EMPTY_DM_CONFIG, ...(parsed.deliverables?.dmConfig || {}) } },
         customLimits: { ...DEFAULT_STATE.customLimits, ...(parsed.customLimits || {}) },
       };
     }
@@ -356,15 +451,19 @@ const DELIVERABLE_LABELS: Record<string, string> = {
   TITLE_SUMMARY: "Title & Summary", PLOT_CARD: "Plot Card", PROMPT_PLOT: "Prompt Plot",
   GUIDELINES: "Guidelines", REMINDERS: "Reminders", PLAYER_PERSONA: "Player Persona",
   SCENARIOS: "Scenarios", IMAGE_PROMPTS: "Image Prompts",
+  DM_STAT_SCHEMA: "Stat Schema", DM_GAME_RULES: "Game Rules", DM_REMINDER: "Game Rule Reminder",
+  DM_INSTRUCTION: "Story-AI Instruction", DM_PLAYER_GUIDE: "Player Guide", DM_NAME_MODEL: "Name & Model",
 };
 
 // Parse <<<USCS_BLOCK TYPE>>> … <<<END USCS_BLOCK>>> sentinels out of an assistant
 // message: capture the latest version of each block into the package, and return
 // the message text with the marker lines removed (the block content stays visible).
-const BLOCK_RE = /<<<USCS_BLOCK\s+([A-Z_]+)(?::\s*([^>\n]+?))?\s*>>>[ \t]*\r?\n?([\s\S]*?)\r?\n?[ \t]*<<<END USCS_BLOCK>>>/g;
+// The closing marker tolerates a repeated type (`<<<END USCS_BLOCK TYPE>>>`) —
+// weaker models often echo it there, and we'd rather capture than drop the field.
+const BLOCK_RE = /<<<USCS_BLOCK\s+([A-Z_]+)(?::\s*([^>\n]+?))?\s*>>>[ \t]*\r?\n?([\s\S]*?)\r?\n?[ \t]*<<<END\s+USCS_BLOCK(?:[ \t:]+[^>\n]*)?>>>/g;
 
 function captureDeliverables(text: string, current: Deliverables): { next: Deliverables; captured: string[]; cleaned: string } {
-  const next: Deliverables = { ...current, characters: current.characters.map(c => ({ ...c })), firstMessages: current.firstMessages.map(f => ({ ...f })) };
+  const next: Deliverables = { ...current, characters: current.characters.map(c => ({ ...c })), firstMessages: current.firstMessages.map(f => ({ ...f })), dmConfig: { ...current.dmConfig } };
   const captured: string[] = [];
   let m: RegExpExecArray | null;
   BLOCK_RE.lastIndex = 0;
@@ -401,6 +500,19 @@ function captureDeliverables(text: string, current: Deliverables): { next: Deliv
       case "PLAYER_PERSONA": next.playerPersona = content; break;
       case "SCENARIOS": next.scenarios = content; break;
       case "IMAGE_PROMPTS": next.imagePrompts = content; break;
+      // Dungeon Mind config fields (USCS §27)
+      case "DM_STAT_SCHEMA": next.dmConfig.statSchema = content; break;
+      case "DM_GAME_RULES": next.dmConfig.gameRules = content; break;
+      case "DM_REMINDER": next.dmConfig.gameRuleReminder = content; break;
+      case "DM_INSTRUCTION": next.dmConfig.instruction = content; break;
+      case "DM_PLAYER_GUIDE": next.dmConfig.playerGuide = content; break;
+      case "DM_NAME_MODEL": {
+        // "Name | Model" or "Name :: Model" or two lines — split leniently.
+        const parts = content.split(/\s*(?:\||::|\n)\s*/).map(s => s.replace(/^(name|model)\s*[:=-]\s*/i, "").trim()).filter(Boolean);
+        next.dmConfig.name = parts[0] || content.trim();
+        if (parts[1]) next.dmConfig.model = parts[1];
+        break;
+      }
       default: continue;
     }
     captured.push(DELIVERABLE_LABELS[type] || type);
@@ -409,7 +521,7 @@ function captureDeliverables(text: string, current: Deliverables): { next: Deliv
   // Remove only the sentinel marker lines for display; keep the block content.
   const cleaned = text
     .replace(/^[ \t]*<<<USCS_BLOCK[^>]*>>>[ \t]*\r?\n?/gm, "")
-    .replace(/^[ \t]*<<<END USCS_BLOCK>>>[ \t]*\r?\n?/gm, "")
+    .replace(/^[ \t]*<<<END\s+USCS_BLOCK[^>]*>>>[ \t]*\r?\n?/gm, "")
     .trim();
 
   return { next, captured, cleaned };
@@ -482,7 +594,7 @@ export default function App() {
   const [lastSyncedState, setLastSyncedState] = useState({
     mode: null as Mode | null,
     heatLevel: 1 as HeatLevel,
-    isDMOnly: false,
+    workshopTrack: "story" as WorkshopTrack,
     concept: "",
     settingType: "",
     tone: "",
@@ -516,6 +628,14 @@ export default function App() {
   }, [toast]);
 
   const [state, setState] = useState<StoryState>(loadInitialState);
+
+  // The ordered step plan for the current track and the current planned step.
+  // `cur` tells us whether the creator is on a story step, a DM step, or the
+  // combined review — and which sub-index — without assuming DM steps are
+  // contiguous (story-dm interleaves them). activeSteps = the label list.
+  const stepPlan = getStepPlan(state.workshopTrack);
+  const cur = stepPlan[Math.min(state.step, stepPlan.length - 1)] || stepPlan[0];
+  const activeSteps = stepPlan.map(p => p.label);
 
   // Persist the workshop to sessionStorage on every change (minus the transient
   // loading flag) so a reload doesn't wipe story progress, chat, or typed keys.
@@ -759,7 +879,7 @@ export default function App() {
   const isSyncNeeded =
     state.mode !== lastSyncedState.mode ||
     state.heatLevel !== lastSyncedState.heatLevel ||
-    state.isDMOnly !== lastSyncedState.isDMOnly ||
+    state.workshopTrack !== lastSyncedState.workshopTrack ||
     state.concept !== lastSyncedState.concept ||
     state.settingType !== lastSyncedState.settingType ||
     state.tone !== lastSyncedState.tone ||
@@ -785,7 +905,7 @@ export default function App() {
     const updatedFields: string[] = [];
     if (state.mode !== lastSyncedState.mode) updatedFields.push(`Mode: ${state.mode || "None"}`);
     if (state.heatLevel !== lastSyncedState.heatLevel) updatedFields.push(`Heat: ${state.heatLevel}`);
-    if (state.isDMOnly !== lastSyncedState.isDMOnly) updatedFields.push(`Trace Strategy: ${state.isDMOnly ? "Dungeon_Mind" : "Full_Story_Package"}`);
+    if (state.workshopTrack !== lastSyncedState.workshopTrack) updatedFields.push(`Track: ${TRACK_LABELS[state.workshopTrack]}`);
     if (state.concept !== lastSyncedState.concept) updatedFields.push(`Narrative Seed modified`);
     if (state.settingType !== lastSyncedState.settingType) updatedFields.push(`Setting: ${state.settingType || "None"}`);
     if (state.tone !== lastSyncedState.tone) updatedFields.push(`Tone: ${state.tone || "None"}`);
@@ -798,12 +918,12 @@ export default function App() {
     if (state.tokenBudgetMin !== lastSyncedState.tokenBudgetMin || state.tokenBudgetMax !== lastSyncedState.tokenBudgetMax) updatedFields.push(`Token Budget: ~${state.tokenBudgetMin / 1000}k–${state.tokenBudgetMax / 1000}k`);
     if (state.budgetTierMode !== lastSyncedState.budgetTierMode) updatedFields.push(`Budget-Tier Mode: ${state.budgetTierMode ? "ON" : "OFF"}`);
     if (JSON.stringify(state.customLimits) !== JSON.stringify(lastSyncedState.customLimits)) updatedFields.push(`Custom section limits changed`);
-    if (state.step !== lastSyncedState.step) updatedFields.push(`Moved to Step: ${state.step + 1} (${STEPS[state.step]})`);
+    if (state.step !== lastSyncedState.step) updatedFields.push(`Moved to Step: ${state.step + 1} (${activeSteps[state.step]})`);
 
     setLastSyncedState({
       mode: state.mode,
       heatLevel: state.heatLevel,
-      isDMOnly: state.isDMOnly,
+      workshopTrack: state.workshopTrack,
       concept: state.concept,
       settingType: state.settingType,
       tone: state.tone,
@@ -830,7 +950,7 @@ export default function App() {
     const pending: string[] = [];
     const d = DEFAULT_STATE;
 
-    if (state.mode) established.push(`Narrative Mode: ${state.mode} (${state.isDMOnly ? "Dungeon Mind Trace" : "Full Story Package"})`);
+    if (state.mode) established.push(`Narrative Mode: ${state.mode} (${TRACK_LABELS[state.workshopTrack]})`);
     else pending.push("Narrative Mode (SFW/NSFW)");
 
     if (state.mode || state.heatLevel !== d.heatLevel) established.push(`Heat Level: ${state.heatLevel}/5`);
@@ -876,7 +996,7 @@ export default function App() {
     else pending.push("Token Budget target");
 
     const syncPrompt = `[SYSTEM ACTION - MANUAL STATE SYNC]
-The creator synced the workspace. We are currently on **Step ${state.step + 1} ("${STEPS[state.step]}")**.
+The creator synced the workspace. We are currently on **Step ${state.step + 1} ("${activeSteps[state.step]}")**.
 
 ESTABLISHED parameters (already chosen — treat these as locked):
 ${established.map(e => `- ${e}`).join("\n")}
@@ -886,12 +1006,12 @@ ${pending.length > 0 ? pending.map(p => `- ${p}`).join("\n") : "- (none — all 
 
 ${updatedFields.length > 0 ? `Just modified: ${updatedFields.join(", ")}.` : "No key differences since the last sync."}
 
-Acknowledge the established parameters, leave everything under NOT YET DECIDED untouched, and guide the creator ONLY on the current step ("${STEPS[state.step]}"). Do not jump ahead to future steps.`;
+Acknowledge the established parameters, leave everything under NOT YET DECIDED untouched, and guide the creator ONLY on the current step ("${activeSteps[state.step]}"). Do not jump ahead to future steps.`;
 
     askAssistant(syncPrompt);
   };
 
-  const nextStep = () => setState(prev => ({ ...prev, step: Math.min(prev.step + 1, STEPS.length - 1) }));
+  const nextStep = () => setState(prev => ({ ...prev, step: Math.min(prev.step + 1, getActiveSteps(prev.workshopTrack).length - 1) }));
   const prevStep = () => setState(prev => ({ ...prev, step: Math.max(prev.step - 1, 0) }));
 
   const askAssistant = async (prompt: string, requestHistoryOverride?: Message[]) => {
@@ -931,15 +1051,17 @@ Acknowledge the established parameters, leave everything under NOT YET DECIDED u
             role: m.role === "assistant" ? "model" : "user",
             parts: [{ text: m.content }]
           })),
-          step: state.step,
+          step: cur.story ?? -1,
+          dmStep: cur.dm ?? -1,
+          combinedReview: !!cur.combined,
           systemInstruction: `================================================================================
 CURRENT WORKSHOP DESKSTATE (COLLABORATOR SYNC CONTEXT)
 ================================================================================
 - WORKSHOP PIPELINE (the creator's REAL UI steps, in order — when you refer to any step, use these EXACT names; never invent step names or numbers like "Character & Setting" or "World-Building"):
-${STEPS.map((s, i) => `    ${i + 1}. ${s}${i === state.step ? "   ← CURRENT STEP" : ""}`).join("\n")}
+${activeSteps.map((s, i) => `    ${i + 1}. ${s}${i === state.step ? "   ← CURRENT STEP" : ""}`).join("\n")}
   Work ONLY on the current step. Do not advance to, pre-empt, or ask the creator about anything that belongs to a later step.
-- CURRENT STEP: ${STEPS[state.step]} (step ${state.step + 1} of ${STEPS.length})
-- ⚠️ OUTPUT TRACK — LOCKED VIA UI, DO NOT RE-ASK: The creator has ALREADY selected "${state.isDMOnly ? "Dungeon-Mind / DM-only (a stateless world-as-stage; the player is an external protagonist who drops in)" : "Full Story Package (a continuous narrative protagonist with a story spine)"}" using a dedicated on-screen control. This is final and authoritative. You MUST treat it as a settled decision: do NOT ask, confirm, double-check, "just to be sure", or otherwise re-open the full-story-vs-DM question in any form, and do NOT list it as an open/pending decision. If the USCS framework text above says to establish this track, consider it ALREADY established by the UI selection. Simply proceed on this basis without comment.
+- CURRENT STEP: ${activeSteps[state.step]} (step ${state.step + 1} of ${activeSteps.length})
+- ⚠️ OUTPUT TRACK — LOCKED VIA UI, DO NOT RE-ASK: The creator has ALREADY selected the "${TRACK_LABELS[state.workshopTrack]}" track using a dedicated on-screen control. ${state.workshopTrack === "dm-only" ? "This is a STANDALONE DUNGEON MIND build (USCS §27): produce ONLY the DM game-mechanics config (stat schema, game rules, reminder, story-AI instruction, player guide, name & model) — do NOT produce a plot card, character sheets, prompt plot, or any story-package deliverable." : state.workshopTrack === "story-dm" ? "This is a full story package WITH a Dungeon Mind attached: build the story first, then the DM config (USCS §27), applying the §27.5 integration guidance." : "This is a Full Story Package (a continuous narrative protagonist with a story spine)."} This is final and authoritative. Do NOT ask, confirm, double-check, or re-open the track question in any form, and do NOT list it as an open/pending decision. If the USCS framework text says to establish this track, consider it ALREADY established by the UI selection. Simply proceed.
 - Mode: ${state.mode || "Pending"}
 - Heat Level: ${state.heatLevel}
 - Setting: ${state.settingType || "Pending"}
@@ -952,12 +1074,22 @@ ${state.groundingRules || "No strict rules established yet."}${state.groundingRu
   HOW TO HIT THIS BUDGET: The per-block §21 caps (Prompt Plot ≤2500, Guidelines ≤3000, Reminders ≤800, Player Persona ≤500, each character ≤1500 primary / ≤800 supporting) are HARD ceilings — NEVER inflate a block beyond its cap to reach a number. The fixed blocks total ~6,800 tokens at most; the rest of the budget comes from CAST SIZE (USCS guide: ~2 chars ≈ 8–10k, ~4 ≈ 12–15k, ~6 ≈ 16–19k) plus any optional systems. If the chosen budget cannot be met within the caps at the current number of characters, say so and suggest adjusting the cast — do not bloat individual blocks. A higher budget means a larger ensemble, not a bigger Prompt Plot.${state.budgetTierMode ? `
 - BUDGET-TIER MODE: ACTIVE (story targets free/budget models such as DeepSeek/Ministral/GLM). Apply the USCS Section 21 budget-tier optimizations throughout: use concrete state-based triggers instead of session-number pacing; require a mandatory status block at the start of every response; add a worked example for any rule that contradicts a model's default training; enforce strict document separation (facts in Plot, behavior in Guidelines, non-negotiables in Reminders — never duplicated); and follow the §21 trim-priority order if over budget.` : ""}${customLimitLines ? `
 - CREATOR-SET SECTION LIMITS (override the standard §21 caps for these blocks): ${customLimitLines}. Treat each as that block's target ceiling instead of the default. If a limit is LOWER than the default, produce a leaner block — fewer rules, condensed detail — to fit it. If HIGHER, you MAY add richer, more detailed content. All other blocks keep their §21 defaults. The 20,000-token TOTAL platform ceiling still applies — never exceed it. Reminder: a larger Prompt Plot or Guidelines costs tokens on EVERY turn of the deployed story.` : ""}
-${STEP_MANDATES[state.step] ? `
+${cur.story !== undefined && STEP_MANDATES[cur.story] ? `
 ================================================================================
 MANDATORY OUTPUT CHECKLIST FOR THIS STEP — DO NOT ABBREVIATE OR SKIP
 ================================================================================
-${STEP_MANDATES[state.step]}
+${STEP_MANDATES[cur.story]}
 Follow the full injected USCS specification above for exact structure, depth, and word counts. Output the COMPLETE deliverable — if it is long, split into clearly labeled parts ("Part 1/N…") and continue on request rather than omitting any required section.
+` : ""}${state.workshopTrack === "story-dm" && cur.story !== undefined ? `
+================================================================================
+DUNGEON MIND ATTACHED — STORY INTEGRATION (USCS §27.5)
+================================================================================
+This story has a Dungeon Mind (a separate game-mechanics agent: dice, stats, inventory, rule enforcement) being built alongside it. The DM owns all mechanical resolution, so adapt the STORY deliverables accordingly:
+- PROMPT PLOT: do NOT bake game mechanics into the prose. Remove or minimize Genre-Mechanics subsections that the DM now handles (dice maths, stat formulas, combat resolution) — reference that "a Dungeon Mind resolves mechanics" instead of restating rules.
+- GUIDELINES: include a "DUNGEON MIND ACTIVE" rule — when the player attempts an action with mechanical uncertainty, pause narrative and let the DM resolve, then continue from its outcome; never override or ignore DM results. If a Status Dashboard (§7B) is also used, do NOT track the same stat in both the dashboard and the DM — decide which owns each variable.
+- MODULE TRIGGERS: may reference DM-tracked stats by their schema names (e.g. "when HP < 10"). Use the stat names already defined in the DM Stat Schema step.
+- PLAYER PERSONA: note which stats the player assigns and sensible starting values for the intended difficulty.
+${cur.story === 10 ? "→ THIS is the Prompt Plot step: apply the Prompt-Plot guidance above now." : cur.story === 11 ? "→ THIS is the Guidelines step: include the DUNGEON MIND ACTIVE rule and the dashboard/DM ownership check now." : cur.story === 15 ? "→ THIS is Compliance & Assembly: verify the above were applied — Genre Mechanics minimized in the Prompt Plot and the DUNGEON MIND ACTIVE rule present in the Guidelines." : ""}
 ` : ""}
 ================================================================================
 REAL-TIME UI SYNCHRONIZATION COMMANDS
@@ -985,7 +1117,7 @@ What do you think of this visual approach?"
 LARGE PAYLOADS — emit ONCE, inside the tag only: for big values (especially [SET_RULES] and [SET_CONCEPT]), put the full text ONLY inside the tag — do NOT also paste the same content as readable prose in your message. The workshop loads it straight into the on-screen editor where the creator reads and edits it; duplicating it wastes tokens and risks your reply being cut off mid-tag (an unclosed tag fails to load at all). Briefly say what you set or changed, then emit the single tag.
 
 DIAGNOSTIC WORKSHOP RESPONSE MANDATE:
-1. Actively guide and collaborate with the user *exclusively* on the deliverables for the CURRENT STEP: "${STEPS[state.step]}". Use discussion, suggestions, and drafts.
+1. Actively guide and collaborate with the user *exclusively* on the deliverables for the CURRENT STEP: "${activeSteps[state.step]}". Use discussion, suggestions, and drafts.
 2. DO NOT perform the story, write character dialogue, or introduce simulated turns like "What do you do, Hunter?". You are the co-author, not the player!
 3. ADVANCE SIGNAL: The moment the current step's required deliverable(s)/selection(s) are substantively in place, conclude your response with the token [SYNC_PROCEED] — EVEN IF you are also inviting the user to refine, ask questions, or chat further. [SYNC_PROCEED] is a SOFT signal: it only makes the "NEXT" button pulse to show the step is ready; it does NOT auto-advance and never overrides the user, who still chooses when to move on (or to stay and keep refining). Do not withhold it waiting for explicit "yes" — if the step is done enough to proceed, emit it. ⚠️ Stating readiness in prose (e.g. "everything is ready to proceed to the next step") is NOT a substitute — you MUST output the literal token [SYNC_PROCEED] (on its own line) or the interface cannot light up the NEXT button. (Example: on Mode Selection, once Mode is chosen — and Heat too if NSFW — append [SYNC_PROCEED].) If a later message reopens the step, simply omit the token until it's ready again.
 
@@ -1000,8 +1132,10 @@ Whenever you output a FINALIZED craft deliverable (not a draft you are still dis
 
 TYPE is one of: TITLE_SUMMARY, PLOT_CARD, PROMPT_PLOT, GUIDELINES, REMINDERS, PLAYER_PERSONA, SCENARIOS, IMAGE_PROMPTS.
 For per-character blocks use a name suffix: "CHAR_DESC: <Character Name>" for the Part B AI prompt description, and "CHAR_CARD: <Character Name>" for the Part A HTML card.
+DUNGEON MIND (USCS §27) field blocks, when building a DM config: DM_STAT_SCHEMA, DM_GAME_RULES, DM_REMINDER, DM_INSTRUCTION, DM_PLAYER_GUIDE, and DM_NAME_MODEL (format the DM_NAME_MODEL body as "Name: <name> | Model: <model>"). Each loads into the matching field of the DM config in the workshop.
 
 Rules:
+- The FIRST line of every block MUST be exactly \`<<<USCS_BLOCK TYPE>>>\` (three '<', the literal word USCS_BLOCK, a space, the TYPE, three '>') and the LAST line exactly \`<<<END USCS_BLOCK>>>\`. Do NOT skip the opening marker, and do NOT replace it with a markdown heading, bold text, or a code fence — without that exact first line the workshop CANNOT save the deliverable.
 - Wrap ONLY finished blocks, never drafts under discussion. Keep your conversational explanation OUTSIDE the sentinels.
 - When you revise a block, re-emit the FULL block wrapped again — the latest capture replaces the stored one.
 - One block per sentinel pair. Never nest.
@@ -1107,7 +1241,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
         // proceed") don't fire it prematurely on an intake turn.
         const proceedTail = fullText.slice(-300);
         const proceedPhrase = /(everything is ready to proceed|ready to proceed to the next step|ready to (?:advance|move on)|ready for the next step|this step is (?:now )?complete|we (?:can|are ready to) (?:now )?(?:proceed|advance|move on) to the next step|let's (?:proceed|advance|move on) to the next step)/i.test(proceedTail);
-        if ((fullText.includes("[SYNC_PROCEED]") || proceedPhrase) && state.step < STEPS.length - 1) setReadyToAdvance(true);
+        if ((fullText.includes("[SYNC_PROCEED]") || proceedPhrase) && state.step < activeSteps.length - 1) setReadyToAdvance(true);
         if (truncated) setResponseTruncated(true);
       };
 
@@ -1349,7 +1483,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
       modelSettings: s.modelSettings,
     }));
     setLastSyncedState({
-      mode: null, heatLevel: 1, isDMOnly: false, concept: "", settingType: "", tone: "",
+      mode: null, heatLevel: 1, workshopTrack: "story", concept: "", settingType: "", tone: "",
       artStyle: "Anime/VN Style", imageService: "Midjourney",
       palette: ["#1a1a24", "#f8f8f8", "#14b8a6", "#f43f5e", "#fbbf24"],
       aestheticMode: "Structured", groundingRules: "", title: "", summary: "",
@@ -1370,7 +1504,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
   const saveSnapshot = () => {
     const ds = [
       `Title:    ${state.title || "Untitled"}`,
-      `Mode:     ${state.mode || "—"} (${state.isDMOnly ? "Dungeon Mind" : "Full Story Package"})`,
+      `Mode:     ${state.mode || "—"} (${TRACK_LABELS[state.workshopTrack]})`,
       `Heat:     ${state.heatLevel}/5`,
       `Setting:  ${state.settingType || "—"}`,
       `Tone:     ${state.tone || "—"}`,
@@ -1378,7 +1512,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
       `Palette:  ${state.palette.join(", ")}`,
       `Concept:  ${state.concept || "—"}`,
       `Grounding Rules:\n${state.groundingRules || "—"}`,
-      `Step:     ${state.step + 1} (${STEPS[state.step]})`,
+      `Step:     ${state.step + 1} (${activeSteps[state.step]})`,
     ].join("\n");
 
     const transcript = state.assistantHistory
@@ -1392,6 +1526,27 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
 
     downloadTextFile(`${sanitizeFilename(state.title)}_snapshot.txt`, content);
     triggerToast("Snapshot saved ✓", "info");
+  };
+
+  // EXPORT DM CONFIG: a clean field-by-field .txt of the Dungeon Mind config
+  // (USCS §27), copy-paste-ready into ISK0's Dungeon Mind editor.
+  const exportDMConfig = () => {
+    const dm = state.deliverables.dmConfig;
+    const rule = "=".repeat(80);
+    const field = (label: string, value: string, note?: string) =>
+      `${rule}\n${label}${note ? `   (${note})` : ""}\n${rule}\n${value.trim() || "(not yet written)"}\n`;
+    const content =
+      `ISK0 / AETHER_CORE — DUNGEON MIND CONFIG\nGenerated: ${new Date().toLocaleString()} · USCS v${USCS_VERSION} §27\n${rule}\n\n` +
+      `Paste each field into the matching slot in ISK0's Dungeon Mind editor\n(Creation tab → Dungeon Minds). Attach to a storyline as Required or Optional.\n\n` +
+      field("FIELD 1 — NAME", dm.name) + "\n" +
+      field("FIELD 2 — RECOMMENDED MODEL", dm.model) + "\n" +
+      field("FIELD 7 — STAT SCHEMA", dm.statSchema) + "\n" +
+      field("FIELD 3 — GAME RULES", dm.gameRules, "max 10,000 tokens") + "\n" +
+      field("FIELD 4 — GAME RULE REMINDER", dm.gameRuleReminder, "~500 tokens") + "\n" +
+      field("FIELD 5 — INSTRUCTION (story-AI bridge)", dm.instruction) + "\n" +
+      field("FIELD 6 — PLAYER GUIDE", dm.playerGuide, "max 1,000 characters") + "\n";
+    downloadTextFile(`${sanitizeFilename(dm.name || state.title || "Dungeon_Mind")}_DM_config.txt`, content);
+    triggerToast("DM config exported ✓", "ai-to-ui");
   };
 
   // SAVE WORKSPACE: a portable JSON backup of the ENTIRE workshop state — every
@@ -1446,14 +1601,15 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
         anthropicApiKey: state.modelSettings.anthropicApiKey,
         openRouterApiKey: state.modelSettings.openRouterApiKey,
       },
-      deliverables: { ...EMPTY_DELIVERABLES, ...(loaded.deliverables || {}) },
+      workshopTrack: migrateTrack(loaded),
+      deliverables: { ...EMPTY_DELIVERABLES, ...(loaded.deliverables || {}), dmConfig: { ...EMPTY_DM_CONFIG, ...(loaded.deliverables?.dmConfig || {}) } },
       customLimits: { ...DEFAULT_STATE.customLimits, ...(loaded.customLimits || {}) },
     };
     setState(restored);
     // Realign the sync baseline so a freshly loaded project doesn't show a
     // spurious "sync needed" banner (the deskstate IS the loaded state).
     setLastSyncedState({
-      mode: restored.mode, heatLevel: restored.heatLevel, isDMOnly: restored.isDMOnly,
+      mode: restored.mode, heatLevel: restored.heatLevel, workshopTrack: restored.workshopTrack,
       concept: restored.concept, settingType: restored.settingType, tone: restored.tone,
       artStyle: restored.artStyle, imageService: restored.imageService, palette: [...restored.palette],
       aestheticMode: restored.aestheticMode, groundingRules: restored.groundingRules,
@@ -1523,7 +1679,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
 
           <button
             onClick={nextStep}
-            disabled={state.step === STEPS.length - 1 || (state.step === 0 && !state.mode)}
+            disabled={state.step === activeSteps.length - 1 || (state.step === 0 && state.workshopTrack !== "dm-only" && !state.mode)}
             className={`flex px-4 lg:px-6 py-2 bg-accent text-black rounded-lg items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] hover:bg-white active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed transition-all z-50 border border-accent/50 ${
               readyToAdvance
                 ? "ring-2 ring-accent ring-offset-2 ring-offset-header animate-pulse shadow-[0_0_28px_rgba(20,184,166,0.7)]"
@@ -1601,7 +1757,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
               <h2 className="text-[10px] font-bold text-label uppercase tracking-[0.3em] mb-4 hidden lg:block shrink-0">Pipeline Workflow</h2>
 
               <div className="flex-1 overflow-y-auto space-y-1.5 custom-scrollbar pr-1 mb-4">
-                {STEPS.map((step, idx) => (
+                {activeSteps.map((step, idx) => (
                   <button
                     key={step}
                     onClick={() => {
@@ -1658,7 +1814,11 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.2 }}
               >
-                {renderStep(state, setState, nextStep, askAssistant, setHoverHeatLevel, hoverHeatLevel, isSyncNeeded, syncDeskstateToAI)}
+                {cur.combined
+                  ? renderCombinedReview(state, setState, askAssistant, exportDMConfig, exportFinalPackage)
+                  : cur.dm !== undefined
+                  ? renderDMStep(cur.dm, state, setState, askAssistant, exportDMConfig)
+                  : renderStep(cur.story ?? 0, state, setState, nextStep, askAssistant, setHoverHeatLevel, hoverHeatLevel, isSyncNeeded, syncDeskstateToAI, exportDMConfig)}
               </motion.div>
             </AnimatePresence>
           </div>
@@ -1737,6 +1897,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                 isSyncNeeded={isSyncNeeded}
                 syncDeskstateToAI={syncDeskstateToAI}
                 onExport={exportFinalPackage}
+                onExportDM={exportDMConfig}
                 onSnapshot={saveSnapshot}
                 onSaveWorkspace={saveWorkspace}
                 onLoadWorkspace={loadWorkspace}
@@ -1813,8 +1974,8 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
         
         <div className="hidden sm:flex gap-1 items-center">
           <div className="flex gap-1 mr-4">
-            {STEPS.map((_, idx) => (
-              <div 
+            {activeSteps.map((_, idx) => (
+              <div
                 key={idx}
                 className={`h-1 rounded-full transition-all duration-500 ${
                   idx === state.step 
@@ -2158,6 +2319,9 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                       }))}
                       className="w-full h-1 bg-border rounded-full appearance-none accent-accent cursor-pointer"
                     />
+                    {state.aiProvider === "ollama" && state.modelSettings.temperature > 0.8 && (
+                      <p className="text-[9px] text-[#fbbf24] leading-snug">Smaller local models can ramble or break the capture formatting at high temperature — try <span className="font-bold">~0.6</span> for cleaner, capture-ready output.</p>
+                    )}
                   </div>
                   <div className="space-y-3">
                     <div className="flex justify-between items-center">
@@ -2237,7 +2401,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
   );
 }
 
-function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDetached, setIsDetached, isSyncNeeded, syncDeskstateToAI, onExport, onSnapshot, onSaveWorkspace, onLoadWorkspace, isExporting, exportProgress, readyToAdvance, onAdvance, responseTruncated, onContinue, onRetry }: {
+function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDetached, setIsDetached, isSyncNeeded, syncDeskstateToAI, onExport, onExportDM, onSnapshot, onSaveWorkspace, onLoadWorkspace, isExporting, exportProgress, readyToAdvance, onAdvance, responseTruncated, onContinue, onRetry }: {
   state: StoryState,
   setState: React.Dispatch<React.SetStateAction<StoryState>>,
   askAssistant: (p: string) => Promise<void>,
@@ -2247,6 +2411,7 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
   isSyncNeeded?: boolean,
   syncDeskstateToAI?: () => void,
   onExport?: () => void,
+  onExportDM?: () => void,
   onSnapshot?: () => void,
   onSaveWorkspace?: () => void,
   onLoadWorkspace?: (file: File) => void,
@@ -2259,6 +2424,7 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
   onRetry?: () => void
 }) {
   const workspaceFileRef = useRef<HTMLInputElement>(null);
+  const activeSteps = getActiveSteps(state.workshopTrack);
   return (
     <>
       <div className={`p-4 border-b border-border bg-header/60 flex items-center justify-between shrink-0 ${isDetached ? 'cursor-grab active:cursor-grabbing h-10 py-0' : 'p-6'}`}>
@@ -2316,7 +2482,7 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
             <Sparkles className="w-8 h-8 text-accent animate-pulse" />
             <p className="text-[10px] uppercase font-black tracking-[0.3em]">Awaiting directive...</p>
             <p className="text-xs text-text-muted max-w-[200px] leading-relaxed italic">
-              "Discussion initialized for {STEPS[state.step]}."
+              "Discussion initialized for {getActiveSteps(state.workshopTrack)[state.step]}."
             </p>
           </div>
         ) : (
@@ -2419,7 +2585,7 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
             <span className="text-[8px] font-bold text-black uppercase bg-[#fbbf24] px-2 py-1 rounded font-mono shrink-0">Continue →</span>
           </button>
         )}
-        {readyToAdvance && onAdvance && state.step < STEPS.length - 1 && (
+        {readyToAdvance && onAdvance && state.step < activeSteps.length - 1 && (
           <button
             onClick={onAdvance}
             className="mb-3 w-full py-2.5 px-3 bg-accent/15 hover:bg-accent/25 border border-accent/40 rounded-lg flex items-center justify-between text-left transition-all active:scale-[0.98] group shadow-[0_0_18px_rgba(20,184,166,0.2)]"
@@ -2431,7 +2597,7 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
               </span>
             </div>
             <span className="text-[8px] font-bold text-black uppercase bg-accent px-2 py-1 rounded font-mono shrink-0 flex items-center gap-1">
-              {STEPS[state.step + 1]} <ChevronRight className="w-2.5 h-2.5" />
+              {activeSteps[state.step + 1]} <ChevronRight className="w-2.5 h-2.5" />
             </span>
           </button>
         )}
@@ -2468,18 +2634,28 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
           >
             <Save className="w-3 h-3" /> Snapshot
           </button>
-          <button
-            onClick={onExport}
-            disabled={isExporting || state.assistantHistory.length === 0}
-            title="Compile the final ISK0 package (Title, Plot Card, Characters, Scenarios, Prompt Plot, Guidelines, Reminders) and download it as a clean .txt — no chat"
-            className="py-2.5 bg-accent/10 hover:bg-accent/20 border border-accent/20 text-accent rounded-lg flex items-center justify-center gap-2 text-[9px] font-black uppercase tracking-widest transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {isExporting ? (
-              <><RefreshCw className="w-3 h-3 animate-spin" /> Compiling…</>
-            ) : (
-              <><Download className="w-3 h-3" /> Export_Core</>
-            )}
-          </button>
+          {state.workshopTrack === "dm-only" ? (
+            <button
+              onClick={onExportDM}
+              title="Download the Dungeon Mind config (Name, Model, Stat Schema, Game Rules, Reminder, Instruction, Player Guide) as a clean .txt — copy-paste-ready for ISK0's DM editor"
+              className="py-2.5 bg-accent/10 hover:bg-accent/20 border border-accent/20 text-accent rounded-lg flex items-center justify-center gap-2 text-[9px] font-black uppercase tracking-widest transition-all"
+            >
+              <Download className="w-3 h-3" /> Export DM
+            </button>
+          ) : (
+            <button
+              onClick={onExport}
+              disabled={isExporting || state.assistantHistory.length === 0}
+              title="Compile the final ISK0 package (Title, Plot Card, Characters, Scenarios, Prompt Plot, Guidelines, Reminders) and download it as a clean .txt — no chat"
+              className="py-2.5 bg-accent/10 hover:bg-accent/20 border border-accent/20 text-accent rounded-lg flex items-center justify-center gap-2 text-[9px] font-black uppercase tracking-widest transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {isExporting ? (
+                <><RefreshCw className="w-3 h-3 animate-spin" /> Compiling…</>
+              ) : (
+                <><Download className="w-3 h-3" /> Export_Core</>
+              )}
+            </button>
+          )}
         </div>
         {/* Portable workspace backup — full state + chat as re-loadable JSON */}
         <div className="grid grid-cols-2 gap-3 mt-3">
@@ -2550,7 +2726,7 @@ function MainInterfaceChat({ state, askAssistant, preview, isSyncNeeded, syncDes
             <div className="h-full flex flex-col items-center justify-center text-center space-y-4 opacity-40">
               <Sparkles className="w-12 h-12 text-accent animate-pulse" />
               <p className="text-xs uppercase font-black tracking-[0.4em]">Establish Communication Link</p>
-              <p className="max-w-sm text-sm italic text-text-muted">"Current module: {STEPS[state.step]}. Waiting for instructions."</p>
+              <p className="max-w-sm text-sm italic text-text-muted">"Current module: {getActiveSteps(state.workshopTrack)[state.step]}. Waiting for instructions."</p>
             </div>
           ) : (
             state.assistantHistory.map((m, i) => (
@@ -2608,6 +2784,29 @@ function MainInterfaceChat({ state, askAssistant, preview, isSyncNeeded, syncDes
 
 function VersionHistoryModal({ onClose }: { onClose: () => void }) {
   const releases: { v: string; title: string; items: string[] }[] = [
+    {
+      v: "0.9.1", title: "Local-model fixes & sturdier capture",
+      items: [
+        "Local Ollama: reasoning models (qwen3, deepseek-r1, gpt-oss…) now answer directly instead of returning a blank response, and large step prompts are no longer silently truncated — the context window is sized to fit the prompt.",
+        "Capture is more forgiving of smaller models: the closing marker may repeat its type, and the exact opening-sentinel format is now reinforced hard in every build step so deliverables actually save.",
+      ],
+    },
+    {
+      v: "0.9.0", title: "Story + Dungeon Mind integration",
+      items: [
+        "New \"Story + Dungeon Mind\" track — build a full story package with a Dungeon Mind attached. DM Concept & Scope and Stat Schema come early (right after Concept Intake) so the story can reference real stat names.",
+        "Story steps adapt when a DM is attached (USCS §27.5): the Prompt Plot drops mechanics the DM owns, the Guidelines gain a DUNGEON MIND ACTIVE rule, and stat tracking isn't duplicated.",
+        "A final Story + DM Review step cross-checks both artifacts for coherence before you export them separately.",
+      ],
+    },
+    {
+      v: "0.8.0", title: "Dungeon Mind — standalone build",
+      items: [
+        "New \"Dungeon Mind only\" track on Mode Selection — build a game-mechanics config (stat schema, game rules, reminder, story-AI instruction, player guide, name & model) per USCS §27, with no story package.",
+        "Each DM field has its own step, AI draft button, capture, and platform caps (Game Rules ≤10k tok, Reminder ≤500 tok, Player Guide ≤1000 chars); the Token Summary shows a dedicated DM panel.",
+        "Export DM Config (.txt) — copy-paste-ready into ISK0's Dungeon Mind editor. Corrected the old, inaccurate \"world-as-stage\" DM description.",
+      ],
+    },
     {
       v: "0.7.0", title: "Portable workspace backups",
       items: [
@@ -2741,6 +2940,17 @@ function HelpModal({ onClose }: { onClose: () => void }) {
           </section>
 
           <section className="space-y-2">
+            <H>Three tracks (Mode Selection)</H>
+            <p>On the first screen you choose what to build:</p>
+            <ul className="space-y-1.5 pl-1">
+              <li>• <span className="text-text-main">Full Story Package</span> — the standard 16-step narrative pipeline.</li>
+              <li>• <span className="text-text-main">Story + Dungeon Mind</span> — a full story, then a Dungeon Mind attached to it.</li>
+              <li>• <span className="text-text-main">Dungeon Mind only</span> — just a Dungeon Mind config, no story.</li>
+            </ul>
+            <p className="p-2.5 rounded-lg bg-accent/5 border border-accent/20"><span className="text-text-main font-bold">What's a Dungeon Mind?</span> It's a separate game-mechanics agent on ISK0 — it handles dice rolls, stat tracking, inventory, skills and rule enforcement so the story AI can focus on telling the story. You build its rules here (stat schema, game rules, a player guide, etc.), <span className="text-text-main">Export DM Config</span>, then paste each field into ISK0's <span className="text-text-main">Dungeon Minds</span> editor and attach it to a storyline.</p>
+          </section>
+
+          <section className="space-y-2">
             <H>The rhythm: set, then Sync</H>
             <p>Each step has its own <span className="text-text-main">on-screen controls</span> — pickers, sliders, toggles, text fields (mode, setting, palette, art style, grounding rules, and so on). The collaborator chat on the right doesn't see those changes <span className="italic">as you make them</span>. That's deliberate: it lets you tinker freely without the AI reacting to every half-made choice.</p>
             <p>So the rhythm for every step is simple:</p>
@@ -2793,6 +3003,7 @@ function HelpModal({ onClose }: { onClose: () => void }) {
               <li>In <span className="text-text-main">your local copy's</span> Settings, choose <span className="text-text-main">Local Ollama</span> (base URL preset to <code className="bg-black/30 px-1 rounded text-[11px]">http://host.docker.internal:11434</code>) — it auto-detects installed models.</li>
             </ol>
             <p className="text-[11px] text-text-dim">Full self-host notes are in the GitHub <Link href="https://github.com/wlkosonen/ISK02#run-with-docker-recommended-for-self-hosting--local-models">README</Link>. Local models are smaller than the big cloud ones, so output quality varies — but it's free and stays on your machine.</p>
+            <p className="p-2.5 rounded-lg bg-[#fbbf24]/10 border border-[#fbbf24]/25 text-[#fde68a] text-[11px]">💡 <span className="font-bold">Tip for local models:</span> lower the <span className="text-text-main">Temperature</span> to around <span className="font-bold">0.6</span> (in Settings). Smaller models can ramble or break the <span className="text-text-main">capture formatting</span> at the default 1.0, which stops finished blocks from saving. Reasoning models (qwen3, deepseek-r1…) are handled automatically — the app tells them to answer directly.</p>
           </section>
 
           <section className="space-y-2">
@@ -2880,6 +3091,11 @@ function StatusMonitor({ state, onTighten }: { state: StoryState; onTighten?: (p
   const pctOfMax = Math.min(100, state.tokenBudgetMax > 0 ? (estTokens / state.tokenBudgetMax) * 100 : 0);
   const barColor = overBudget ? "#f43f5e" : inRange ? "#14b8a6" : "#64748b";
 
+  // Which sections to show for the current track: the story package, the DM config,
+  // or both. The DM config has its own caps and is NOT part of the 20k story ceiling.
+  const showStory = state.workshopTrack !== "dm-only";
+  const showDM = state.workshopTrack !== "story";
+
   const fmtN = (n: number) => n.toLocaleString();
   // One token row. cap=null → no cap shown/flagged. opts.type enables a
   // "Tighten to cap" action (re-emits that block compressed) when over.
@@ -2917,20 +3133,47 @@ function StatusMonitor({ state, onTighten }: { state: StoryState; onTighten?: (p
     );
   };
 
+  // A Dungeon Mind config row. cap = { max, unit } where unit is "tok" or "chars";
+  // null = no cap shown. No tighten action (DM fields aren't story-package blocks).
+  const dmRow = (key: string, label: string, content: string, cap: { max: number; unit: "tok" | "chars" } | null) => {
+    const used = !content ? 0 : (cap?.unit === "chars" ? content.length : estimateTokens(content));
+    const over = !!(cap && used > cap.max);
+    return (
+      <div key={key} className="flex items-center justify-between py-1">
+        <span className="flex items-center gap-2 min-w-0">
+          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${content ? "bg-[#10b981]" : "bg-text-dim/40"}`} />
+          <span className={`truncate ${content ? "text-text-main" : "text-text-muted"}`}>{label}</span>
+          {over && <span className="text-[8px] text-[#f43f5e] font-black uppercase shrink-0">over cap</span>}
+        </span>
+        <span className="flex items-center gap-1.5 shrink-0">
+          <span className={`font-mono ${over ? "text-[#f43f5e] font-bold" : content ? "text-text-main" : "text-text-dim"}`}>
+            {content ? `${fmtN(used)}${cap ? ` / ${fmtN(cap.max)}${cap.unit === "chars" ? " ch" : ""}` : ""}` : "—"}
+          </span>
+          {content && <CopyButton text={content} title={`Copy ${label} to clipboard`} />}
+        </span>
+      </div>
+    );
+  };
+
+  const dm = state.deliverables.dmConfig;
+
   return (
     <div className="space-y-3 text-[11px]">
       {/* Header */}
       <div className="flex items-center gap-2">
         <Zap className="w-3.5 h-3.5 text-accent" />
-        <span className="text-[11px] font-black uppercase tracking-wider text-accent">Token Summary</span>
+        <span className="text-[11px] font-black uppercase tracking-wider text-accent">{showStory ? "Token Summary" : "Dungeon Mind Config"}</span>
       </div>
 
-      {/* Budget gauge */}
-      <div className="h-1.5 w-full bg-border rounded-full overflow-hidden" title="Counts toward the 20k platform ceiling. ~4 chars/token estimate.">
-        <div className="h-full transition-all duration-700 ease-out" style={{ width: `${pctOfMax}%`, backgroundColor: barColor }} />
-      </div>
+      {/* Budget gauge — story package only (the DM config isn't part of the 20k ceiling) */}
+      {showStory && (
+        <div className="h-1.5 w-full bg-border rounded-full overflow-hidden" title="Counts toward the 20k platform ceiling. ~4 chars/token estimate.">
+          <div className="h-full transition-all duration-700 ease-out" style={{ width: `${pctOfMax}%`, backgroundColor: barColor }} />
+        </div>
+      )}
 
       <div className="max-h-[400px] overflow-y-auto custom-scrollbar pr-1 space-y-3">
+       {showStory && <>
         {/* AI instruction blocks */}
         <div className="space-y-0.5">
           {tokRow("pp", "Prompt Plot", state.deliverables.promptPlot, state.customLimits.promptPlot ?? SECTION_CAPS.promptPlot, { type: "PROMPT_PLOT" })}
@@ -2970,6 +3213,25 @@ function StatusMonitor({ state, onTighten }: { state: StoryState; onTighten?: (p
           <span className="uppercase tracking-widest font-bold text-text-muted">Not counted:</span>{" "}
           {([["Title & Summary", state.deliverables.titleSummary], ["Plot Card", state.deliverables.plotCard], ["Scenarios", state.deliverables.scenarios], ["Image Prompts", state.deliverables.imagePrompts]] as [string, string][]).map(([l, v]) => `${v ? "✓" : "○"} ${l}`).join("  ·  ")}
         </p>
+       </>}
+
+       {showDM && (
+        <div className={`space-y-0.5 ${showStory ? "pt-2 mt-1 border-t-2 border-accent/30" : ""}`}>
+          <p className="text-[9px] font-black uppercase tracking-widest text-accent/70 mb-0.5">Dungeon Mind <span className="text-text-dim font-medium normal-case tracking-normal">(§27 — separate config)</span></p>
+          {dmRow("dm-schema", "Stat Schema", dm.statSchema, null)}
+          {dmRow("dm-rules", "Game Rules", dm.gameRules, { max: DM_CAPS.gameRules, unit: "tok" })}
+          {dmRow("dm-reminder", "Rule Reminder", dm.gameRuleReminder, { max: DM_CAPS.gameRuleReminder, unit: "tok" })}
+          {dmRow("dm-instruction", "Story-AI Instruction", dm.instruction, null)}
+          {dmRow("dm-guide", "Player Guide", dm.playerGuide, { max: DM_CAPS.playerGuideChars, unit: "chars" })}
+          <div className="flex items-center justify-between py-1">
+            <span className="flex items-center gap-2 min-w-0">
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dm.name ? "bg-[#10b981]" : "bg-text-dim/40"}`} />
+              <span className={`truncate ${dm.name ? "text-text-main" : "text-text-muted"}`}>Name &amp; Model</span>
+            </span>
+            <span className="font-mono shrink-0 text-text-dim text-[10px] truncate max-w-[55%] text-right">{dm.name ? `${dm.name}${dm.model ? ` · ${dm.model}` : ""}` : "—"}</span>
+          </div>
+        </div>
+       )}
       </div>
     </div>
   );
@@ -3177,7 +3439,252 @@ function LockedStepsSummary({ state }: { state: StoryState }) {
   );
 }
 
-function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAction<StoryState>>, next: () => void, askAssistant: (p: string) => Promise<void>, setHoverHeatLevel?: (lvl: HeatLevel | null) => void, hoverHeatLevel?: HeatLevel | null, isSyncNeeded?: boolean, syncDeskstateToAI?: () => void) {
+// Renders one Dungeon Mind build step (USCS §27.4). Each "field step" pairs a
+// short explainer with an Ask-to-draft button and a captured-output panel; the
+// AI emits the field wrapped in a DM_* sentinel which the capture protocol stores
+// into deliverables.dmConfig. Steps 0 (scope discussion) and 7 (final review) are
+// special. onExportDM downloads the assembled config (Final Review).
+function renderDMStep(
+  dmStep: number,
+  state: StoryState,
+  setState: React.Dispatch<React.SetStateAction<StoryState>>,
+  askAssistant: (p: string) => Promise<void>,
+  onExportDM?: () => void,
+) {
+  const dm = state.deliverables.dmConfig;
+  const loading = state.isAssistantLoading;
+
+  // Shared shell: title, blurb, then children.
+  const Shell = ({ icon, title, blurb, children }: { icon: React.ReactNode; title: string; blurb: React.ReactNode; children: React.ReactNode }) => (
+    <div className="space-y-8 py-12 max-w-3xl mx-auto">
+      <div className="space-y-3">
+        <div className="flex items-center gap-2 text-accent">
+          <span className="text-[10px] font-black uppercase tracking-[0.3em]">Dungeon Mind · §27</span>
+        </div>
+        <h2 className="text-4xl font-black tracking-tighter uppercase flex items-center gap-3">{icon} {title}</h2>
+        <p className="text-text-muted leading-relaxed text-sm">{blurb}</p>
+      </div>
+      {children}
+    </div>
+  );
+
+  // A captured-field panel: shows the stored block (or an empty prompt), a copy
+  // button, and an optional live cap meter.
+  const FieldPanel = ({ value, empty, cap }: { value: string; empty: string; cap?: { used: number; max: number; unit: string } }) => (
+    value ? (
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[10px] font-black uppercase tracking-widest text-accent flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5" /> Captured</span>
+          <div className="flex items-center gap-2.5">
+            {cap && <span className={`text-[9px] font-mono uppercase tracking-widest ${cap.used > cap.max ? "text-[#f43f5e] font-bold" : "text-text-dim"}`}>{cap.used.toLocaleString()} / {cap.max.toLocaleString()} {cap.unit}{cap.used > cap.max ? " · over" : ""}</span>}
+            <CopyButton variant="button" text={value} title="Copy this field to clipboard" />
+          </div>
+        </div>
+        <pre className="text-[11px] font-mono leading-relaxed text-text-muted bg-header/20 border border-border rounded-2xl p-5 whitespace-pre-wrap max-h-[420px] overflow-y-auto custom-scrollbar">{value}</pre>
+      </div>
+    ) : (
+      <div className="rounded-2xl border border-dashed border-border p-6 text-center text-[11px] font-mono uppercase tracking-widest text-text-dim">{empty}</div>
+    )
+  );
+
+  const ActionButton = ({ label, prompt }: { label: string; prompt: string }) => (
+    <button
+      onClick={() => askAssistant(prompt)}
+      disabled={loading}
+      className="w-full py-3 rounded-xl bg-accent/10 hover:bg-accent/20 border border-accent/30 text-accent text-[11px] font-black uppercase tracking-widest transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+    >
+      <Sparkles className="w-3.5 h-3.5" /> {label}
+    </button>
+  );
+
+  switch (dmStep) {
+    case 0: // Concept & Scope
+      return (
+        <Shell icon={<Cpu className="w-9 h-9 text-accent" />} title="DM Concept & Scope" blurb={<>A Dungeon Mind is a game-mechanics agent — it handles dice, stats, inventory, skills and rule enforcement so the story AI can focus on narrative. First we lock the scope: genre, which mechanics matter, how death works, the dice system, and the complexity level.</>}>
+          <div className="rounded-2xl border border-border bg-card/40 p-5 space-y-2 text-[12px] text-text-muted leading-relaxed">
+            <p className="text-[10px] font-black uppercase tracking-widest text-text-dim mb-1">We'll decide together:</p>
+            <ul className="space-y-1.5 list-disc pl-5">
+              <li>Genre of the story (drives the recommended stat schema)</li>
+              <li>Essential mechanics — combat? skills? inventory? survival?</li>
+              <li>Is death permanent or recoverable?</li>
+              <li>Dice system — standard d20, or custom?</li>
+              <li>Complexity — light (few stats), medium (standard RPG), or heavy (many systems)</li>
+            </ul>
+          </div>
+          <ActionButton label="Plan the DM scope with AETHER" prompt="[WORKSHOP ACTION — DM CONCEPT & SCOPE] Let's scope the Dungeon Mind. Ask me concisely about: (1) the story's genre, (2) which mechanics are essential (combat? skills? inventory? survival?), (3) whether death is permanent or recoverable, (4) the dice system (standard d20 or custom), and (5) the complexity level (light/medium/heavy). Recommend a starting stat schema for my genre per USCS §27. Do NOT write the full rules yet — just help me lock the scope." />
+        </Shell>
+      );
+
+    case 1: // Stat Schema
+      return (
+        <Shell icon={<Layout className="w-9 h-9 text-accent" />} title="Stat Schema" blurb={<>The stats every character will have. The DM's tools are generated from this list. Each stat is Numeric, Text, or Enum; the <code className="bg-black/30 px-1 rounded">Alive</code> enum is always present. Aim for 5–15 stats.</>}>
+          <ActionButton label={dm.statSchema ? "Revise the stat schema" : "Draft the stat schema"} prompt="[WORKSHOP ACTION — DM STAT SCHEMA] Based on our scoped genre and mechanics, propose the full stat schema per USCS §27 Field 7. For each stat give: name, mode (Numeric / Text / Enum), and a one-line description of how it functions in rule resolution. The 'Alive' enum [alive] [dead] is mandatory and cannot be removed. Target 5–15 stats. Once I confirm, emit the finished schema wrapped in <<<USCS_BLOCK DM_STAT_SCHEMA>>> … <<<END USCS_BLOCK>>>." />
+          <FieldPanel value={dm.statSchema} empty="No stat schema captured yet — draft it above." />
+        </Shell>
+      );
+
+    case 2: // Game Rules
+      return (
+        <Shell icon={<BookOpen className="w-9 h-9 text-accent" />} title="Game Rules" blurb={<>The full ruleset the DM follows — resolution, combat, damage, healing, death, progression, inventory, skills. Written as direct instructions to the DM AI. Hard cap 10,000 tokens; target 3,000–6,000.</>}>
+          <ActionButton label={dm.gameRules ? "Revise the Game Rules" : "Draft the Game Rules"} prompt="[WORKSHOP ACTION — DM GAME RULES] Write the complete Game Rules document per USCS §27 Field 3, in direct imperative voice addressed to the DM AI (precision over prose). Include every applicable required section: 1) Resolution System (d20 + modifier vs DC/AC, define DCs), 2) Combat (initiative, attack resolution, damage, crits, status interaction), 3) Character Stats & Their Roles (reference our schema stat names EXACTLY), 4) Damage & Healing, 5) Death Condition (exactly when Alive flips to false; permanence), 6) Progression (if applicable), 7) Inventory (if applicable), 8) Skill Checks (if applicable). Stay within 10,000 tokens (target 3,000–6,000). Emit wrapped in <<<USCS_BLOCK DM_GAME_RULES>>> … <<<END USCS_BLOCK>>>." />
+          <FieldPanel value={dm.gameRules} empty="No Game Rules captured yet — draft them above." cap={{ used: estimateTokens(dm.gameRules), max: DM_CAPS.gameRules, unit: "tok" }} />
+        </Shell>
+      );
+
+    case 3: // Game Rule Reminder
+      return (
+        <Shell icon={<ShieldAlert className="w-9 h-9 text-accent" />} title="Game Rule Reminder" blurb={<>The 3–5 most critical rules, appended to <em>every</em> DM call — the highest-priority layer that overrides Game Rules on conflict. Be ruthless; every word is a recurring cost. ~500 tokens.</>}>
+          <ActionButton label={dm.gameRuleReminder ? "Revise the Reminder" : "Draft the Reminder"} prompt="[WORKSHOP ACTION — DM GAME RULE REMINDER] Extract the 3–5 most critical, easily-forgotten rules from the Game Rules — e.g. death permanence, HP can never exceed max, always show the full roll (Rolled 14 + 3 = 17 vs DC 15 — Success), any rule the DM is likely to soften under narrative pressure, plus required output format. Write them as compressed imperative bullets per USCS §27 Field 4. Keep under ~500 tokens. Emit wrapped in <<<USCS_BLOCK DM_REMINDER>>> … <<<END USCS_BLOCK>>>." />
+          <FieldPanel value={dm.gameRuleReminder} empty="No Reminder captured yet — draft it above." cap={{ used: estimateTokens(dm.gameRuleReminder), max: DM_CAPS.gameRuleReminder, unit: "tok" }} />
+        </Shell>
+      );
+
+    case 4: // Story-AI Instruction
+      return (
+        <Shell icon={<MessageSquare className="w-9 h-9 text-accent" />} title="Story-AI Instruction" blurb={<>The bridge that tells the <em>story</em> AI what the DM handles and exactly when to pause the narrative and let the DM resolve the outcome. Appears in the story agent's system prompt.</>}>
+          <ActionButton label={dm.instruction ? "Revise the Instruction" : "Draft the Instruction"} prompt="[WORKSHOP ACTION — DM INSTRUCTION] Write the bridge Instruction per USCS §27 Field 5: tell the STORY AI that this story has a Dungeon Mind managing all game mechanics, what system it uses, and exactly when to pause the narrative and let the DM resolve (any action with a chance of failure, combat, or anything governed by the game rules), then continue from the DM's outcome. Emit wrapped in <<<USCS_BLOCK DM_INSTRUCTION>>> … <<<END USCS_BLOCK>>>." />
+          <FieldPanel value={dm.instruction} empty="No Instruction captured yet — draft it above." />
+        </Shell>
+      );
+
+    case 5: // Player Guide
+      return (
+        <Shell icon={<HelpCircle className="w-9 h-9 text-accent" />} title="Player Guide" blurb={<>A short, friendly guide shown to players in chat settings when the DM is enabled. The player's first intro to the mechanics. Markdown supported. Hard limit 1,000 characters.</>}>
+          <ActionButton label={dm.playerGuide ? "Revise the Player Guide" : "Draft the Player Guide"} prompt="[WORKSHOP ACTION — DM PLAYER GUIDE] Write the friendly player-facing guide per USCS §27 Field 6: what system this DM uses (d20/custom), what the key stats govern, how rolls and combat work at a glance, and any must-know rules before starting. Keep it warm and brief. Markdown is supported. HARD LIMIT 1,000 characters. Emit wrapped in <<<USCS_BLOCK DM_PLAYER_GUIDE>>> … <<<END USCS_BLOCK>>>." />
+          <FieldPanel value={dm.playerGuide} empty="No Player Guide captured yet — draft it above." cap={{ used: dm.playerGuide.length, max: DM_CAPS.playerGuideChars, unit: "chars" }} />
+        </Shell>
+      );
+
+    case 6: // Name & Model
+      return (
+        <Shell icon={<Cpu className="w-9 h-9 text-accent" />} title="Name & Model" blurb={<>A descriptive config name (it appears in the DM picker), and the recommended ISK0 model players use by default. Complex rulesets need stronger models for accurate stat tracking.</>}>
+          <ActionButton label={dm.name ? "Revise name & model" : "Propose name & model"} prompt="[WORKSHOP ACTION — DM NAME & MODEL] Propose a descriptive DM config name that references the story or ruleset, and recommend the appropriate ISK0 DM model for our ruleset's complexity per USCS §27 (Gemini 3 Flash Preview for simple/standard rulesets; Claude Sonnet 4.6 if budget allows for heavy rulesets; avoid DeepSeek v4 Flash for anything complex). Emit EXACTLY this single block: <<<USCS_BLOCK DM_NAME_MODEL>>>\nName: <the name> | Model: <the recommended model>\n<<<END USCS_BLOCK>>>" />
+          {(dm.name || dm.model) ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="rounded-2xl border border-border bg-header/20 p-4 space-y-1">
+                <span className="text-[9px] font-black uppercase tracking-widest text-text-dim">Config Name</span>
+                <p className="text-sm font-mono text-text-main">{dm.name || "—"}</p>
+              </div>
+              <div className="rounded-2xl border border-border bg-header/20 p-4 space-y-1">
+                <span className="text-[9px] font-black uppercase tracking-widest text-text-dim">Recommended Model</span>
+                <p className="text-sm font-mono text-text-main">{dm.model || "—"}</p>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-dashed border-border p-6 text-center text-[11px] font-mono uppercase tracking-widest text-text-dim">No name/model captured yet — propose them above.</div>
+          )}
+        </Shell>
+      );
+
+    case 7: { // Final Review
+      const fields: { label: string; value: string }[] = [
+        { label: "Name", value: dm.name },
+        { label: "Recommended Model", value: dm.model },
+        { label: "Stat Schema", value: dm.statSchema },
+        { label: "Game Rules", value: dm.gameRules },
+        { label: "Game Rule Reminder", value: dm.gameRuleReminder },
+        { label: "Story-AI Instruction", value: dm.instruction },
+        { label: "Player Guide", value: dm.playerGuide },
+      ];
+      const done = fields.filter(f => f.value.trim()).length;
+      return (
+        <Shell icon={<CheckCircle2 className="w-9 h-9 text-accent" />} title="DM Final Review" blurb={<>The complete Dungeon Mind config, ready to copy into ISK0's DM editor. {done} of {fields.length} fields filled.</>}>
+          <div className="space-y-2">
+            {fields.map(f => (
+              <div key={f.label} className="flex items-center justify-between gap-2 rounded-xl border border-border bg-header/20 px-4 py-2.5">
+                <span className="flex items-center gap-2 min-w-0">
+                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${f.value.trim() ? "bg-[#10b981]" : "bg-text-dim/40"}`} />
+                  <span className={`text-xs font-bold uppercase tracking-wide truncate ${f.value.trim() ? "text-text-main" : "text-text-dim"}`}>{f.label}</span>
+                </span>
+                {f.value.trim() ? <CopyButton text={f.value} title={`Copy ${f.label}`} /> : <span className="text-[9px] font-mono uppercase tracking-widest text-text-dim shrink-0">empty</span>}
+              </div>
+            ))}
+          </div>
+          <button
+            onClick={onExportDM}
+            disabled={done === 0}
+            className="w-full py-3.5 rounded-xl bg-accent/15 hover:bg-accent/25 border border-accent/30 text-accent text-[11px] font-black uppercase tracking-widest transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          >
+            <Download className="w-4 h-4" /> Export DM Config (.txt)
+          </button>
+          <p className="text-[10px] text-text-dim leading-relaxed text-center">Paste each field into the matching slot in ISK0's Dungeon Mind editor (Creation tab → Dungeon Minds). The DM attaches to a storyline as Required or Optional.</p>
+        </Shell>
+      );
+    }
+
+    default:
+      return <div className="py-12 text-center text-text-dim">Unknown DM step.</div>;
+  }
+}
+
+// The story-dm final step: a coherence pass that checks the story package and the
+// Dungeon Mind config line up (USCS §27.5), with an AI review trigger and both
+// exports (they paste into two different ISK0 editors).
+function renderCombinedReview(
+  state: StoryState,
+  _setState: React.Dispatch<React.SetStateAction<StoryState>>,
+  askAssistant: (p: string) => Promise<void>,
+  onExportDM?: () => void,
+  onExportStory?: () => void,
+) {
+  const d = state.deliverables;
+  const dm = d.dmConfig;
+  const loading = state.isAssistantLoading;
+  // Lightweight heuristics — the AI review does the real cross-check.
+  const checks: { label: string; ok: boolean }[] = [
+    { label: "Story package built (Prompt Plot + Guidelines)", ok: !!(d.promptPlot && d.guidelines) },
+    { label: "DM config built (Stat Schema + Game Rules)", ok: !!(dm.statSchema && dm.gameRules) },
+    { label: "Guidelines reference the Dungeon Mind", ok: /dungeon mind/i.test(d.guidelines) },
+    { label: "Player Persona present", ok: !!d.playerPersona },
+  ];
+  return (
+    <div className="space-y-8 py-12 max-w-3xl mx-auto">
+      <div className="space-y-3">
+        <span className="text-[10px] font-black uppercase tracking-[0.3em] text-accent">Final · Story + Dungeon Mind</span>
+        <h2 className="text-4xl font-black tracking-tighter uppercase flex items-center gap-3"><CheckCircle2 className="w-9 h-9 text-accent" /> Story + DM Review</h2>
+        <p className="text-text-muted leading-relaxed text-sm">A last coherence pass: confirm the story and the Dungeon Mind config line up (USCS §27.5) before you export them. They paste into two different ISK0 editors — the story into a storyline, the DM into the Dungeon Minds tab.</p>
+      </div>
+
+      <div className="space-y-2">
+        {checks.map(c => (
+          <div key={c.label} className="flex items-center gap-2.5 rounded-xl border border-border bg-header/20 px-4 py-2.5">
+            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${c.ok ? "bg-[#10b981]" : "bg-[#fbbf24]"}`} />
+            <span className={`text-xs ${c.ok ? "text-text-main" : "text-text-muted"}`}>{c.label}</span>
+            {c.ok && <CheckCircle2 className="w-3.5 h-3.5 text-[#10b981] ml-auto shrink-0" />}
+          </div>
+        ))}
+      </div>
+
+      <button
+        onClick={() => askAssistant("[WORKSHOP ACTION — STORY + DM COHERENCE REVIEW] We've built both the story package and the Dungeon Mind config. Do a final coherence pass per USCS §27.5: (1) confirm the Guidelines contain a DUNGEON MIND ACTIVE rule and don't duplicate stat-tracking the DM owns; (2) confirm the Prompt Plot doesn't restate game mechanics the DM handles; (3) confirm any module triggers reference stat names that actually EXIST in the DM stat schema; (4) confirm the player persona notes which stats the player assigns. List anything misaligned, and for each fix re-emit the affected block in its capture sentinel (story blocks use their normal sentinels; DM fields use DM_* sentinels). If everything lines up, say so clearly.")}
+        disabled={loading}
+        className="w-full py-3 rounded-xl bg-accent/10 hover:bg-accent/20 border border-accent/30 text-accent text-[11px] font-black uppercase tracking-widest transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+      >
+        <Sparkles className="w-3.5 h-3.5" /> Run the coherence review
+      </button>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <button
+          onClick={onExportStory}
+          className="py-3 rounded-xl bg-border/40 hover:bg-border/60 border border-border text-[11px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2"
+        >
+          <Download className="w-4 h-4" /> Export Story (.txt)
+        </button>
+        <button
+          onClick={onExportDM}
+          className="py-3 rounded-xl bg-accent/15 hover:bg-accent/25 border border-accent/30 text-accent text-[11px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2"
+        >
+          <Download className="w-4 h-4" /> Export DM Config (.txt)
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Renders a STORY step. `storyStep` is the index into STEPS (NOT state.step — on
+// the story-dm track the two diverge because DM steps are interleaved), so the
+// switch and all story-index logic key off storyStep.
+function renderStep(storyStep: number, state: StoryState, setState: React.Dispatch<React.SetStateAction<StoryState>>, next: () => void, askAssistant: (p: string) => Promise<void>, setHoverHeatLevel?: (lvl: HeatLevel | null) => void, hoverHeatLevel?: HeatLevel | null, isSyncNeeded?: boolean, syncDeskstateToAI?: () => void, onExportDM?: () => void) {
   const HEAT_DESCRIPTIONS = {
     1: "Slow Burn / Tension Only",
     2: "Mild Intimacy / Suggestive",
@@ -3186,7 +3693,7 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
     5: "Maximum Intensity"
   };
 
-  switch (state.step) {
+  switch (storyStep) {
     case 0: // Mode Selection
       return (
         <div className="space-y-12 py-12">
@@ -3285,30 +3792,27 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
           <div className="pt-12">
             <p className="text-center text-[10px] uppercase tracking-[0.3em] font-black text-label mb-1">Output Track</p>
             <p className="text-center text-xs text-text-muted mb-4">What is this workshop producing? (This is communicated to the collaborator.)</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-2xl mx-auto">
-              <button
-                onClick={() => setState(s => ({ ...s, isDMOnly: false }))}
-                className={`text-left p-4 rounded-xl border transition-all ${
-                  !state.isDMOnly
-                    ? "bg-accent/10 border-accent text-text-main shadow-[0_0_20px_rgba(20,184,166,0.2)]"
-                    : "bg-card border-border text-text-muted hover:border-text-muted"
-                }`}
-              >
-                <div className="font-mono text-[11px] font-bold tracking-[0.15em] uppercase mb-1.5">Full Story Package</div>
-                <div className="text-[11px] leading-relaxed text-text-muted">The standard pipeline — a complete deliverable set (plot card, character sheets, scenarios, prompt plot, guidelines, reminders) around a continuous protagonist.</div>
-              </button>
-              <button
-                onClick={() => setState(s => ({ ...s, isDMOnly: true }))}
-                className={`text-left p-4 rounded-xl border transition-all ${
-                  state.isDMOnly
-                    ? "bg-accent/10 border-accent text-text-main shadow-[0_0_20px_rgba(20,184,166,0.2)]"
-                    : "bg-card border-border text-text-muted hover:border-text-muted"
-                }`}
-              >
-                <div className="font-mono text-[11px] font-bold tracking-[0.15em] uppercase mb-1.5">Dungeon-Mind <span className="text-text-dim normal-case tracking-normal">(advanced)</span></div>
-                <div className="text-[11px] leading-relaxed text-text-muted">A stateless "world-as-stage" the player drops into as an external protagonist. The collaborator applies USCS DM-only rules; the visual step pipeline is the same for now.</div>
-              </button>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 max-w-3xl mx-auto">
+              {([
+                ["story", "Full Story Package", "The standard pipeline — a complete deliverable set (plot card, character sheets, scenarios, prompt plot, guidelines, reminders) around a continuous protagonist."],
+                ["story-dm", "Story + Dungeon Mind", "A full story package, then a Dungeon Mind config attached to it — a game-mechanics agent (dice, stats, inventory, rules) that runs alongside the narrative."],
+                ["dm-only", "Dungeon Mind only", "Just a Dungeon Mind config — the game-mechanics engine (dice rolls, stat schema, game rules) you attach to an existing story. No plot or characters built here."],
+              ] as [WorkshopTrack, string, string][]).map(([track, title, desc]) => (
+                <button
+                  key={track}
+                  onClick={() => setState(s => ({ ...s, workshopTrack: track, step: 0 }))}
+                  className={`text-left p-4 rounded-xl border transition-all ${
+                    state.workshopTrack === track
+                      ? "bg-accent/10 border-accent text-text-main shadow-[0_0_20px_rgba(20,184,166,0.2)]"
+                      : "bg-card border-border text-text-muted hover:border-text-muted"
+                  }`}
+                >
+                  <div className="font-mono text-[11px] font-bold tracking-[0.15em] uppercase mb-1.5">{title}</div>
+                  <div className="text-[11px] leading-relaxed text-text-muted">{desc}</div>
+                </button>
+              ))}
             </div>
+            <p className="text-center text-[10px] text-text-dim mt-3 max-w-xl mx-auto leading-relaxed">A Dungeon Mind is a separate game-mechanics agent on ISK0 — it handles dice, stat tracking, inventory and rule enforcement so the story AI focuses on narrative.</p>
           </div>
         </div>
       );
@@ -4606,17 +5110,17 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
           {/* Header */}
           <div className="space-y-2">
             <h2 className="text-4xl font-black uppercase tracking-tighter flex items-center gap-3">
-              {STEPS[state.step].replace(/ /g, '_')} <span className="text-xs bg-accent/20 text-accent px-2.5 py-1 rounded font-mono uppercase tracking-widest">AETHER_STREAM</span>
+              {STEPS[storyStep].replace(/ /g, '_')} <span className="text-xs bg-accent/20 text-accent px-2.5 py-1 rounded font-mono uppercase tracking-widest">AETHER_STREAM</span>
             </h2>
             <p className="text-text-muted font-medium text-sm">
-              {state.step === 9 ? "A planning step: design the alternate openings, the three-act structure, and any optional systems — each feeds a later step (see below)." :
-               state.step === 10 ? "Output performer instructions and inject the verbatim Architect Protocol sequence." :
-               state.step === 13 ? "Establish high-impact entry narrative lines and authored openings for all cast segments." :
+              {storyStep === 9 ? "A planning step: design the alternate openings, the three-act structure, and any optional systems — each feeds a later step (see below)." :
+               storyStep === 10 ? "Output performer instructions and inject the verbatim Architect Protocol sequence." :
+               storyStep === 13 ? "Establish high-impact entry narrative lines and authored openings for all cast segments." :
                "Generate style-compliant visual prompt triggers and portrait schemas for the engine."}
             </p>
           </div>
 
-          {state.step === 9 && (
+          {storyStep === 9 && (
             <div className="bg-card border border-border p-6 rounded-3xl space-y-3">
               <h3 className="text-sm font-black uppercase tracking-[0.2em] text-accent flex items-center gap-2"><HelpCircle className="w-4 h-4" /> What this step makes — and where it lands on ISK0</h3>
               <p className="text-xs text-text-muted leading-relaxed">This is a <span className="text-text-main font-bold">planning</span> step — nothing here is pasted into ISK0 as one block. Each output feeds a later step:</p>
@@ -4634,9 +5138,9 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
           {/* Prompt / Interactivity Guideline Card for the Active Step */}
           <div className="bg-card hover:border-accent/30 border border-border p-8 rounded-3xl relative overflow-hidden flex flex-col md:flex-row gap-6 items-center shadow-2xl transition-colors">
             <div className="w-16 h-16 bg-accent/10 rounded-full flex items-center justify-center shrink-0">
-              {state.step === 9 ? <BookOpen className="w-8 h-8 text-accent opacity-80" /> :
-               state.step === 10 ? <Cpu className="w-8 h-8 text-accent opacity-80 animate-pulse" /> :
-               state.step === 13 ? <MessageSquare className="w-8 h-8 text-accent opacity-80" /> :
+              {storyStep === 9 ? <BookOpen className="w-8 h-8 text-accent opacity-80" /> :
+               storyStep === 10 ? <Cpu className="w-8 h-8 text-accent opacity-80 animate-pulse" /> :
+               storyStep === 13 ? <MessageSquare className="w-8 h-8 text-accent opacity-80" /> :
                <ImageIcon className="w-8 h-8 text-accent opacity-80" />}
             </div>
             <div className="space-y-2 text-center md:text-left flex-1">
@@ -4644,23 +5148,23 @@ function renderStep(state: StoryState, setState: React.Dispatch<React.SetStateAc
                 SIDELINE_COMMUNICATION_PROTOCOL :: ACTIVE
               </span>
               <h3 className="text-lg font-black uppercase tracking-tight">
-                {state.step === 9 ? "Plan Scenarios, Act Structure & Systems" :
-                 state.step === 10 ? "Formulate the Prompt Plot" :
-                 state.step === 13 ? "Script Dynamic Authored Openings" :
+                {storyStep === 9 ? "Plan Scenarios, Act Structure & Systems" :
+                 storyStep === 10 ? "Formulate the Prompt Plot" :
+                 storyStep === 13 ? "Script Dynamic Authored Openings" :
                  "Calibrate Image Prompts"}
               </h3>
               <p className="text-xs text-text-dim leading-relaxed max-w-2xl">
-                {state.step === 9 ? "Use the Collaborator Chat to design 2–3 scenario variants (alternate openings), shape the three-act structure, and decide on optional modules / timekeeping / status systems — or hit the button to start." :
-                 state.step === 10 ? "Send 'Generate performant instructions for prompt map' in the sideline chat to assemble verbatim continuity protocols." :
-                 state.step === 13 ? "Write the actual opening message for each scenario variant — these become ISK0's 'First Messages (Scenarios)' field. Use the chat, or hit the button to draft them." :
+                {storyStep === 9 ? "Use the Collaborator Chat to design 2–3 scenario variants (alternate openings), shape the three-act structure, and decide on optional modules / timekeeping / status systems — or hit the button to start." :
+                 storyStep === 10 ? "Send 'Generate performant instructions for prompt map' in the sideline chat to assemble verbatim continuity protocols." :
+                 storyStep === 13 ? "Write the actual opening message for each scenario variant — these become ISK0's 'First Messages (Scenarios)' field. Use the chat, or hit the button to draft them." :
                  "Calibrate stable diffusion seeds and descriptions: 'Draft location portrait triggers' on the sideline chat."}
               </p>
             </div>
             <button 
               onClick={() => {
-                const query = state.step === 9 ? "[WORKSHOP ACTION — SCENARIO & SYSTEM PLANNING] Based on our locked premise, propose: (1) 2–3 scenario VARIANTS — distinct alternate openings/entry points that all lead into the same core story (these become our First Messages later); (2) the three-act STRUCTURE with early/mid/late hooks (this becomes the Prompt Plot's pacing/phase structure); and (3) a recommendation on whether the story benefits from optional MODULES, a timekeeping system, or a status dashboard. Capture the finished scenario variants wrapped in <<<USCS_BLOCK SCENARIOS>>> … <<<END USCS_BLOCK>>>." :
-                              state.step === 10 ? "Structure the prompt plot instructions and include Architect Protocols." :
-                              state.step === 13 ? "Draft the opening First Message for each scenario variant we defined — one authored opening per variant, per the USCS First Message rules. Wrap EACH finished message in its own <<<USCS_BLOCK FIRST_MESSAGE: N>>> … <<<END USCS_BLOCK>>> (numbered 1, 2, 3… per scenario) so they're captured and counted toward the budget." :
+                const query = storyStep === 9 ? "[WORKSHOP ACTION — SCENARIO & SYSTEM PLANNING] Based on our locked premise, propose: (1) 2–3 scenario VARIANTS — distinct alternate openings/entry points that all lead into the same core story (these become our First Messages later); (2) the three-act STRUCTURE with early/mid/late hooks (this becomes the Prompt Plot's pacing/phase structure); and (3) a recommendation on whether the story benefits from optional MODULES, a timekeeping system, or a status dashboard. Capture the finished scenario variants wrapped in <<<USCS_BLOCK SCENARIOS>>> … <<<END USCS_BLOCK>>>." :
+                              storyStep === 10 ? "Structure the prompt plot instructions and include Architect Protocols." :
+                              storyStep === 13 ? "Draft the opening First Message for each scenario variant we defined — one authored opening per variant, per the USCS First Message rules. Wrap EACH finished message in its own <<<USCS_BLOCK FIRST_MESSAGE: N>>> … <<<END USCS_BLOCK>>> (numbered 1, 2, 3… per scenario) so they're captured and counted toward the budget." :
                               "Build detailed stable diffusion image prompts for our main cast.";
                 askAssistant(query);
               }}

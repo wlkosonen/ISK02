@@ -333,6 +333,118 @@ export function buildStepContext(uiStep: number): string {
   return parts.join("\n\n");
 }
 
+// Per-DM-step focus directive. The full Section 27 (Dungeon Mind System) is
+// injected for every DM step — it's the complete spec and the DM config is not
+// subject to the story package's 20k ceiling, so the token cost is acceptable —
+// and THIS scopes the model to the single field the current step produces, with
+// the exact capture sentinel to emit.
+const DM_STEP_FOCUS: Record<number, string> = {
+  0: `CURRENT DM BUILD STEP — Concept & Scope (USCS §27.4, DM STEP 1). Help the creator LOCK: genre, which mechanics are essential (combat/skills/inventory/survival), whether death is permanent or recoverable, the dice system (d20 or custom), and complexity (light/medium/heavy). Recommend a starting stat schema for the genre per §27.3 Field 7. Do NOT write the full game rules yet, and do NOT emit any capture block this step — this is scoping discussion only.`,
+  1: `CURRENT DM BUILD STEP — Stat Schema (USCS §27.3 Field 7 / §27.4 DM STEP 2). Design the stat list (each stat: name, mode Numeric/Text/Enum, one-line role). The "Alive" enum [alive] [dead] is mandatory. Target 5–15 stats. When confirmed, emit the finished schema wrapped in <<<USCS_BLOCK DM_STAT_SCHEMA>>> … <<<END USCS_BLOCK>>>.`,
+  2: `CURRENT DM BUILD STEP — Game Rules (USCS §27.3 Field 3 / §27.4 DM STEP 3). Write the full Game Rules document with every applicable required section, in direct imperative voice, referencing the schema stat names exactly. HARD CAP 10,000 tokens (target 3,000–6,000). Emit wrapped in <<<USCS_BLOCK DM_GAME_RULES>>> … <<<END USCS_BLOCK>>>.`,
+  3: `CURRENT DM BUILD STEP — Game Rule Reminder (USCS §27.3 Field 4 / §27.4 DM STEP 4). Extract ONLY the 3–5 most critical, easily-forgotten rules into compressed imperative bullets (this feeds the highest-priority reminder layer). Keep under ~500 tokens. Emit wrapped in <<<USCS_BLOCK DM_REMINDER>>> … <<<END USCS_BLOCK>>>.`,
+  4: `CURRENT DM BUILD STEP — Instruction (USCS §27.3 Field 5 / §27.4 DM STEP 5). Write the bridge that tells the STORY AI what the DM handles and exactly when to pause and let it resolve. Emit wrapped in <<<USCS_BLOCK DM_INSTRUCTION>>> … <<<END USCS_BLOCK>>>.`,
+  5: `CURRENT DM BUILD STEP — Player Guide (USCS §27.3 Field 6 / §27.4 DM STEP 6). Write the friendly player-facing guide (system, key stats, how rolls/combat work, must-know rules). Markdown allowed. HARD LIMIT 1,000 CHARACTERS. Emit wrapped in <<<USCS_BLOCK DM_PLAYER_GUIDE>>> … <<<END USCS_BLOCK>>>.`,
+  6: `CURRENT DM BUILD STEP — Name & Model (USCS §27.3 Fields 1–2 / §27.4 DM STEP 7). Propose a descriptive config name and recommend the appropriate ISK0 DM model for the ruleset's complexity. Emit EXACTLY one block whose body is "Name: <name> | Model: <model>", wrapped in <<<USCS_BLOCK DM_NAME_MODEL>>> … <<<END USCS_BLOCK>>>.`,
+  7: `CURRENT DM BUILD STEP — Final Review (USCS §27.4 DM STEP 8). Present the complete DM config (all seven fields, in order) for the creator's confirmation. If they want a change, re-emit ONLY the affected field in its capture block. Do not invent new fields.`,
+};
+
+// The exact capture sentinel TYPE each capturing DM step must emit. Steps 0
+// (scope discussion) and 7 (final review) produce no new capture block.
+const DM_STEP_SENTINEL: Record<number, string> = {
+  1: "DM_STAT_SCHEMA",
+  2: "DM_GAME_RULES",
+  3: "DM_REMINDER",
+  4: "DM_INSTRUCTION",
+  5: "DM_PLAYER_GUIDE",
+  6: "DM_NAME_MODEL",
+};
+
+// A loud, literal reminder of the capture format. Weaker local models tend to
+// write the content but SKIP the opening `<<<USCS_BLOCK …>>>` marker (or replace
+// it with a markdown heading), which means the workshop can't save the field.
+// Showing the exact required first/last line — with the concrete type — fixes
+// that far more reliably than a one-line mention buried in prose.
+function dmCaptureFormatReminder(type: string): string {
+  return (
+    "================================================================================\n" +
+    "OUTPUT FORMAT — MANDATORY CAPTURE SENTINELS (the workshop parses these LITERALLY)\n" +
+    "================================================================================\n" +
+    "When you emit the FINISHED field, wrap it EXACTLY like this — each marker ALONE on its own line:\n\n" +
+    `<<<USCS_BLOCK ${type}>>>\n` +
+    "…the finished field content goes here…\n" +
+    "<<<END USCS_BLOCK>>>\n\n" +
+    "NON-NEGOTIABLE RULES:\n" +
+    `• The FIRST line of the block MUST be exactly \`<<<USCS_BLOCK ${type}>>>\` — three '<' characters, the literal word USCS_BLOCK, a space, the type ${type}, then three '>' characters. Do NOT replace it with a markdown heading (### …), bold text (**…**), a code fence, or any prose. Do NOT skip it.\n` +
+    "• The LAST line MUST be exactly `<<<END USCS_BLOCK>>>` (do NOT repeat the type on the closing marker).\n" +
+    "• Put ALL conversational explanation OUTSIDE the two markers. ONLY the finished field belongs between them.\n" +
+    `• If you omit the opening \`<<<USCS_BLOCK ${type}>>>\` line, the workshop CANNOT capture the field and the creator loses your work — so include it every time you finalize.`
+  );
+}
+
+/**
+ * Build the system-prompt context for a Dungeon Mind build step (USCS §27):
+ * the core directive + the full Section 27 spec + a per-step focus directive +
+ * (for capturing steps) a loud, literal capture-sentinel format reminder.
+ */
+export function buildDMStepContext(dmStep: number): string {
+  const doc = load();
+  const parts: string[] = [CORE_PREAMBLE];
+
+  const sec27 = doc.sections.get("27");
+  if (sec27) {
+    parts.push(
+      "================================================================================\n" +
+      "AUTHORITATIVE SPECIFICATION — DUNGEON MIND SYSTEM (verbatim — USCS v6.1 §27)\n" +
+      "================================================================================\n" +
+      sec27
+    );
+  }
+
+  const focus = DM_STEP_FOCUS[dmStep];
+  if (focus) {
+    parts.push(
+      "================================================================================\n" +
+      "CURRENT DUNGEON MIND BUILD STEP — WORK ONLY ON THIS\n" +
+      "================================================================================\n" +
+      focus
+    );
+  }
+
+  const sentinelType = DM_STEP_SENTINEL[dmStep];
+  if (sentinelType) {
+    parts.push(dmCaptureFormatReminder(sentinelType));
+  }
+
+  return parts.join("\n\n");
+}
+
+/**
+ * Context for the story-dm "Story + DM Review" coherence step: the core directive,
+ * the full Section 27 (which contains §27.5 integration guidance), and a focus
+ * directive to cross-check the assembled story package against the DM config.
+ */
+export function buildDMIntegrationContext(): string {
+  const doc = load();
+  const parts: string[] = [CORE_PREAMBLE];
+  const sec27 = doc.sections.get("27");
+  if (sec27) {
+    parts.push(
+      "================================================================================\n" +
+      "AUTHORITATIVE SPECIFICATION — DUNGEON MIND SYSTEM (verbatim — USCS v6.1 §27)\n" +
+      "================================================================================\n" +
+      sec27
+    );
+  }
+  parts.push(
+    "================================================================================\n" +
+    "STORY + DUNGEON MIND COHERENCE REVIEW — WORK ONLY ON THIS\n" +
+    "================================================================================\n" +
+    `Both the story package and the Dungeon Mind config are built. Per USCS §27.5, cross-check them: the Guidelines must contain a DUNGEON MIND ACTIVE rule and must NOT track stats the DM owns; the Prompt Plot must not restate game mechanics the DM handles; any module triggers must reference stat names that exist in the DM stat schema; the player persona should note which stats the player assigns. Report misalignments and, for each fix, re-emit the affected block in its capture sentinel (story blocks use their normal sentinels; DM fields use DM_* sentinels). Do not produce new deliverables — only reconcile the existing ones.`
+  );
+  return parts.join("\n\n");
+}
+
 export function uscsLoaded(): boolean {
   return load().loaded;
 }

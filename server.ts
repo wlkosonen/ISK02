@@ -5,7 +5,7 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import Anthropic from "@anthropic-ai/sdk";
 import dotenv from "dotenv";
-import { buildStepContext, uscsLoaded } from "./uscs";
+import { buildStepContext, buildDMStepContext, buildDMIntegrationContext, uscsLoaded } from "./uscs";
 
 dotenv.config();
 
@@ -203,7 +203,7 @@ async function startServer() {
   // Unified API Route for AI assistance
   app.post("/api/assistant", async (req, res) => {
     try {
-      const { prompt, history, systemInstruction, provider, modelSettings, step } = req.body;
+      const { prompt, history, systemInstruction, provider, modelSettings, step, dmStep, combinedReview } = req.body;
 
       const aiProvider = provider || "gemini";
       const settings = modelSettings || {};
@@ -211,8 +211,13 @@ async function startServer() {
       // Assemble the system prompt server-side: the always-on USCS core directive
       // plus ONLY the verbatim slice of the master document for the current step,
       // followed by the client-supplied dynamic context (live deskstate + the
-      // real-time [SET_*] UI-sync command protocol).
-      const uscsContext = buildStepContext(typeof step === "number" ? step : 0);
+      // real-time [SET_*] UI-sync command protocol). On a Dungeon Mind step
+      // (dmStep >= 0) we inject Section 27 instead of the story-step slice.
+      const uscsContext = combinedReview === true
+        ? buildDMIntegrationContext()
+        : typeof dmStep === "number" && dmStep >= 0
+        ? buildDMStepContext(dmStep)
+        : buildStepContext(typeof step === "number" ? step : 0);
       const fullSystem = `${uscsContext}\n\n${systemInstruction || ""}`.trim();
 
       // --- Prompt caching prep (Anthropic) ---------------------------------
@@ -511,33 +516,62 @@ async function startServer() {
 
         try {
           console.log("Forwarding request to Ollama at %s with model %s", target, modelName);
-          const response = await fetch(target, {
+          // Ollama defaults to a 4,096-token context. Our system prompts inject
+          // verbatim USCS sections (a DM step is ~4,400 tokens on its own), so the
+          // default would SILENTLY TRUNCATE the prompt — the model then receives a
+          // mangled instruction and emits garbage (e.g. a lone "["). Size num_ctx to
+          // fit the real prompt plus headroom for the reply (~4 chars/token est),
+          // clamped so we never allocate an absurd KV cache.
+          const approxPromptChars = (fullSystem?.length || 0) + messages.reduce((n: number, m: any) => n + (m.content?.length || 0), 0);
+          const approxPromptTokens = Math.ceil(approxPromptChars / 4);
+          const replyHeadroom = Math.min(settings.maxTokens || 2048, 4096);
+          const num_ctx = Math.min(32768, Math.max(4096, approxPromptTokens + replyHeadroom + 512));
+          // Build the request body. `think: false` tells hybrid reasoning models
+          // (qwen3, deepseek-r1, gpt-oss…) to answer DIRECTLY instead of spending
+          // the whole token budget in a `message.thinking` stream we don't read —
+          // otherwise `message.content` comes back empty and we'd report a bogus
+          // "empty response". Pass `think === undefined` to omit the field entirely.
+          const ollamaBody = (think?: boolean) => JSON.stringify({
+            model: modelName,
+            messages: messages,
+            stream: wantStream,
+            ...(think === undefined ? {} : { think }),
+            options: {
+              temperature: settings.temperature ?? 1.0,
+              num_predict: settings.maxTokens || 4096,
+              num_ctx
+            }
+          });
+          const postOllama = (think?: boolean) => fetch(target, {
             method: "POST",
             redirect: "error", // a private host must not 302-bounce us to a public/metadata target
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              model: modelName,
-              messages: messages,
-              stream: wantStream,
-              options: {
-                temperature: settings.temperature ?? 1.0,
-                num_predict: settings.maxTokens || 4096
-              }
-            })
+            body: ollamaBody(think)
           });
 
+          let response = await postOllama(false);
           if (!response.ok) {
             const errorText = await response.text();
-            throw new Error(`Ollama returned status ${response.status}: ${errorText || response.statusText}`);
+            // Pure (non-hybrid) models reject the `think` field — retry without it.
+            if (/think/i.test(errorText)) {
+              response = await postOllama(undefined);
+              if (!response.ok) {
+                const e2 = await response.text();
+                throw new Error(`Ollama returned status ${response.status}: ${e2 || response.statusText}`);
+              }
+            } else {
+              throw new Error(`Ollama returned status ${response.status}: ${errorText || response.statusText}`);
+            }
           }
 
           if (wantStream && response.body) {
-            // Ollama streams newline-delimited JSON: {message:{content},done,done_reason}
+            // Ollama streams newline-delimited JSON: {message:{content,thinking},done,done_reason}
             const reader = (response.body as any).getReader();
             const decoder = new TextDecoder();
             let buf = "";
             let truncated = false;
             let any = false;
+            let thoughtOnly = false; // model emitted reasoning but never a final answer
             for (;;) {
               const { done, value } = await reader.read();
               if (done) break;
@@ -551,10 +585,15 @@ async function startServer() {
                 try { obj = JSON.parse(line); } catch { continue; }
                 const t = obj?.message?.content;
                 if (t) { any = true; sseDelta(t); }
+                else if (obj?.message?.thinking) thoughtOnly = true;
                 if (obj?.done && obj?.done_reason === "length") truncated = true;
               }
             }
-            if (!any) throw new Error("Empty response from Ollama");
+            if (!any) {
+              throw new Error(thoughtOnly
+                ? "The model returned only reasoning and no final answer — it likely ran out of context while 'thinking'. Try a non-reasoning model, or raise the model's context length."
+                : "Empty response from Ollama");
+            }
             return sseDone(truncated);
           }
 
@@ -562,7 +601,9 @@ async function startServer() {
           const text = responseData?.message?.content;
 
           if (!text) {
-            throw new Error(`No content from Ollama response: ${JSON.stringify(responseData)}`);
+            throw new Error(responseData?.message?.thinking
+              ? "The model returned only reasoning and no final answer — it likely ran out of context while 'thinking'. Try a non-reasoning model, or raise the model's context length."
+              : `No content from Ollama response: ${JSON.stringify(responseData)}`);
           }
 
           const truncated = responseData?.done_reason === "length";
