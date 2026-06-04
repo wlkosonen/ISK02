@@ -330,7 +330,7 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 
 // Version of THIS app (the Aether_Core tool), distinct from the USCS framework
 // version it implements. Bump this when you ship changes.
-const APP_VERSION = "0.9.1";
+const APP_VERSION = "0.9.2";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
 const USCS_VERSION = "6.1";
 
@@ -2784,6 +2784,13 @@ function MainInterfaceChat({ state, askAssistant, preview, isSyncNeeded, syncDes
 
 function VersionHistoryModal({ onClose }: { onClose: () => void }) {
   const releases: { v: string; title: string; items: string[] }[] = [
+    {
+      v: "0.9.2", title: "Dungeon Mind rules: executable math",
+      items: [
+        "Hardened the Dungeon Mind framework (USCS §27) so Game Rules must be mechanically runnable: every value the DM computes — stat→modifier, defense/AC, skill DCs, damage, death-save DC, progression numbers, condition magnitudes, encumbrance — needs an explicit formula, not a dangling reference.",
+        "Stat Schema now requires paired Max stats (Max HP/MP) for capped resources, and Concept & Scope locks the core resolution math up front.",
+      ],
+    },
     {
       v: "0.9.1", title: "Local-model fixes & sturdier capture",
       items: [

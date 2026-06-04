@@ -6891,46 +6891,83 @@ FIELD 3 — GAME RULES
   "The rules the DM follows — combat, damage, levelling, healing, etc.
   The core tool mechanics are handled automatically."
 
-  Target: 3,000–6,000 tokens. Leave headroom for future edits.
+  Target: 3,000–6,000 tokens — treat 3,000 as a FLOOR, not a ceiling, and
+  leave headroom under the 10,000 cap for future edits. A terse ruleset
+  that names a section but omits its numbers, magnitudes, or examples is
+  incomplete. Include a worked numeric example for each core subsystem:
+  a sample attack with the actual math, a sample skill check, and a sample
+  condition application showing the exact stat change.
+
+  EXECUTABILITY MANDATE (the single most important rule of this field):
+  Every quantity the DM must COMPUTE needs an explicit formula or lookup
+  table. A reference is not a definition. If the rules say "d20 + STR
+  modifier vs. AC", they MUST also define how the STR modifier and the AC
+  are derived — otherwise the DM cannot resolve a single roll. "Roll high
+  = good" is not a mechanic; "Damage = weapon die + floor((STR-10)/2)" is.
+  Before finishing, sweep the document and confirm NOTHING the DM has to
+  calculate is left dangling: stat→modifier, defense/AC, every DC, damage,
+  death checks, progression numbers, condition magnitudes, resource caps.
 
   REQUIRED SECTIONS IN GAME RULES:
 
   1. RESOLUTION SYSTEM
-     How the d20 is used. What modifiers apply. What constitutes
-     success/failure. Base format: d20 + [relevant modifier] vs.
-     [DC or target AC]. Define Difficulty Classes (DCs) if using
-     skill checks.
+     How the d20 is used. Base format: d20 + [modifier] vs. [DC or AC].
+     DEFINE the stat→modifier formula explicitly (e.g. modifier =
+     floor((stat - 10) / 2), so STR 14 = +2). DEFINE the Difficulty Class
+     ladder with actual numbers (e.g. Easy 10 / Medium 15 / Hard 20).
+     State critical (nat 20) and fumble (nat 1) behaviour.
 
   2. COMBAT
-     Initiative order. Attack resolution. Damage calculation.
-     Critical hit and critical fail conditions. How status effects
-     interact with combat.
+     Initiative order (which stat governs it, how ties break). Attack
+     resolution. DEFINE how defense/AC is computed (e.g. AC = 10 + DEX
+     modifier + armour bonus). DEFINE the damage formula, and if weapons
+     vary, give a weapon-die table (Dagger d4, Sword d6, …). Critical hit
+     / fumble effects. How status effects modify rolls.
 
   3. CHARACTER STATS & THEIR ROLES
-     Define each stat from the schema and exactly how it functions
-     in rule resolution. Reference schema stat names exactly as defined.
+     Define each stat from the schema and exactly how it functions in
+     resolution. Reference schema stat names exactly as defined. Every
+     numeric stat that feeds a roll must point at the modifier formula
+     from section 1.
 
   4. DAMAGE & HEALING
-     Damage types (if relevant). Healing sources and caps.
-     Conditions for unconsciousness vs. death.
+     Damage types (if relevant). Healing sources. A resource cap MUST
+     reference a tracked Max stat ("healing cannot raise HP above Max HP")
+     — if you reference the cap, that Max stat has to exist in the schema.
+     Unconsciousness vs. death thresholds.
 
   5. DEATH CONDITION
-     Exactly when the Alive stat flips to false. Whether death is
-     permanent. What happens mechanically at 0 HP.
+     Exactly when the Alive stat flips to [dead]. Whether death is
+     permanent. What happens mechanically at 0 HP. If a death save is
+     used, state its EXACT DC and which stat rolls it.
 
   6. PROGRESSION (if applicable)
-     XP thresholds. Level-up triggers. What changes on level-up.
+     Real numbers: XP needed per level (or the curve), and what each
+     level grants (HP / MP / stat gains). "Upon reaching thresholds" is
+     not enough — give the thresholds.
 
   7. INVENTORY (if applicable)
-     Weight/slot limits. Consumable rules. Loot resolution.
+     DEFINE the carry limit numerically (e.g. slots = STR, or a fixed
+     count) and the EXACT penalty for exceeding it. Consumable rules.
+     Loot resolution.
 
   8. SKILL CHECKS (if applicable)
-     What skills exist. What stats govern them. DC ranges.
+     What skills exist, which stat governs each, and the DC ladder with
+     numbers (reuse section 1's ladder).
+
+  9. CONDITIONS (if the schema tracks any — Sanity, Hunger, Poison, …)
+     For each tracked condition or depleting stat: what changes it and BY
+     HOW MUCH (e.g. "Witnessing undead: -2 Sanity; failing a fear check:
+     -1d4 Sanity"), and what happens at its threshold ("Sanity 0 = Insane
+     condition"). A narrative trigger without a magnitude is not a mechanic.
 
   TONE OF WRITING:
   Write in direct imperative — these are instructions to the DM AI.
-  "When a player attacks, roll d20 + STR modifier vs. target AC."
-  Not: "The DM might consider having the player roll..."
+  Good: "Attack: roll d20 + floor((STR-10)/2) vs. target AC (10 + DEX
+  modifier + armour). On a hit, deal weapon-die + STR modifier damage."
+  Bad:  "When a player attacks, roll d20 + STR modifier vs. target AC."
+        (modifier and AC are undefined — the DM cannot resolve this.)
+  Worse: "The DM might consider having the player roll..."
   Precision beats prose. The DM AI is not reading for entertainment.
 
 FIELD 4 — GAME RULE REMINDER
@@ -7006,11 +7043,20 @@ FIELD 7 — STAT SCHEMA
     Example: "HP — Hit points. Current health. 0 = unconscious."
     Example: "STR — Strength. Governs melee attacks and physical feats."
 
+  PAIRED MAX STATS:
+    Any numeric resource that depletes and has a ceiling (HP, MP, Stamina)
+    needs a companion Max stat (Max HP, Max MP). The Game Rules will
+    reference the ceiling — "healing cannot exceed Max HP" — and that
+    ceiling must be a tracked stat or the rule is unenforceable. Add the
+    Max stat here, in the schema, not later in the rules.
+
   RECOMMENDED STAT SCHEMAS BY GENRE:
 
   FANTASY RPG:
-    HP — Numeric. Hit points.
+    HP — Numeric. Current hit points.
+    Max HP — Numeric. Hit-point ceiling; HP cannot exceed it.
     MP — Numeric. Mana/magic points (if magic system exists).
+    Max MP — Numeric. Mana ceiling (if magic system exists).
     STR — Numeric. Strength.
     DEX — Numeric. Dexterity.
     CON — Numeric. Constitution.
@@ -7051,6 +7097,10 @@ DM STEP 1 — CONCEPT & SCOPE
   — What dice system? (d20 standard, or custom?)
   — What's the complexity level? (Light — few stats, simple rolls.
     Medium — standard RPG. Heavy — many interacting systems.)
+  — Lock the CORE RESOLUTION MATH now, not later: the stat→modifier
+    formula (e.g. floor((stat-10)/2)), how defense/AC is computed, and the
+    base damage formula. The stat schema and Game Rules are built on top of
+    these three, so agreeing them up front keeps everything consistent.
   Lock scope before proceeding.
 
 DM STEP 2 — STAT SCHEMA
