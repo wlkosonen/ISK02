@@ -247,7 +247,7 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 
 // Version of THIS app (the Aether_Core tool), distinct from the USCS framework
 // version it implements. Bump this when you ship changes.
-const APP_VERSION = "0.6.2";
+const APP_VERSION = "0.7.0";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
 const USCS_VERSION = "6.1";
 
@@ -1394,6 +1394,79 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
     triggerToast("Snapshot saved ✓", "info");
   };
 
+  // SAVE WORKSPACE: a portable JSON backup of the ENTIRE workshop state — every
+  // deskstate field, captured deliverables AND the chat — so the project can be
+  // restored later, moved to another machine, or shared. API keys are stripped
+  // (a shared file must never carry secrets); the recipient supplies their own.
+  const saveWorkspace = () => {
+    const { isAssistantLoading: _drop, modelSettings, ...rest } = state;
+    const backup = {
+      _aether_backup: true,
+      appVersion: APP_VERSION,
+      uscsVersion: USCS_VERSION,
+      savedAt: new Date().toISOString(),
+      // Keep non-secret model prefs (provider/model/temp), drop the keys.
+      state: {
+        ...rest,
+        modelSettings: { ...modelSettings, geminiApiKey: "", anthropicApiKey: "", openRouterApiKey: "" },
+      },
+    };
+    downloadTextFile(`${sanitizeFilename(state.title)}_workspace.aether.json`, JSON.stringify(backup, null, 2));
+    triggerToast("Workspace backup saved ✓ — API keys are NOT included.", "info");
+  };
+
+  // LOAD WORKSPACE: restore a .aether.json backup. Rehydrates like a fresh page
+  // load (spread over DEFAULT_STATE, drop transient flags, merge nested maps) but
+  // KEEPS the keys currently typed into this browser, since the file carries none.
+  const loadWorkspace = async (file: File) => {
+    let parsed: any;
+    try {
+      parsed = JSON.parse(await file.text());
+    } catch {
+      triggerToast("Couldn't read that file — it isn't valid JSON.", "info");
+      return;
+    }
+    if (!parsed || parsed._aether_backup !== true || !parsed.state) {
+      triggerToast("That doesn't look like an Aether_Core workspace backup.", "info");
+      return;
+    }
+    const hasWork = !!(state.assistantHistory.length || state.concept || state.mode || state.title);
+    if (hasWork && !window.confirm("Load this workspace backup? It REPLACES your current story, chat and deliverables. Your typed API keys are kept.")) return;
+
+    const loaded = parsed.state as Partial<StoryState>;
+    const restored: StoryState = {
+      ...DEFAULT_STATE,
+      ...loaded,
+      isAssistantLoading: false,
+      // The backup has no keys — preserve whatever the user already typed here.
+      modelSettings: {
+        ...DEFAULT_STATE.modelSettings,
+        ...(loaded.modelSettings || {}),
+        geminiApiKey: state.modelSettings.geminiApiKey,
+        anthropicApiKey: state.modelSettings.anthropicApiKey,
+        openRouterApiKey: state.modelSettings.openRouterApiKey,
+      },
+      deliverables: { ...EMPTY_DELIVERABLES, ...(loaded.deliverables || {}) },
+      customLimits: { ...DEFAULT_STATE.customLimits, ...(loaded.customLimits || {}) },
+    };
+    setState(restored);
+    // Realign the sync baseline so a freshly loaded project doesn't show a
+    // spurious "sync needed" banner (the deskstate IS the loaded state).
+    setLastSyncedState({
+      mode: restored.mode, heatLevel: restored.heatLevel, isDMOnly: restored.isDMOnly,
+      concept: restored.concept, settingType: restored.settingType, tone: restored.tone,
+      artStyle: restored.artStyle, imageService: restored.imageService, palette: [...restored.palette],
+      aestheticMode: restored.aestheticMode, groundingRules: restored.groundingRules,
+      title: restored.title, summary: restored.summary,
+      tokenBudgetMin: restored.tokenBudgetMin, tokenBudgetMax: restored.tokenBudgetMax,
+      budgetTierMode: restored.budgetTierMode, customLimits: { ...restored.customLimits }, step: restored.step,
+    });
+    setResponseTruncated(false);
+    setReadyToAdvance(false);
+    setShowRestoreNotice(false);
+    triggerToast("Workspace restored ✓", "ai-to-ui");
+  };
+
   return (
     <div className="h-screen max-h-screen flex flex-col bg-bg technical-grid overflow-hidden">
       {/* Header */}
@@ -1665,6 +1738,8 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                 syncDeskstateToAI={syncDeskstateToAI}
                 onExport={exportFinalPackage}
                 onSnapshot={saveSnapshot}
+                onSaveWorkspace={saveWorkspace}
+                onLoadWorkspace={loadWorkspace}
                 isExporting={isExporting}
                 exportProgress={exportProgress}
                 readyToAdvance={readyToAdvance}
@@ -2162,7 +2237,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
   );
 }
 
-function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDetached, setIsDetached, isSyncNeeded, syncDeskstateToAI, onExport, onSnapshot, isExporting, exportProgress, readyToAdvance, onAdvance, responseTruncated, onContinue, onRetry }: {
+function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDetached, setIsDetached, isSyncNeeded, syncDeskstateToAI, onExport, onSnapshot, onSaveWorkspace, onLoadWorkspace, isExporting, exportProgress, readyToAdvance, onAdvance, responseTruncated, onContinue, onRetry }: {
   state: StoryState,
   setState: React.Dispatch<React.SetStateAction<StoryState>>,
   askAssistant: (p: string) => Promise<void>,
@@ -2173,6 +2248,8 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
   syncDeskstateToAI?: () => void,
   onExport?: () => void,
   onSnapshot?: () => void,
+  onSaveWorkspace?: () => void,
+  onLoadWorkspace?: (file: File) => void,
   isExporting?: boolean,
   exportProgress?: string,
   readyToAdvance?: boolean,
@@ -2181,6 +2258,7 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
   onContinue?: () => void,
   onRetry?: () => void
 }) {
+  const workspaceFileRef = useRef<HTMLInputElement>(null);
   return (
     <>
       <div className={`p-4 border-b border-border bg-header/60 flex items-center justify-between shrink-0 ${isDetached ? 'cursor-grab active:cursor-grabbing h-10 py-0' : 'p-6'}`}>
@@ -2403,6 +2481,34 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
             )}
           </button>
         </div>
+        {/* Portable workspace backup — full state + chat as re-loadable JSON */}
+        <div className="grid grid-cols-2 gap-3 mt-3">
+          <button
+            onClick={onSaveWorkspace}
+            title="Save a portable .json backup of the whole workspace (deskstate + deliverables + chat) — re-loadable later or on another machine. API keys are NOT included."
+            className="py-2.5 bg-border/40 hover:bg-border/60 border border-border rounded-lg flex items-center justify-center gap-2 text-[9px] font-black uppercase tracking-widest transition-all"
+          >
+            <Download className="w-3 h-3" /> Save Workspace
+          </button>
+          <button
+            onClick={() => workspaceFileRef.current?.click()}
+            title="Load a previously saved .aether.json workspace backup — replaces the current story, chat & deliverables (your typed API keys are kept)"
+            className="py-2.5 bg-border/40 hover:bg-border/60 border border-border rounded-lg flex items-center justify-center gap-2 text-[9px] font-black uppercase tracking-widest transition-all"
+          >
+            <Save className="w-3 h-3" /> Load Workspace
+          </button>
+          <input
+            ref={workspaceFileRef}
+            type="file"
+            accept=".json,application/json"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f && onLoadWorkspace) onLoadWorkspace(f);
+              e.target.value = "";   // allow re-selecting the same file
+            }}
+          />
+        </div>
       </div>
     </>
   );
@@ -2502,6 +2608,13 @@ function MainInterfaceChat({ state, askAssistant, preview, isSyncNeeded, syncDes
 
 function VersionHistoryModal({ onClose }: { onClose: () => void }) {
   const releases: { v: string; title: string; items: string[] }[] = [
+    {
+      v: "0.7.0", title: "Portable workspace backups",
+      items: [
+        "Save Workspace / Load Workspace — export your entire project (settings, deliverables and chat) as a portable .aether.json file and re-load it later or on another machine.",
+        "API keys are deliberately excluded from the backup file, so it's safe to share or store; you supply your own key wherever you load it.",
+      ],
+    },
     {
       v: "0.6.2", title: "One-click copy for deliverables",
       items: [
@@ -2688,7 +2801,8 @@ function HelpModal({ onClose }: { onClose: () => void }) {
               <li>• <span className="text-text-main">⭐ Favourites</span> — star models in Settings to pin them at the top.</li>
               <li>• <span className="text-text-main">Token Budget</span> (Concept step) — tell the AI how big the final package should be; the gauge in the left panel tracks it.</li>
               <li>• <span className="text-text-main">LOCK IN</span> — when the AI marks a step complete, the top-right button pulses; click it (or the chat banner) to advance when you're ready.</li>
-              <li>• <span className="text-text-main">Snapshot</span> saves a full backup (chat included); <span className="text-text-main">Export_Core</span> saves just the clean deliverables.</li>
+              <li>• <span className="text-text-main">Snapshot</span> saves a readable .txt backup (chat included); <span className="text-text-main">Export_Core</span> saves just the clean deliverables.</li>
+              <li>• <span className="text-text-main">Save / Load Workspace</span> — a portable <code className="bg-black/30 px-1 rounded text-[11px]">.aether.json</code> file of your <em>entire</em> project (settings, deliverables &amp; chat). Reload it later or on another machine to pick up exactly where you left off. Your API keys are never written into the file — you supply them wherever you load it.</li>
             </ul>
           </section>
 
