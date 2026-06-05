@@ -345,7 +345,7 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 
 // Version of THIS app (the Aether_Core tool), distinct from the USCS framework
 // version it implements. Bump this when you ship changes.
-const APP_VERSION = "0.10.0";
+const APP_VERSION = "0.10.1";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
 const USCS_VERSION = "6.1";
 
@@ -1285,15 +1285,22 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
           triggerToast(`Matrix updated parameters: ${toastMsgs.join(", ")}`, "ai-to-ui");
         }
         if (warnings.length > 0) triggerToast(`⚠️ ${warnings[0]}`, "info");
-        // Arm the advance gate (pulses NEXT) on the explicit token OR a clear
-        // completion phrase. Models often announce readiness in prose but forget
-        // the [SYNC_PROCEED] token; since this is a SOFT signal (pulse only, never
-        // auto-advances), a prose fallback is safe. Scope the phrase match to the
-        // message TAIL so mid-response conditionals ("once you pick X we can
-        // proceed") don't fire it prematurely on an intake turn.
-        const proceedTail = fullText.slice(-300);
+        // Arm the advance gate (pulses NEXT) on: the explicit [SYNC_PROCEED] token,
+        // an ACTUAL deliverable capture this turn, OR a clear completion phrase.
+        // It's a SOFT signal (pulse only, never auto-advances).
+        // (1) Capturing a block IS the completion signal — the most reliable one.
+        //     Models often emit the deliverable but forget [SYNC_PROCEED] on that
+        //     very turn (seen on the DM Stat Schema capture), so arm on capture.
+        // (2) The prose fallback exists because models announce readiness in prose
+        //     and drop the token — but it must NOT fire on a CLARIFICATION turn that
+        //     is still soliciting confirmation. A conditional like "ready to advance
+        //     ONCE the schema is locked" / "once you confirm I'll emit…" means NOT
+        //     done yet, so suppress the prose match when the tail is soliciting.
+        const proceedTail = fullText.slice(-400);
         const proceedPhrase = /(everything is ready to proceed|ready to proceed to the next step|ready to (?:advance|move on)|ready for the next step|this step is (?:now )?complete|we (?:can|are ready to) (?:now )?(?:proceed|advance|move on) to the next step|let's (?:proceed|advance|move on) to the next step)/i.test(proceedTail);
-        if ((fullText.includes("[SYNC_PROCEED]") || proceedPhrase) && state.step < activeSteps.length - 1) setReadyToAdvance(true);
+        const solicitingConfirmation = /(once (?:you|the|it'?s|i|we|that)|after you|before (?:we|i|you) (?:finaliz|proceed|continu|move|lock)|confirm (?:or|and|,)? ?(?:i'?ll|then i|to)|shall i|should i (?:emit|proceed|finaliz)|do you want|would you like|let me know|awaiting your|pending your|if you(?:'?re| are)? (?:happy|ok|good|ready)|proposed adjustments|any (?:tweaks|changes|adjustments)\??$)/i.test(proceedTail);
+        const capturedSomething = captured.length > 0;
+        if ((fullText.includes("[SYNC_PROCEED]") || capturedSomething || (proceedPhrase && !solicitingConfirmation)) && state.step < activeSteps.length - 1) setReadyToAdvance(true);
         if (truncated) setResponseTruncated(true);
       };
 
@@ -2872,6 +2879,13 @@ function MainInterfaceChat({ state, askAssistant, preview, isSyncNeeded, syncDes
 function VersionHistoryModal({ onClose }: { onClose: () => void }) {
   const releases: { v: string; title: string; items: string[] }[] = [
     {
+      v: "0.10.1", title: "Story + DM polish",
+      items: [
+        "The Story + DM coherence review now reads your ACTUAL captured artifacts (Guidelines, Prompt Plot, Player Persona, and the DM stat schema / game rules / instruction) instead of reviewing them blind — so it cross-checks real text rather than assuming.",
+        "Fixed the \"step complete\" pulse on collaborate-then-capture steps (e.g. the DM Stat Schema): it no longer fires on the clarifying-questions turn, and now fires on the turn that actually captures the deliverable.",
+      ],
+    },
+    {
       v: "0.10.0", title: "Mistral provider · sturdier cards & capture",
       items: [
         "Added Mistral AI as a model provider — it has a free tier (console.mistral.ai). Tested & recommended model: Mistral Medium 3.5 (mistral-medium-latest), strong at creative writing and tidy formatting.",
@@ -3764,7 +3778,22 @@ function renderCombinedReview(
       </div>
 
       <button
-        onClick={() => askAssistant("[WORKSHOP ACTION — STORY + DM COHERENCE REVIEW] We've built both the story package and the Dungeon Mind config. Do a final coherence pass per USCS §27.5: (1) confirm the Guidelines contain a DUNGEON MIND ACTIVE rule and don't duplicate stat-tracking the DM owns; (2) confirm the Prompt Plot doesn't restate game mechanics the DM handles; (3) confirm any module triggers reference stat names that actually EXIST in the DM stat schema; (4) confirm the player persona notes which stats the player assigns. List anything misaligned, and for each fix re-emit the affected block in its capture sentinel (story blocks use their normal sentinels; DM fields use DM_* sentinels). If everything lines up, say so clearly.")}
+        onClick={() => {
+          const d = state.deliverables;
+          const dm = d.dmConfig;
+          const section = (label: string, body?: string) => `--- ${label} ---\n${(body || "").trim() || "(none captured)"}`;
+          const artifacts = [
+            section("PROMPT PLOT (story)", d.promptPlot),
+            section("GUIDELINES (story)", d.guidelines),
+            section("REMINDERS (story)", d.reminders),
+            section("PLAYER PERSONA (story)", d.playerPersona),
+            section("SCENARIOS / MODULE TRIGGERS (story)", d.scenarios),
+            section("DM STAT SCHEMA", dm.statSchema),
+            section("DM GAME RULES", dm.gameRules),
+            section("DM STORY-AI INSTRUCTION", dm.instruction),
+          ].join("\n\n");
+          askAssistant(`[WORKSHOP ACTION — STORY + DM COHERENCE REVIEW] We've built both the story package and the Dungeon Mind config. The ACTUAL captured artifacts are below — review the real text, do NOT assume content or ask me to paste anything.\n\n${artifacts}\n\nDo a final coherence pass per USCS §27.5 AGAINST THE ARTIFACTS ABOVE: (1) confirm the Guidelines contain a DUNGEON MIND ACTIVE rule and don't duplicate stat-tracking the DM owns; (2) confirm the Prompt Plot doesn't restate game mechanics the DM handles; (3) confirm any module/scenario triggers reference stat names that ACTUALLY EXIST in the DM Stat Schema above; (4) confirm the Player Persona notes which stats the player assigns. Quote the specific lines you are judging. List anything misaligned, and for each fix re-emit the affected block in its capture sentinel (story blocks use their normal sentinels; DM fields use DM_* sentinels). If everything lines up, say so clearly.`);
+        }}
         disabled={loading}
         className="w-full py-3 rounded-xl bg-accent/10 hover:bg-accent/20 border border-accent/30 text-accent text-[11px] font-black uppercase tracking-widest transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
       >
