@@ -1298,7 +1298,11 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
         //     done yet, so suppress the prose match when the tail is soliciting.
         const proceedTail = fullText.slice(-400);
         const proceedPhrase = /(everything is ready to proceed|ready to proceed to the next step|ready to (?:advance|move on)|ready for the next step|this step is (?:now )?complete|we (?:can|are ready to) (?:now )?(?:proceed|advance|move on) to the next step|let's (?:proceed|advance|move on) to the next step)/i.test(proceedTail);
-        const solicitingConfirmation = /(once (?:you|the|it'?s|i|we|that)|after you|before (?:we|i|you) (?:finaliz|proceed|continu|move|lock)|confirm (?:or|and|,)? ?(?:i'?ll|then i|to)|shall i|should i (?:emit|proceed|finaliz)|do you want|would you like|let me know|awaiting your|pending your|if you(?:'?re| are)? (?:happy|ok|good|ready)|proposed adjustments|any (?:tweaks|changes|adjustments)\??$)/i.test(proceedTail);
+        // Keep ONLY phrases that signal a still-pending action or a request for
+        // input — NOT generic polite sign-offs ("let me know", "would you like",
+        // "do you want"), which routinely co-occur with a genuinely finished step
+        // and would otherwise wrongly suppress the pulse.
+        const solicitingConfirmation = /(once (?:you|the|it'?s|i|we|that)|after you|before (?:we|i|you) (?:finaliz|proceed|continu|move|lock)|confirm (?:or|and|,)? ?(?:i'?ll|then i|to)|shall i|should i (?:emit|proceed|finaliz)|awaiting your|pending your|proposed adjustments|any (?:tweaks|changes|adjustments)\??$)/i.test(proceedTail);
         const capturedSomething = captured.length > 0;
         if ((fullText.includes("[SYNC_PROCEED]") || capturedSomething || (proceedPhrase && !solicitingConfirmation)) && state.step < activeSteps.length - 1) setReadyToAdvance(true);
         if (truncated) setResponseTruncated(true);
