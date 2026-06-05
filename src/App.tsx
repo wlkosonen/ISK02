@@ -159,7 +159,7 @@ interface StoryState {
   deliverables: Deliverables;
   assistantHistory: Message[];
   isAssistantLoading: boolean;
-  aiProvider: "gemini" | "anthropic" | "ollama" | "openrouter";
+  aiProvider: "gemini" | "anthropic" | "ollama" | "openrouter" | "mistral";
   modelSettings: {
     model: string;
     temperature: number;
@@ -168,6 +168,7 @@ interface StoryState {
     geminiApiKey?: string;
     anthropicApiKey?: string;
     openRouterApiKey?: string;
+    mistralApiKey?: string;
   };
 }
 
@@ -252,7 +253,7 @@ function getActiveSteps(track: WorkshopTrack): string[] {
 const STEP_MANDATES: Record<number, string> = {
   6: `Produce BOTH a Title and a ~20-word user-facing Plot Summary. Wrap the finished pair in <<<USCS_BLOCK TITLE_SUMMARY>>> … <<<END USCS_BLOCK>>>.`,
   7: `Produce the COMPLETE Plot Card (user-facing HTML) with every required field from the spec — do not abbreviate. Wrap it in <<<USCS_BLOCK PLOT_CARD>>> … <<<END USCS_BLOCK>>>.`,
-  8: `ONE FULL sheet PER character — primary AND supporting, no exceptions, no "secondary" shortcuts. Each character gets BOTH parts: Part A HTML card → <<<USCS_BLOCK CHAR_CARD: Name>>>, and Part B AI prompt description → <<<USCS_BLOCK CHAR_DESC: Name>>>. Respect §21 caps on Part B (≤1500 primary / ≤800 supporting). Build and confirm one character fully before starting the next.`,
+  8: `ONE FULL sheet PER character — primary AND supporting, no exceptions, no "secondary" shortcuts. Each character gets BOTH parts: Part A HTML card → <<<USCS_BLOCK CHAR_CARD: [character's real name]>>>, and Part B AI prompt description → <<<USCS_BLOCK CHAR_DESC: [character's real name]>>>. ALWAYS substitute the character's ACTUAL name into the sentinel (e.g. "CHAR_DESC: Aria Vance") — never emit the literal word "Name", or the workshop will create a junk placeholder character. Respect §21 caps on Part B (≤1500 primary / ≤800 supporting). Build and confirm one character fully before starting the next.`,
   9: `Produce 2–3 DISTINCT scenario variants (alternative entry points) per the spec. Wrap the finished set in <<<USCS_BLOCK SCENARIOS>>> … <<<END USCS_BLOCK>>>.`,
   10: `The Prompt Plot MUST contain ALL Section 6 required subsections, IN ORDER: 1) Quick Reference, 2) {{user}}'s Role, 3) Narrative Perspective, 4) Primary Dramatic Engine, 5) Core Conflict Management, 6) Agency Protection, 7) Setting Description, 8) World Grounding / Genre Anchor, 9) Genre Mechanics, 10) Heat Level Guidelines (NSFW only), 11) Pacing & Revelation / Phase Structure — PLUS the mandatory Architect Protocol block (Section 6A). If a subsection is genuinely N/A (e.g. Heat Guidelines in SFW, Genre Mechanics in a plain contemporary story), write its heading followed by "N/A — <reason>"; NEVER drop one silently. Wrap the finished Prompt Plot (Architect Protocol included) in <<<USCS_BLOCK PROMPT_PLOT>>> … <<<END USCS_BLOCK>>>.`,
   11: `The Guidelines MUST: open with the one-paragraph Emotional Mandate (§22.4); contain at least 15 behavioral rules; include Section 7A (NPC Social Web / Anti-Harem) IN FULL if the story has 2+ NPCs; include Section 7B rules if a Status Dashboard is active; include module integration if the Module System is active. Do not abbreviate. Wrap in <<<USCS_BLOCK GUIDELINES>>> … <<<END USCS_BLOCK>>>.`,
@@ -285,6 +286,20 @@ const PROVIDERS = {
       "anthropic/claude-3.5-sonnet",
       "openai/gpt-4o-mini",
       "x-ai/grok-2-1212",
+    ],
+  },
+  mistral: {
+    name: "Mistral AI",
+    // Fallback list only — the live list is fetched from api.mistral.ai/v1/models
+    // when a key is set. Default is Medium 3.5: best-suited here (strong creative
+    // writing + precise instruction-following, dense 128B, cheaper than Large 3).
+    models: [
+      "mistral-medium-latest",
+      "mistral-large-latest",
+      "mistral-small-latest",
+      "ministral-8b-latest",
+      "open-mistral-nemo",
+      "magistral-medium-latest",
     ],
   }
 };
@@ -330,7 +345,7 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 
 // Version of THIS app (the Aether_Core tool), distinct from the USCS framework
 // version it implements. Bump this when you ship changes.
-const APP_VERSION = "0.9.2";
+const APP_VERSION = "0.10.0";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
 const USCS_VERSION = "6.1";
 
@@ -381,6 +396,7 @@ const DEFAULT_STATE: StoryState = {
     geminiApiKey: "",
     anthropicApiKey: "",
     openRouterApiKey: "",
+    mistralApiKey: "",
   },
 };
 
@@ -462,9 +478,24 @@ const DELIVERABLE_LABELS: Record<string, string> = {
 // weaker models often echo it there, and we'd rather capture than drop the field.
 const BLOCK_RE = /<<<USCS_BLOCK\s+([A-Z_]+)(?::\s*([^>\n]+?))?\s*>>>[ \t]*\r?\n?([\s\S]*?)\r?\n?[ \t]*<<<END\s+USCS_BLOCK(?:[ \t:]+[^>\n]*)?>>>/g;
 
-function captureDeliverables(text: string, current: Deliverables): { next: Deliverables; captured: string[]; cleaned: string } {
+// Weak models sometimes echo the literal placeholder from the prompt
+// ("<<<USCS_BLOCK CHAR_DESC: Name>>>") instead of substituting the real
+// character name. Treat those as "no real name" so we don't spawn a ghost
+// character literally called "Name"/"NAME" (and silently duplicate the cast).
+function isPlaceholderCharName(name: string): boolean {
+  const n = name.trim().replace(/^[<[("'{]+|[>\])"'}]+$/g, "").trim().toLowerCase();
+  return [
+    "", "name", "names", "character", "character name", "characters name",
+    "character's name", "char name", "char_name", "charname", "your name",
+    "the name", "name here", "full name", "character_name", "tbd", "todo",
+    "example", "example name", "placeholder", "n/a",
+  ].includes(n);
+}
+
+function captureDeliverables(text: string, current: Deliverables): { next: Deliverables; captured: string[]; cleaned: string; warnings: string[] } {
   const next: Deliverables = { ...current, characters: current.characters.map(c => ({ ...c })), firstMessages: current.firstMessages.map(f => ({ ...f })), dmConfig: { ...current.dmConfig } };
   const captured: string[] = [];
+  const warnings: string[] = [];
   let m: RegExpExecArray | null;
   BLOCK_RE.lastIndex = 0;
   while ((m = BLOCK_RE.exec(text)) !== null) {
@@ -475,6 +506,23 @@ function captureDeliverables(text: string, current: Deliverables): { next: Deliv
 
     if (type === "CHAR_DESC" || type === "CHAR_CARD") {
       if (!name) continue;
+      // Placeholder name (model didn't substitute it): route to the character
+      // actually in progress instead of creating a junk "NAME" character.
+      if (isPlaceholderCharName(name)) {
+        let target: { name: string; desc: string; card: string } | undefined;
+        for (let i = next.characters.length - 1; i >= 0; i--) {
+          const c = next.characters[i];
+          if (type === "CHAR_CARD" ? (c.desc && !c.card) : !c.desc) { target = c; break; }
+        }
+        if (!target) {
+          // Nothing sensible to attach to — drop it rather than spawn a ghost.
+          warnings.push(`A ${type === "CHAR_CARD" ? "card" : "description"} came back without a real character name — re-run that character and it'll capture.`);
+          continue;
+        }
+        if (type === "CHAR_DESC") { target.desc = content; captured.push(`${target.name} (description)`); }
+        else { target.card = content; captured.push(`${target.name} (card)`); }
+        continue;
+      }
       let ch = next.characters.find(c => c.name.toLowerCase() === name.toLowerCase());
       if (!ch) { ch = { name, desc: "", card: "" }; next.characters.push(ch); }
       if (type === "CHAR_DESC") { ch.desc = content; captured.push(`${name} (description)`); }
@@ -524,7 +572,7 @@ function captureDeliverables(text: string, current: Deliverables): { next: Deliv
     .replace(/^[ \t]*<<<END\s+USCS_BLOCK[^>]*>>>[ \t]*\r?\n?/gm, "")
     .trim();
 
-  return { next, captured, cleaned };
+  return { next, captured, cleaned, warnings };
 }
 
 // Tokens that count toward the USCS §21.1 platform ceiling.
@@ -654,6 +702,7 @@ export default function App() {
   const [showGeminiKey, setShowGeminiKey] = useState(false);
   const [showAnthropicKey, setShowAnthropicKey] = useState(false);
   const [showOpenRouterKey, setShowOpenRouterKey] = useState(false);
+  const [showMistralKey, setShowMistralKey] = useState(false);
   const [remoteModels, setRemoteModels] = useState<string[]>([]);
   const [isFetchingRemoteModels, setIsFetchingRemoteModels] = useState(false);
   const [remoteModelError, setRemoteModelError] = useState<string | null>(null);
@@ -792,7 +841,7 @@ export default function App() {
 
   // Fetch live, up-to-date model lists for hosted providers (Anthropic / Gemini).
   useEffect(() => {
-    const HOSTED = ["anthropic", "gemini", "openrouter"];
+    const HOSTED = ["anthropic", "gemini", "openrouter", "mistral"];
     if (!HOSTED.includes(state.aiProvider)) {
       setRemoteModels([]);
       setRemoteModelError(null);
@@ -804,6 +853,8 @@ export default function App() {
       ? state.modelSettings.anthropicApiKey?.trim()
       : provider === "gemini"
       ? state.modelSettings.geminiApiKey?.trim()
+      : provider === "mistral"
+      ? state.modelSettings.mistralApiKey?.trim()
       : state.modelSettings.openRouterApiKey?.trim();
 
     const controller = new AbortController();
@@ -831,7 +882,7 @@ export default function App() {
 
     const timeoutId = setTimeout(fetchRemoteModels, 400);
     return () => { isMounted = false; controller.abort(); clearTimeout(timeoutId); };
-  }, [state.aiProvider, state.modelSettings.anthropicApiKey, state.modelSettings.geminiApiKey, state.modelSettings.openRouterApiKey]);
+  }, [state.aiProvider, state.modelSettings.anthropicApiKey, state.modelSettings.geminiApiKey, state.modelSettings.openRouterApiKey, state.modelSettings.mistralApiKey]);
 
   // Keep Max_Tokens within the active model's real output ceiling.
   useEffect(() => {
@@ -1131,7 +1182,7 @@ Whenever you output a FINALIZED craft deliverable (not a draft you are still dis
 <<<END USCS_BLOCK>>>
 
 TYPE is one of: TITLE_SUMMARY, PLOT_CARD, PROMPT_PLOT, GUIDELINES, REMINDERS, PLAYER_PERSONA, SCENARIOS, IMAGE_PROMPTS.
-For per-character blocks use a name suffix: "CHAR_DESC: <Character Name>" for the Part B AI prompt description, and "CHAR_CARD: <Character Name>" for the Part A HTML card.
+For per-character blocks use a name suffix: "CHAR_DESC: <Character Name>" for the Part B AI prompt description, and "CHAR_CARD: <Character Name>" for the Part A HTML card. ALWAYS replace <Character Name> with the character's REAL name (e.g. "CHAR_CARD: Aria Vance") — never emit the literal word "Name" or the placeholder text, or the workshop will save a junk character.
 DUNGEON MIND (USCS §27) field blocks, when building a DM config: DM_STAT_SCHEMA, DM_GAME_RULES, DM_REMINDER, DM_INSTRUCTION, DM_PLAYER_GUIDE, and DM_NAME_MODEL (format the DM_NAME_MODEL body as "Name: <name> | Model: <model>"). Each loads into the matching field of the DM config in the workshop.
 
 Rules:
@@ -1176,7 +1227,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
           throw new Error("Empty response from matrix");
         }
 
-        const { next: capturedDeliverables, captured, cleaned } = captureDeliverables(fullText, state.deliverables);
+        const { next: capturedDeliverables, captured, cleaned, warnings } = captureDeliverables(fullText, state.deliverables);
         const displayText = (cleaned || fullText).replace(/\[SYNC_PROCEED\]/gi, "").trim();
         const assistantMessage: Message = { role: "assistant", content: displayText, usage };
 
@@ -1233,6 +1284,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
         } else if (toastMsgs.length > 0) {
           triggerToast(`Matrix updated parameters: ${toastMsgs.join(", ")}`, "ai-to-ui");
         }
+        if (warnings.length > 0) triggerToast(`⚠️ ${warnings[0]}`, "info");
         // Arm the advance gate (pulses NEXT) on the explicit token OR a clear
         // completion phrase. Models often announce readiness in prose but forget
         // the [SYNC_PROCEED] token; since this is a SOFT signal (pulse only, never
@@ -1563,7 +1615,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
       // Keep non-secret model prefs (provider/model/temp), drop the keys.
       state: {
         ...rest,
-        modelSettings: { ...modelSettings, geminiApiKey: "", anthropicApiKey: "", openRouterApiKey: "" },
+        modelSettings: { ...modelSettings, geminiApiKey: "", anthropicApiKey: "", openRouterApiKey: "", mistralApiKey: "" },
       },
     };
     downloadTextFile(`${sanitizeFilename(state.title)}_workspace.aether.json`, JSON.stringify(backup, null, 2));
@@ -1600,6 +1652,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
         geminiApiKey: state.modelSettings.geminiApiKey,
         anthropicApiKey: state.modelSettings.anthropicApiKey,
         openRouterApiKey: state.modelSettings.openRouterApiKey,
+        mistralApiKey: state.modelSettings.mistralApiKey,
       },
       workshopTrack: migrateTrack(loaded),
       deliverables: { ...EMPTY_DELIVERABLES, ...(loaded.deliverables || {}), dmConfig: { ...EMPTY_DM_CONFIG, ...(loaded.deliverables?.dmConfig || {}) } },
@@ -2222,6 +2275,40 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                   </div>
                 )}
 
+                {/* Mistral API Key */}
+                {state.aiProvider === "mistral" && (
+                  <div className="p-5 border border-accent/20 bg-accent/5 rounded-2xl space-y-4 font-sans">
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <label className="text-[10px] uppercase tracking-[0.2em] font-black text-accent">Mistral API Key</label>
+                        <span className="text-[8px] font-mono text-text-dim">Required to chat</span>
+                      </div>
+                      <div className="relative flex items-center">
+                        <input
+                          type={showMistralKey ? "text" : "password"}
+                          value={state.modelSettings.mistralApiKey || ""}
+                          onChange={(e) => setState(s => ({
+                            ...s,
+                            modelSettings: { ...s.modelSettings, mistralApiKey: e.target.value }
+                          }))}
+                          className="w-full bg-header/60 border border-border rounded-lg p-2 pr-9 font-mono text-xs text-text-main focus:border-accent focus:outline-none"
+                          placeholder="Mistral key (e.g. ...)"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowMistralKey(v => !v)}
+                          className="absolute right-2.5 p-1 text-text-dim hover:text-text-main transition-colors"
+                        >
+                          {showMistralKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                      <p className="text-[9px] text-[#fbbf24]/90 font-medium leading-normal">
+                        💡 A free key at <code className="bg-black/30 px-1 py-0.5 rounded text-[8px] font-mono">console.mistral.ai</code> includes a no-cost tier (rate-limited). Key is processed server-side, never exposed in the browser console.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 {/* Model Selection */}
                 <div className="space-y-4">
                   <label className="text-[10px] uppercase tracking-[0.3em] font-black text-label block">Target_Model</label>
@@ -2785,6 +2872,14 @@ function MainInterfaceChat({ state, askAssistant, preview, isSyncNeeded, syncDes
 function VersionHistoryModal({ onClose }: { onClose: () => void }) {
   const releases: { v: string; title: string; items: string[] }[] = [
     {
+      v: "0.10.0", title: "Mistral provider · sturdier cards & capture",
+      items: [
+        "Added Mistral AI as a model provider — it has a free tier (console.mistral.ai). Tested & recommended model: Mistral Medium 3.5 (mistral-medium-latest), strong at creative writing and tidy formatting.",
+        "Rebuilt the HTML card rules to render well on BOTH desktop and mobile: cards stay fluid (width:100%, max-width 600/720px) with percentage-width responsive columns, sit on the locked palette background, and use solid hex for accent text — fixing cards that looked different in the preview vs. on the ISK0 platform.",
+        "Hardened character capture: a literal placeholder name (\"NAME\") no longer spawns a ghost/duplicate character — the card or description routes to the character in progress instead, with a heads-up if it can't.",
+      ],
+    },
+    {
       v: "0.9.2", title: "Dungeon Mind rules: executable math",
       items: [
         "Hardened the Dungeon Mind framework (USCS §27) so Game Rules must be mechanically runnable: every value the DM computes — stat→modifier, defense/AC, skill DCs, damage, death-save DC, progression numbers, condition magnitudes, encumbrance — needs an explicit formula, not a dangling reference.",
@@ -2971,14 +3066,16 @@ function HelpModal({ onClose }: { onClose: () => void }) {
 
           <section className="space-y-2">
             <H>Choosing a model (the engine)</H>
-            <p>The AI work is done by a language model. You pick which one in <span className="text-text-main">Settings</span> (the ⚙ icon, top-right). There are four options:</p>
+            <p>The AI work is done by a language model. You pick which one in <span className="text-text-main">Settings</span> (the ⚙ icon, top-right). There are five options:</p>
             <ul className="space-y-1.5 pl-1">
               <li>• <span className="text-text-main">Google Gemini</span> — has a genuinely free tier. Good starting point.</li>
               <li>• <span className="text-text-main">Anthropic Claude</span> — high quality, but paid only.</li>
+              <li>• <span className="text-text-main">Mistral AI</span> — has a free tier, and <span className="text-text-main">Mistral Medium 3.5</span> is a strong all-rounder for this kind of work (good creative writing + tidy formatting). A great pick alongside Gemini.</li>
               <li>• <span className="text-text-main">OpenRouter</span> — one key unlocks GPT, Claude, Gemini, Grok, Llama and more, including free models.</li>
               <li>• <span className="text-text-main">Local Ollama</span> — runs models on your own machine, fully free and offline.</li>
             </ul>
-            <p>For the three cloud options you need an <span className="text-text-main">API key</span> — a password-like string that lets this app use your account. You paste it into Settings; it stays on your machine and is sent only to your chosen provider.</p>
+            <p>For the four cloud options you need an <span className="text-text-main">API key</span> — a password-like string that lets this app use your account. You paste it into Settings; it stays on your machine and is sent only to your chosen provider.</p>
+            <p className="text-[11px] text-text-dim"><span className="text-text-main">Which model?</span> If a provider offers several, the app pre-selects a sensible default and you can switch in Settings → Target_Model. For most stories a mid-tier model (e.g. <span className="text-text-main">Mistral Medium 3.5</span>, <span className="text-text-main">Gemini 2.5 Flash</span>) hits the sweet spot of quality, speed and cost; reach for a flagship (Claude, Mistral Large, GPT-4o) only if you want the richest prose and don't mind paying.</p>
           </section>
 
           <section className="space-y-2">
@@ -2990,6 +3087,10 @@ function HelpModal({ onClose }: { onClose: () => void }) {
             <div className="p-3 rounded-xl border border-border bg-bg/50 space-y-1">
               <p className="text-text-main font-bold">Anthropic Claude (paid)</p>
               <p>Go to <Link href="https://console.anthropic.com/settings/keys">console.anthropic.com</Link>, create an account, add a little credit (about $5 minimum), then create a key (starts with <code className="bg-black/30 px-1 rounded text-[11px]">sk-ant-…</code>). Without credit, Claude returns errors.</p>
+            </div>
+            <div className="p-3 rounded-xl border border-border bg-bg/50 space-y-1">
+              <p className="text-text-main font-bold">Mistral AI (free tier)</p>
+              <p>Go to <Link href="https://console.mistral.ai/api-keys">console.mistral.ai/api-keys</Link>, create an account, and on the free <span className="text-text-main">Experiment</span> plan (you may need to verify a phone number) click <span className="text-text-main">Create new key</span>. Copy it (a plain random string, no special prefix) into Settings → Mistral. The default <code className="bg-black/30 px-1 rounded text-[11px]">mistral-medium-latest</code> works well here; the free tier is rate-limited but costs nothing.</p>
             </div>
             <div className="p-3 rounded-xl border border-border bg-bg/50 space-y-1">
               <p className="text-text-main font-bold">OpenRouter (one key, many models)</p>
@@ -4733,7 +4834,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
               <p className="text-xs text-text-dim max-w-sm">Develop the next character's narration guidance — who they are, what they want, how they speak, their lore. The HTML card comes afterwards, once they're defined.</p>
             </div>
             <button
-              onClick={() => askAssistant(`[WORKSHOP ACTION — BUILD NEXT CHARACTER] Let's develop the next character's NARRATION GUIDANCE together — the substance the deployed AI needs to play them: personality, wants/goals, fears, speech & mannerisms, relationships to {{user}} and the cast, and the relevant lore — following the injected USCS Character Sheet "Part B" spec (respect §21 caps: ≤1500 tokens primary / ≤800 supporting). Propose the character (or continue from the cast we've discussed) and refine it WITH me; when it's solid, capture it as <<<USCS_BLOCK CHAR_DESC: Name>>> … <<<END USCS_BLOCK>>>. Do NOT produce the HTML card yet — we generate that separately once the character is fully defined. Build and confirm ONE character before the next.`)}
+              onClick={() => askAssistant(`[WORKSHOP ACTION — BUILD NEXT CHARACTER] Let's develop the next character's NARRATION GUIDANCE together — the substance the deployed AI needs to play them: personality, wants/goals, fears, speech & mannerisms, relationships to {{user}} and the cast, and the relevant lore — following the injected USCS Character Sheet "Part B" spec (respect §21 caps: ≤1500 tokens primary / ≤800 supporting). Propose the character (or continue from the cast we've discussed) and refine it WITH me; when it's solid, capture it as <<<USCS_BLOCK CHAR_DESC: [the character's actual name]>>> … <<<END USCS_BLOCK>>>. CRITICAL: put the character's REAL name in that sentinel (e.g. "CHAR_DESC: Aria Vance") — never the literal word "Name". Do NOT produce the HTML card yet — we generate that separately once the character is fully defined. Build and confirm ONE character before the next.`)}
               disabled={state.isAssistantLoading}
               className="px-6 py-2 bg-accent/20 border border-accent/40 text-accent rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-accent/30 transition-all font-mono disabled:opacity-50"
             >
@@ -4794,7 +4895,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                       </details>
                     ) : char.desc ? (
                       <button
-                        onClick={() => askAssistant(`[WORKSHOP ACTION — CHARACTER HTML CARD] The narration guidance for "${char.name}" is defined — now produce their user-facing Part A HTML card based on it, using my locked palette and ${state.aestheticMode} aesthetic, per the injected USCS HTML spec. Emit it wrapped in <<<USCS_BLOCK CHAR_CARD: ${char.name}>>> … <<<END USCS_BLOCK>>> so it loads into the preview here. Keep only a brief note in chat.`)}
+                        onClick={() => askAssistant(`[WORKSHOP ACTION — CHARACTER HTML CARD] The narration guidance for "${char.name}" is defined — now produce their user-facing Part A HTML card based on it, using my locked palette and ${state.aestheticMode} aesthetic, per the injected USCS HTML spec. HARD CONSTRAINTS: the card is FLUID, never a narrow fixed width — width:100%; max-width:600px; margin:0 auto (fills a phone, caps and centers on desktop). Any multi-column section uses PERCENTAGE-width cells (width:50%/33%/100% + padding + box-sizing:border-box) inside display:flex; flex-wrap:wrap, so it reflows from ~300px to 600px; any fixed-px decorative element stays ≤300px. The OUTER CARD BACKGROUND must be EXACTLY ${state.palette[0]} (the locked palette background — not an off-palette near-black). Use ${state.palette[2]} as the SOLID hex for accent TEXT (title, accent words, pill text) — rgba is fine for borders and faint background tints, never for text. Emit it wrapped in <<<USCS_BLOCK CHAR_CARD: ${char.name}>>> … <<<END USCS_BLOCK>>> so it loads into the preview here. Keep only a brief note in chat.`)}
                         disabled={state.isAssistantLoading}
                         className="w-full py-2.5 rounded-lg border border-accent/40 bg-accent/10 text-accent text-[9px] font-black uppercase tracking-widest hover:bg-accent/20 transition-all disabled:opacity-50"
                       >

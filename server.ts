@@ -158,6 +158,25 @@ async function startServer() {
         return res.json({ models });
       }
 
+      if (provider === "mistral") {
+        const apiKey = key || process.env.MISTRAL_API_KEY;
+        if (!apiKey) return res.status(400).json({ error: "No Mistral API key available." });
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 6000);
+        const r = await fetch("https://api.mistral.ai/v1/models", {
+          headers: { Authorization: `Bearer ${apiKey}` },
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        if (!r.ok) throw new Error(`Mistral models list returned status ${r.status}`);
+        const data = (await r.json()) as any;
+        const models = (data.data || [])
+          .map((m: any) => m.id)
+          .filter(Boolean)
+          .sort();
+        return res.json({ models });
+      }
+
       return res.status(400).json({ error: "Model listing is not supported for this provider." });
     } catch (err: any) {
       console.info("Could not list %s models:", provider, err.message || err);
@@ -705,6 +724,98 @@ async function startServer() {
         } catch (orErr: any) {
           console.error("OpenRouter bridge failed:", orErr);
           return failOut(400, orErr.message || String(orErr));
+        }
+      }
+
+      if (aiProvider === "mistral") {
+        const apiKey = settings.mistralApiKey?.trim() || process.env.MISTRAL_API_KEY;
+        if (!apiKey) return res.status(500).json({ error: "Mistral API key is not configured. Add a free key from console.mistral.ai in the Model Settings menu." });
+
+        const modelName = settings.model || "mistral-medium-latest";
+
+        // Mistral's API is OpenAI chat-completions compatible.
+        const messages: any[] = [];
+        if (fullSystem) messages.push({ role: "system", content: fullSystem });
+        (history || []).forEach((h: any) => {
+          messages.push({
+            role: h.role === "model" ? "assistant" : "user",
+            content: h.parts[0]?.text || ""
+          });
+        });
+        messages.push({ role: "user", content: prompt });
+
+        try {
+          console.log("Forwarding request to Mistral with model %s", modelName);
+          const response = await fetch("https://api.mistral.ai/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Accept": wantStream ? "text/event-stream" : "application/json",
+              "Authorization": `Bearer ${apiKey}`
+            },
+            body: JSON.stringify({
+              model: modelName,
+              messages,
+              temperature: settings.temperature ?? 1,
+              max_tokens: settings.maxTokens || 4096,
+              stream: wantStream
+            })
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            let msg = `Mistral returned status ${response.status}: ${errorText || response.statusText}`;
+            if (response.status === 401) {
+              msg = "Your Mistral API key is invalid or missing. Get a free key at console.mistral.ai and add it in Model Settings.";
+            } else if (response.status === 422) {
+              msg = `Mistral rejected the request for model '${modelName}' (422). Check the model name in Model Settings.`;
+            } else if (response.status === 429) {
+              msg = "Mistral rate limit reached (the free tier is rate-limited). Wait a moment, or switch to another model.";
+            }
+            throw new Error(msg);
+          }
+
+          if (wantStream && response.body) {
+            // Mistral streams OpenAI-style SSE: "data: {choices:[{delta:{content}}]}" lines, ending with "data: [DONE]".
+            const reader = (response.body as any).getReader();
+            const decoder = new TextDecoder();
+            let buf = "";
+            let truncated = false;
+            let any = false;
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buf += decoder.decode(value, { stream: true });
+              let nl: number;
+              while ((nl = buf.indexOf("\n")) >= 0) {
+                const line = buf.slice(0, nl).trim();
+                buf = buf.slice(nl + 1);
+                if (!line.startsWith("data:")) continue;
+                const data = line.slice(5).trim();
+                if (!data || data === "[DONE]") continue;
+                let obj: any;
+                try { obj = JSON.parse(data); } catch { continue; }
+                const t = obj?.choices?.[0]?.delta?.content;
+                if (t) { any = true; sseDelta(t); }
+                if (obj?.choices?.[0]?.finish_reason === "length") truncated = true;
+              }
+            }
+            if (!any) throw new Error("Empty response from Mistral (the model may have returned nothing — try another model).");
+            return sseDone(truncated);
+          }
+
+          const responseData = (await response.json()) as any;
+          const text = responseData?.choices?.[0]?.message?.content;
+
+          if (!text) {
+            throw new Error(`No content from Mistral response: ${JSON.stringify(responseData)}`);
+          }
+
+          const truncated = responseData?.choices?.[0]?.finish_reason === "length";
+          return res.json({ text, truncated });
+        } catch (mErr: any) {
+          console.error("Mistral bridge failed:", mErr);
+          return failOut(400, mErr.message || String(mErr));
         }
       }
 

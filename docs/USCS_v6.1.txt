@@ -993,6 +993,12 @@ EFFECTIVE CONTENT WIDTH: ~300px
   full-screen width and is the root cause of multiple layout failures.
   Design ALL card layouts for 300px as the minimum safe target.
   Use 300px as the planning baseline for all fixed-width element calculations.
+  CLARIFICATION: 300px is the MINIMUM the layout must SURVIVE without overflow
+  (every fixed-px element must fit inside it) — it is NOT a width to cap the
+  card at. The outer card stays FLUID (width:100%; max-width:600–720px) so it
+  fills a phone yet expands and centers on desktop; multi-column sections use
+  percentage cells that reflow down to 300px. See Section 5.5 RESPONSIVE
+  COLUMNS. Capping the whole card at ~300px makes an ugly thin desktop column.
 
 PLATFORM TEXT-SHADOW INJECTION — NO CSS SUPPRESSION CONFIRMED
   The ISK0 WebView applies a default text-shadow to rendered text.
@@ -1006,6 +1012,28 @@ PLATFORM TEXT-SHADOW INJECTION — NO CSS SUPPRESSION CONFIRMED
   DO NOT list text-shadow:none as a fix anywhere in the system.
   DO NOT design cards with light backgrounds and dark text expecting
   clean rendering — visible injected shadows will appear with no known remedy.
+
+COLOR FIDELITY — SOLID HEX FOR COLOURED TEXT
+  rgba() renders on ISK0 (it is not stripped), but an alpha colour is
+  COMPOSITED against whatever sits behind it and also interacts with the
+  injected text-shadow above — so the same rgba value can read as a different
+  final colour across the workshop preview, ISK0 desktop, and ISK0 mobile.
+  This bites TEXT specifically (translucent accent text looks the "wrong
+  colour"); it does NOT meaningfully hurt borders or background fills.
+  RULES:
+  — Any COLOURED TEXT that must read as a crisp palette colour — the title,
+    accent words/labels, the pill's TEXT, key stat values — MUST use a SOLID
+    hex (e.g. color:#00ff41), NEVER rgba with alpha. (Proven community cards
+    always set accent TEXT as solid hex.)
+  — rgba IS fine — and widely used — for BORDERS and faint BACKGROUND tints
+    (e.g. border:1px solid rgba(0,255,65,0.4); background:rgba(0,255,65,0.05)).
+    A translucent edge or fill is robust; translucent TEXT is not.
+  — The outer card background should be the locked palette background hex as a
+    SOLID colour (see 5.5) so the card matches the package and composites the
+    same everywhere.
+  — The ONE acceptable translucent text is faint secondary / tagline / footer
+    text (rgba white at ~0.3–0.6 on a dark background) — the injected shadow is
+    invisible on dark backgrounds (above), so it stays clean.
 
 ================================================================================
 5.2 — ABSOLUTE RULES (NO EXCEPTIONS)
@@ -1293,16 +1321,50 @@ Never change the top-to-bottom sequence of elements that are included.
 
 1. OUTER CONTAINER
    — One <div>. All content inside this div.
-   — width:100%; max-width:720px (Plot Cards) or max-width:700px (Character Cards)
-   — margin:0 auto; padding:16px 12px; box-sizing:border-box
+   — width:100%; max-width:720px (Plot Cards) / max-width:600px (Character
+       Cards); margin:0 auto; box-sizing:border-box.
+       FLUID, NOT fixed-narrow. width:100% fills a phone screen (~300px);
+       max-width caps and CENTERS the card on desktop. This one pattern is the
+       proven community default and renders well on BOTH mobile and desktop.
+       Do NOT clamp the card to a narrow fixed width (e.g. 300–320px) — that
+       produces an ugly thin column on desktop. The §5.1 ~300px figure is the
+       MINIMUM width the layout must SURVIVE without overflow (achieved via
+       RESPONSIVE COLUMNS below), NOT a width to cap the card at.
+   — padding:16–22px; box-sizing:border-box
    — font-family defined here; applies to all children via inheritance
-   — background defined here (solid hex or gradient — your palette choice)
+   — background defined here — use the locked palette BACKGROUND hex as a SOLID
+       colour (a dark background is correct; keep it the PALETTE's so the card
+       matches the rest of the package and composites the same in the workshop
+       preview and on the platform). Avoid an off-palette near-black picked at
+       random — that is what makes a card "look different than I designed it."
    — color defined here (main text color for the card)
    — line-height:1.6
+   — Optional framed look (proven): border-radius:14–16px + border:1px solid
+       #hex on the outer container.
+
+   RESPONSIVE COLUMNS — STAY GOOD ON MOBILE *AND* DESKTOP
+   Because the outer card is fluid, every multi-column section MUST scale with
+   it instead of using fixed pixel widths. Proven community pattern:
+     • Wrap the columns in a flex row that can wrap:
+         <div style="display:flex; flex-direction:row; flex-wrap:wrap;">
+     • Give each CELL a PERCENTAGE width + padding gutter + box-sizing:
+         <div style="width:33%; padding:4px; box-sizing:border-box;"> … </div>
+       Use width:50% for 2-up, width:33% for 3-up, width:100% for full rows.
+       Put the visible bordered sub-card INSIDE the padded cell.
+     • Percentage cells shrink and grow with the card and WRAP instead of
+       overflowing, so the same markup looks right at 300px and at 720px.
+     • NEVER give a content column a fixed pixel width.
+     • Fixed-px elements (avatars, badges, decorative shapes) must be ≤300px
+       so they fit a phone; center them with margin:0 auto.
+     • Text blocks are full width and reflow naturally — no fixed width needed.
 
 2. BADGE PILL (optional — recommended for Plot Cards)
    — Centered span with border-radius:999px, uppercase text, letter-spacing
    — Used for: story series name, universe name, content category
+   — Pill TEXT must be a SOLID palette hex (e.g. color:#14b8a6) — never rgba
+       with alpha; translucent TEXT composites to the "wrong colour" on ISK0
+       (see 5.1 COLOR FIDELITY). The pill BORDER may be solid OR a subtle rgba
+       edge (e.g. border:1px solid rgba(20,184,166,0.4)) — both render fine.
    — See pattern in 5.10
 
 3. TITLE BLOCK
@@ -1555,7 +1617,7 @@ Best with: Literary / Editorial aesthetic mode.
 --------------------------------------------------------------------------------
 
 <div style="text-align:center; font-family:'Georgia',serif; color:#e8e8e8;
-            background-color:#0a0a0a; padding:20px; box-sizing:border-box;
+            background-color:#HEX; padding:20px; box-sizing:border-box;
             width:100%; max-width:720px; margin:0 auto;">
 
   <h1 style="font-size:2em; color:#HEX; letter-spacing:4px;
@@ -4271,16 +4333,16 @@ All templates use placeholder values — replace [BRACKETED CONTENT].
 ================================================================================
 
 <div style="width:100%; max-width:720px; margin:0 auto; padding:16px 12px;
-            box-sizing:border-box; background:#0d0d14;
+            box-sizing:border-box; background:[BACKGROUND COLOR];
             font-family:system-ui,-apple-system,Arial,sans-serif;
             color:#e0e0e0; line-height:1.6;">
 
   <!-- Badge pill -->
   <div style="text-align:center; margin-bottom:14px;">
-    <span style="display:inline-block; border:1px solid rgba(130,180,255,0.35);
+    <span style="display:inline-block; border:1px solid [ACCENT COLOR];
                  border-radius:999px; padding:4px 14px; font-size:11px;
                  letter-spacing:0.2em; text-transform:uppercase;
-                 color:rgba(130,180,255,0.8); font-weight:700;">
+                 color:[ACCENT COLOR]; font-weight:700;">
       [SERIES / UNIVERSE NAME]
     </span>
   </div>
@@ -4433,7 +4495,7 @@ All templates use placeholder values — replace [BRACKETED CONTENT].
 ================================================================================
 
 <div style="text-align:center; font-family:'Georgia',serif; color:#e8e8e8;
-            background-color:#0a0a0a; padding:24px 20px; box-sizing:border-box;
+            background-color:[BACKGROUND COLOR]; padding:24px 20px; box-sizing:border-box;
             width:100%; max-width:720px; margin:0 auto; line-height:1.6;">
 
   <h1 style="font-size:2em; color:[ACCENT COLOR]; letter-spacing:4px;
@@ -4511,7 +4573,7 @@ All templates use placeholder values — replace [BRACKETED CONTENT].
 ================================================================================
 
 <div style="width:100%; max-width:720px; margin:0 auto; padding:20px;
-            box-sizing:border-box; background:#000000;
+            box-sizing:border-box; background:[BACKGROUND COLOR];
             font-family:Arial,sans-serif; color:#ffffff; line-height:1.5;">
 
   <!-- Scattered letter title (Pattern 9) -->
@@ -4648,23 +4710,50 @@ the character card HTML as a redundant duplicate. The card HTML is the
 content below the auto-generated image block. Embed images in the PLOT
 CARD (see Step 9 note) where they have visual impact on the discovery surface.
 
-Replace [BRACKETED CONTENT] throughout.
+Replace [BRACKETED CONTENT] throughout. Placeholder legend:
+  [BACKGROUND COLOR] — the locked palette BACKGROUND hex, solid (e.g. #1a1a24).
+      The card's outer background. A dark background is correct — just keep it
+      the palette's, not an off-palette near-black picked at random.
+  [ACCENT COLOR]     — the locked palette ACCENT hex, solid (e.g. #14b8a6).
+      Used for coloured TEXT (title, accent words) — always solid, never alpha.
+  [R],[G],[B]        — the accent's RGB components, for SUBTLE rgba borders and
+      faint background tints only (e.g. rgba([R],[G],[B],0.4)). Fine for edges
+      and fills; never for text (see WIDTH & COLOUR below).
+
+WIDTH & COLOUR (read before copying any template — these OVERRIDE the literal
+values shown in the templates if they ever disagree):
+  • The card is FLUID, never fixed-narrow: width:100%; max-width:600px
+    (character cards) / 720px (plot cards); margin:0 auto. width:100% fills a
+    phone (~300px); max-width caps and CENTERS it on desktop. This renders well
+    on BOTH mobile and desktop. Do NOT clamp the card to a narrow fixed width
+    (300–320px) — that makes an ugly thin column on desktop.
+  • Any MULTI-COLUMN section must use PERCENTAGE-width cells inside
+    display:flex; flex-wrap:wrap (width:50% / 33% / 100% + padding + box-sizing),
+    so columns scale with the card and wrap instead of overflowing at ~300px.
+    Never give a content column a fixed pixel width. Fixed-px decorative
+    elements (avatars, shapes) must be ≤300px and centred with margin:0 auto.
+    Full guidance: Section 5.5 RESPONSIVE COLUMNS.
+  • OUTER BACKGROUND = [BACKGROUND COLOR] (the locked palette background, solid).
+  • Coloured TEXT that must read as a palette colour (title, accent words, the
+    pill's text) uses the SOLID [ACCENT COLOR] — NEVER rgba/alpha; translucent
+    TEXT composites to the "wrong colour" on ISK0. rgba IS fine for borders and
+    faint background tints. (See Section 5.1 COLOR FIDELITY.)
 
 ================================================================================
 17.1 — CHARACTER CARD TEMPLATE A: STRUCTURED / DASHBOARD
 ================================================================================
 
-<div style="width:100%; max-width:700px; margin:0 auto; padding:16px 12px;
-            box-sizing:border-box; background:#0d0d14;
+<div style="width:100%; max-width:600px; margin:0 auto; padding:16px 12px;
+            box-sizing:border-box; background:[BACKGROUND COLOR];
             font-family:system-ui,-apple-system,Arial,sans-serif;
             color:#e0e0e0; line-height:1.6;">
 
   <!-- Badge pill -->
   <div style="text-align:center; margin-bottom:12px;">
-    <span style="display:inline-block; border:1px solid rgba([R],[G],[B],0.4);
+    <span style="display:inline-block; border:1px solid [ACCENT COLOR];
                  border-radius:999px; padding:4px 14px; font-size:11px;
                  letter-spacing:0.2em; text-transform:uppercase;
-                 color:rgba([R],[G],[B],0.85); font-weight:700;">
+                 color:[ACCENT COLOR]; font-weight:700;">
       [CLASS / ROLE TAG]
     </span>
   </div>
@@ -4799,8 +4888,8 @@ Replace [BRACKETED CONTENT] throughout.
 ================================================================================
 
 <div style="text-align:center; font-family:'Georgia',serif; color:#e8e8e8;
-            background-color:#0a0a0a; padding:24px 20px; box-sizing:border-box;
-            width:100%; max-width:700px; margin:0 auto; line-height:1.6;">
+            background-color:[BACKGROUND COLOR]; padding:24px 20px; box-sizing:border-box;
+            width:100%; max-width:600px; margin:0 auto; line-height:1.6;">
 
   <h1 style="font-size:1.9em; color:[ACCENT COLOR]; letter-spacing:3px;
              text-transform:uppercase; margin:0 0 6px 0;">
