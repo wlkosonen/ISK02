@@ -5,7 +5,7 @@ services:
     build: .
     container_name: aether-storyteller
     ports:
-      - "3010:3000"
+      - "127.0.0.1:3010:3000"
     environment:
       - NODE_ENV=production
       # This allows the container to contact your Windows host machine's Ollama instance.
