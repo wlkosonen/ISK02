@@ -8,9 +8,14 @@ services:
       - "127.0.0.1:3010:3000"
     environment:
       - NODE_ENV=production
-      # This allows the container to contact your Windows host machine's Ollama instance.
-      # Remember to set OLLAMA_HOST=0.0.0.0 on your Windows machine before running!
-      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      # Server-side Ollama is OFF by default (empty). The server makes the call, so
+      # this URL's "localhost" is the SERVER's machine — leaving it empty on a public
+      # or shared deploy stops visitors from using the host's Ollama/hardware.
+      # To self-host WITH server-side Ollama, set OLLAMA_BASE_URL in a local .env
+      # (e.g. http://host.docker.internal:11434, and run Ollama with
+      # OLLAMA_HOST=0.0.0.0). Website visitors who want their OWN local models should
+      # instead enable Settings -> Ollama -> "Use my own machine" in the app.
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped

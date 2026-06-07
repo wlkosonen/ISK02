@@ -137,6 +137,7 @@ interface StoryState {
     maxTokens: number;
     maxTokensTouched?: boolean;  // user moved the slider → stop auto-defaulting per model
     ollamaBaseUrl?: string;
+    ollamaDirect?: boolean;  // call the user's OWN local Ollama from the browser (for hosted instances)
     geminiApiKey?: string;
     anthropicApiKey?: string;
     openRouterApiKey?: string;
@@ -317,7 +318,7 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 
 // Version of THIS app (the Aether_Core tool), distinct from the USCS framework
 // version it implements. Bump this when you ship changes.
-const APP_VERSION = "0.11.0";
+const APP_VERSION = "0.12.0";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
 const USCS_VERSION = "6.1.1";
 
@@ -733,8 +734,9 @@ export default function App() {
         let fetchedModels: string[] = [];
         let success = false;
         
-        // Try server-side proxy fetch first
-        try {
+        // Try server-side proxy fetch first — but SKIP it in direct/BYO mode, where
+        // we want the visitor's OWN installed models, not whatever the server has.
+        if (!state.modelSettings.ollamaDirect) try {
           const res = await fetch(`/api/ollama/models?url=${encodeURIComponent(url)}`, {
             signal: controller.signal
           });
@@ -813,7 +815,7 @@ export default function App() {
       controller.abort();
       clearTimeout(timeoutId);
     };
-  }, [state.aiProvider, state.modelSettings.ollamaBaseUrl]);
+  }, [state.aiProvider, state.modelSettings.ollamaBaseUrl, state.modelSettings.ollamaDirect]);
 
   // Fetch live, up-to-date model lists for hosted providers (Anthropic / Gemini).
   useEffect(() => {
@@ -1025,10 +1027,12 @@ Acknowledge the established parameters, leave everything under NOT YET DECIDED u
     }));
 
     try {
-      const response = await fetch("/api/assistant", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      // BYO local Ollama: when enabled, the browser talks to the visitor's OWN
+      // machine. The USCS-injected prompt is still assembled server-side (via
+      // /api/assistant/prepare), then inference streams directly from their
+      // localhost Ollama — the server can't reach a visitor's machine.
+      const directOllama = state.aiProvider === "ollama" && !!state.modelSettings.ollamaDirect;
+      const requestBody: any = {
           prompt,
           stream: true,
           provider: state.aiProvider,
@@ -1135,9 +1139,58 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
 - If a set is large, break it into multiple SMALLER captured blocks rather than one giant one (e.g. one CHAR_DESC per character, not all characters in one block).
 - If your conversational discussion (outside captured blocks) is genuinely long, split it into clearly labeled parts ("Part 1/N…") and continue the next part when the user asks.
 - If you are ever cut off, the user can ask you to continue; resume exactly where you stopped without repeating.
-`
-        })
-      });
+`,
+      };
+
+      let response: Response;
+      if (directOllama) {
+        // 1) Assemble the USCS-injected prompt server-side (no inference, no keys).
+        const prep = await fetch("/api/assistant/prepare", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(requestBody),
+        });
+        if (!prep.ok) {
+          const e = await prep.json().catch(() => ({}));
+          throw new Error(e.error || "Failed to assemble the prompt on the server.");
+        }
+        const { messages, numCtx } = await prep.json();
+        // 2) Stream inference directly from the visitor's OWN local Ollama.
+        let base = (state.modelSettings.ollamaBaseUrl || "http://localhost:11434").trim().replace(/\/+$/, "");
+        if (base.includes("host.docker.internal")) base = base.replace("host.docker.internal", "localhost");
+        // `think:false` makes hybrid reasoning models answer directly; models that
+        // don't support thinking (e.g. llama3) reject the flag, so retry without it.
+        const callChat = (think?: boolean) => fetch(`${base}/api/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: state.modelSettings.model || "llama3",
+            messages,
+            stream: true,
+            ...(think === undefined ? {} : { think }),
+            options: {
+              temperature: state.modelSettings.temperature ?? 0.6,
+              num_predict: state.modelSettings.maxTokens || 4096,
+              num_ctx: numCtx,
+            },
+          }),
+        });
+        try {
+          response = await callChat(false);
+          if (!response.ok) {
+            const errBody = await response.clone().json().catch(() => ({} as any));
+            if (/think/i.test(errBody.error || "")) response = await callChat(undefined);
+          }
+        } catch {
+          throw new Error(`Couldn't reach your local Ollama at ${base}. Make sure Ollama is running and was started allowing this site — e.g.  OLLAMA_ORIGINS="${location.origin}" ollama serve  — then retry. (Settings → Ollama has the full steps.)`);
+        }
+      } else {
+        response = await fetch("/api/assistant", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(requestBody),
+        });
+      }
 
       // Pre-stream errors are returned as JSON (status != 2xx); check before
       // touching the body as a stream.
@@ -1244,7 +1297,63 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
       };
 
       const contentType = response.headers.get("content-type") || "";
-      if (contentType.includes("text/event-stream") && response.body) {
+      if (directOllama && response.body) {
+        // Live token streaming straight from the visitor's local Ollama, whose
+        // /api/chat emits newline-delimited JSON ({message:{content},done}). Reuses
+        // the same paint + finalize path as the server-proxied SSE branch below.
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        let acc = "";
+        let truncated = false;
+        let usage: any = undefined;
+        let streamErr: string | null = null;
+        let placeholderAdded = false;
+        let lastPaint = 0;
+        const paint = (force?: boolean) => {
+          const now = Date.now();
+          if (!force && now - lastPaint < 60) return;
+          lastPaint = now;
+          const shown = cleanStreamingText(acc) || "…";
+          setState(s => {
+            const h = [...s.assistantHistory];
+            if (placeholderAdded && h.length && h[h.length - 1].role === "assistant" && h[h.length - 1].streaming) {
+              h[h.length - 1] = { ...h[h.length - 1], content: shown };
+            } else {
+              h.push({ role: "assistant", content: shown, streaming: true });
+            }
+            return { ...s, assistantHistory: h };
+          });
+          placeholderAdded = true;
+        };
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let nl: number;
+          while ((nl = buf.indexOf("\n")) >= 0) {
+            const line = buf.slice(0, nl).trim();
+            buf = buf.slice(nl + 1);
+            if (!line) continue;
+            let evt: any;
+            try { evt = JSON.parse(line); } catch { continue; }
+            if (evt.error) { streamErr = evt.error; continue; }
+            const piece = evt.message?.content;
+            if (typeof piece === "string" && piece) { acc += piece; paint(); }
+            if (evt.done) { truncated = evt.done_reason === "length"; usage = evt.eval_count ? { input: evt.prompt_eval_count, output: evt.eval_count } : undefined; }
+          }
+        }
+        if (streamErr) {
+          setState(s => {
+            const h = [...s.assistantHistory];
+            if (placeholderAdded && h.length && h[h.length - 1].role === "assistant" && h[h.length - 1].streaming) h.pop();
+            return { ...s, isAssistantLoading: false, assistantHistory: [...h, { role: "assistant", content: `ERROR_SIGNAL: ${streamErr}` }] };
+          });
+          return;
+        }
+        paint(true);
+        finalize(acc, truncated, usage, true);
+      } else if (contentType.includes("text/event-stream") && response.body) {
         // Live token streaming via Server-Sent Events.
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -2080,11 +2189,46 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                         className="w-full bg-header/60 border border-border rounded-lg p-2 font-mono text-xs text-text-main focus:border-accent focus:outline-none"
                         placeholder="e.g. http://localhost:11434"
                       />
-                      <p className="text-[9px] text-[#fbbf24]/90 font-medium">
-                        💡 Set to <code className="bg-black/30 px-1 py-0.5 rounded text-[8px] font-mono">http://host.docker.internal:11434</code> if running within Docker so the server can bridge back to your machine.
+                      <p className="text-[9px] text-text-dim font-medium">
+                        💡 <code className="bg-black/30 px-1 py-0.5 rounded text-[8px] font-mono">http://localhost:11434</code> is right for both modes below. Use <code className="bg-black/30 px-1 py-0.5 rounded text-[8px] font-mono">http://host.docker.internal:11434</code> only when self-hosting this app in Docker.
                       </p>
                     </div>
-                    
+
+                    {/* BYO / direct connection toggle — run on the visitor's own hardware */}
+                    <div className="space-y-2 pt-1 border-t border-accent/10">
+                      <button
+                        type="button"
+                        onClick={() => setState(s => ({ ...s, modelSettings: { ...s.modelSettings, ollamaDirect: !s.modelSettings.ollamaDirect } }))}
+                        className="w-full flex items-center justify-between gap-3 text-left"
+                        aria-pressed={!!state.modelSettings.ollamaDirect}
+                      >
+                        <div className="min-w-0">
+                          <div className="text-[10px] uppercase tracking-[0.2em] font-black text-accent">Use my own machine (direct)</div>
+                          <div className="text-[10px] text-text-dim leading-snug">Connect this browser straight to your local Ollama — your hardware, your models. Turn this ON when using a hosted/shared instance of the app.</div>
+                        </div>
+                        <span className={`shrink-0 w-9 h-5 rounded-full transition-colors relative ${state.modelSettings.ollamaDirect ? "bg-accent" : "bg-border"}`}>
+                          <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${state.modelSettings.ollamaDirect ? "left-[18px]" : "left-0.5"}`} />
+                        </span>
+                      </button>
+
+                      {state.modelSettings.ollamaDirect ? (
+                        <div className="text-[10px] text-text-dim leading-relaxed bg-black/20 border border-border rounded-lg p-2.5 space-y-1.5">
+                          <p className="text-text-main font-bold">Run models on YOUR hardware through this site:</p>
+                          <p>1. Install <a className="text-accent underline" href="https://ollama.com" target="_blank" rel="noreferrer">Ollama</a> and pull a model — <code className="bg-black/40 px-1 rounded font-mono">ollama pull llama3</code>.</p>
+                          <p>2. Start it allowing this site (browsers block cross-origin calls otherwise):</p>
+                          <code className="block bg-black/40 px-2 py-1 rounded font-mono text-[9px] break-all">OLLAMA_ORIGINS="{typeof window !== "undefined" ? window.location.origin : "https://this-site"}" ollama serve</code>
+                          <p>3. Leave the Base URL as <code className="bg-black/40 px-1 rounded font-mono">http://localhost:11434</code>. Your models appear in the list below once connected.</p>
+                          <p className="text-[#fbbf24]/90">Privacy: the prompt is assembled on this server, but the model runs on your machine — no API key, and your generated text never passes through the server.</p>
+                        </div>
+                      ) : (
+                        <div className="text-[10px] text-text-dim leading-relaxed bg-black/20 border border-border rounded-lg p-2.5 space-y-1.5">
+                          <p className="text-text-main font-bold">Server-side Ollama (you are self-hosting this app):</p>
+                          <p>The app's SERVER makes the call, so <code className="bg-black/40 px-1 rounded font-mono">localhost</code> here = the server's machine. Use this when you run Aether yourself with Ollama on the same box — start Ollama with <code className="bg-black/40 px-1 rounded font-mono">OLLAMA_HOST=0.0.0.0 ollama serve</code> (and <code className="bg-black/40 px-1 rounded font-mono">host.docker.internal</code> under Docker).</p>
+                          <p>On a hosted/shared instance the server has no Ollama for you — turn ON <span className="text-accent font-semibold">"Use my own machine"</span> above to run on your hardware instead.</p>
+                        </div>
+                      )}
+                    </div>
+
                     <div className="space-y-1.5">
                       <label className="text-[10px] uppercase tracking-[0.2em] font-black text-accent">Custom Model Override</label>
                       <input 
@@ -2731,6 +2875,14 @@ function CollaboratorChat({ state, setState, compact, askAssistant, setIsChatOpe
 
 function VersionHistoryModal({ onClose }: { onClose: () => void }) {
   const releases: { v: string; title: string; items: string[] }[] = [
+    {
+      v: "0.12.0", title: "Use your own local models on a hosted instance",
+      items: [
+        "New \"Use my own machine\" mode for Ollama (Settings → Ollama): on a hosted/shared copy of Aether, your browser connects straight to your OWN local Ollama, so generation runs on your hardware with your downloaded models — no API key, and your text never passes through the server. The workshop still assembles the USCS prompt server-side; only the model call is local. Includes step-by-step setup notes (including the OLLAMA_ORIGINS line you need).",
+        "Clarified the two Ollama modes everywhere: server-side (you self-host the app, the server calls Ollama) vs. your-own-machine (direct from the browser). Server-side Ollama is now OFF by default on deploys and opt-in via an .env value — so a public instance never exposes the host's models/hardware by accident.",
+        "Docs + deploy hygiene: README and .env.example rewritten for both modes; added a version-controlled nightly update/rebuild script with Docker image pruning so a deploy disk doesn't fill.",
+      ],
+    },
     {
       v: "0.11.0", title: "Curated palettes · sturdier capture · smarter token limits",
       items: [

@@ -272,6 +272,41 @@ async function startServer() {
   });
 
   // Unified API Route for AI assistance
+  // Assemble the Ollama chat payload (system prompt with the verbatim USCS step
+  // slice injected, alternating messages, and a fitted context window) WITHOUT
+  // calling any model. This lets the BROWSER stream from a visitor's OWN local
+  // Ollama directly (their hardware) while the server still owns the USCS prompt
+  // assembly — the visitor's machine is unreachable from the server, so the
+  // inference itself must happen client-side. No provider keys are involved.
+  app.post("/api/assistant/prepare", (req, res) => {
+    try {
+      const { prompt, history, systemInstruction, modelSettings, step, dmStep, combinedReview } = req.body;
+      const settings = modelSettings || {};
+      const uscsContext = combinedReview === true
+        ? buildDMIntegrationContext()
+        : typeof dmStep === "number" && dmStep >= 0
+        ? buildDMStepContext(dmStep)
+        : buildStepContext(typeof step === "number" ? step : 0);
+      const fullSystem = `${uscsContext}\n\n${systemInstruction || ""}`.trim();
+
+      const messages: any[] = [];
+      if (fullSystem) messages.push({ role: "system", content: fullSystem });
+      messages.push(...buildAlternatingMessages(history, prompt));
+
+      // Size num_ctx to fit the prompt + reply headroom (mirrors the server-side
+      // Ollama bridge), so a visitor's local model doesn't silently truncate the
+      // injected USCS sections at Ollama's 4,096-token default.
+      const approxPromptChars = fullSystem.length + messages.reduce((n: number, m: any) => n + (m.content?.length || 0), 0);
+      const approxPromptTokens = Math.ceil(approxPromptChars / 4);
+      const replyHeadroom = Math.min(settings.maxTokens || 2048, 4096);
+      const numCtx = Math.min(32768, Math.max(4096, approxPromptTokens + replyHeadroom + 512));
+
+      res.json({ messages, numCtx });
+    } catch (err: any) {
+      res.status(500).json({ error: safeErr(err) });
+    }
+  });
+
   app.post("/api/assistant", async (req, res) => {
     try {
       const { prompt, history, systemInstruction, provider, modelSettings, step, dmStep, combinedReview } = req.body;

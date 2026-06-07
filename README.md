@@ -36,20 +36,40 @@ use the in-app Settings panel is enough.
 
 ---
 
-## Run with Docker (recommended for self-hosting + local models)
+## Run with Docker (self-hosting)
 
 ```bash
 docker compose up --build
 ```
 
-Open http://localhost:3010. This is the only setup where **Local Ollama** works, because
-the app and Ollama run on the same machine.
+Open http://localhost:3010.
 
-To use local models:
+### Local models (Ollama) — two ways
+
+**A. Server-side (you self-host the app).** The app's *server* calls Ollama, so this works
+when Ollama runs on the same machine as the app:
 
 1. Install [Ollama](https://ollama.com) and pull a model: `ollama pull llama3`
 2. Start Ollama so the container can reach it: `OLLAMA_HOST=0.0.0.0 ollama serve`
-3. In the app's Settings, the Ollama base URL is preset to `http://host.docker.internal:11434`.
+3. Enable it by setting `OLLAMA_BASE_URL` in a local `.env` (it's **empty by default**):
+   `OLLAMA_BASE_URL=http://host.docker.internal:11434`
+
+> ⚠️ Leave `OLLAMA_BASE_URL` empty on any **public or shared** deploy. The server makes the
+> call, so `localhost` means the *server* — a non-empty value lets every visitor use the
+> host's Ollama and hardware.
+
+**B. Your own machine, via a hosted instance ("Use my own machine").** Anyone using a hosted
+copy of Aether can run models on their *own* hardware — the browser connects straight to
+their local Ollama, no server Ollama required. In **Settings → Ollama**, toggle **"Use my own
+machine"**, then start Ollama allowing the site's origin (browsers block cross-origin requests
+otherwise):
+
+```bash
+OLLAMA_ORIGINS="https://your-aether-site.example" ollama serve
+```
+
+The prompt is still assembled on the server (it injects the USCS spec), but the model runs
+locally and your generated text never passes through the server. No API key needed.
 
 ---
 
@@ -69,8 +89,10 @@ Otherwise strangers would spend your credits.
 > this server (used per request, never stored). If you don't want your key to transit a
 > third-party server, self-host instead (it's open source).
 
-Local models (Ollama) do **not** work on a cloud deploy — there's no Ollama next to the
-server. Cloud instances use the four cloud providers; for local models, self-host.
+**Server-side** Ollama doesn't work on a cloud deploy (there's no Ollama next to the server) —
+keep `OLLAMA_BASE_URL` empty. But visitors who run Ollama locally can still use their *own*
+models via **Settings → Ollama → "Use my own machine"** (the browser connects directly to
+their machine); everyone else uses the four cloud providers.
 
 ---
 
@@ -84,7 +106,7 @@ All are **optional** — the app works with keys entered in the UI. See `.env.ex
 | `ANTHROPIC_API_KEY` | Default Claude key (omit on public deploys). |
 | `MISTRAL_API_KEY` | Default Mistral key (omit on public deploys). |
 | `OPENROUTER_API_KEY` | Default OpenRouter key (omit on public deploys). |
-| `OLLAMA_BASE_URL` | Ollama address (default `http://localhost:11434`). |
+| `OLLAMA_BASE_URL` | Enables **server-side** Ollama (server calls it; `localhost` = the server). Empty by default — keep empty on public deploys. Self-host only; visitors use "Use my own machine" instead. |
 | `OLLAMA_ALLOW_ANY` | Set `true` only on a trusted self-host to allow a non-local Ollama URL. Leave unset on public deploys (SSRF guard). |
 | `PORT` | Listen port. Cloud hosts set this automatically. |
 | `NODE_ENV` | `production` serves the built app. |
