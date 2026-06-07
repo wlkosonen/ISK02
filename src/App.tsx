@@ -345,7 +345,7 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 
 // Version of THIS app (the Aether_Core tool), distinct from the USCS framework
 // version it implements. Bump this when you ship changes.
-const APP_VERSION = "0.10.1";
+const APP_VERSION = "0.10.2";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
 const USCS_VERSION = "6.1";
 
@@ -2883,6 +2883,12 @@ function MainInterfaceChat({ state, askAssistant, preview, isSyncNeeded, syncDes
 function VersionHistoryModal({ onClose }: { onClose: () => void }) {
   const releases: { v: string; title: string; items: string[] }[] = [
     {
+      v: "0.10.2", title: "Device-width card previews",
+      items: [
+        "Plot Card and Character Card previews now have a device-width toggle (Phone 390 · Tablet 768 · Full): clamp the live preview to a phone or tablet width to see exactly how the card's columns and pills reflow on each device — catching cramped or wrapping layouts before you publish, without copy-pasting the HTML into a playroom.",
+      ],
+    },
+    {
       v: "0.10.1", title: "Story + DM polish",
       items: [
         "The Story + DM coherence review now reads your ACTUAL captured artifacts (Guidelines, Prompt Plot, Player Persona, and the DM stat schema / game rules / instruction) instead of reviewing them blind — so it cross-checks real text rather than assuming.",
@@ -3411,6 +3417,59 @@ function ChatScrollAnchor({ history, isLoading }: { history: any[], isLoading?: 
     anchorRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [history, isLoading]);
   return <div ref={anchorRef} className="h-px w-full shrink-0" />;
+}
+
+// Live, sandboxed HTML card preview with a device-width toggle. Cards are FLUID
+// (width:100%; max-width:600/720px) with percentage-column reflow, so the SAME
+// HTML stacks differently on a phone vs desktop — pills wrap, columns collapse.
+// That responsive drift is exactly what the USCS card rules guard against, and
+// what previously could only be checked by pasting the HTML into a playroom.
+// The toggle clamps the iframe width so a creator can sanity-check the reflow
+// in-app at phone / tablet / full width. `sandbox=""` keeps scripts off.
+function CardPreview({
+  html, bg, title, height = 520, rounded = "rounded-3xl", shadow = true,
+}: {
+  html: string; bg: string; title: string; height?: number; rounded?: string; shadow?: boolean;
+}) {
+  const DEVICES = [
+    { id: "phone" as const, label: "Phone", w: 390 as number | null },
+    { id: "tablet" as const, label: "Tablet", w: 768 as number | null },
+    { id: "full" as const, label: "Full", w: null as number | null },
+  ];
+  const [device, setDevice] = useState<"phone" | "tablet" | "full">("full");
+  const w = DEVICES.find(d => d.id === device)!.w;
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-1">
+        {DEVICES.map(d => (
+          <button
+            key={d.id}
+            onClick={() => setDevice(d.id)}
+            title={d.w ? `Preview at ${d.w}px wide` : "Fill the available width"}
+            className={`px-2 py-1 rounded-md text-[8px] font-black uppercase tracking-widest border transition-all ${
+              device === d.id
+                ? "border-accent/50 bg-accent/15 text-accent"
+                : "border-border text-text-dim hover:text-accent hover:border-accent/30"
+            }`}
+          >
+            {d.label}{d.w ? ` · ${d.w}` : ""}
+          </button>
+        ))}
+      </div>
+      <div
+        className={`w-full overflow-x-auto border border-border ${rounded} ${shadow ? "shadow-2xl" : ""}`}
+        style={{ backgroundColor: bg }}
+      >
+        <iframe
+          title={title}
+          sandbox=""
+          className="block mx-auto"
+          style={{ width: w ? `${w}px` : "100%", height, backgroundColor: bg, border: "none" }}
+          srcDoc={html}
+        />
+      </div>
+    </div>
+  );
 }
 
 function LockedStepsSummary({ state }: { state: StoryState }) {
@@ -4724,12 +4783,11 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                       <CopyButton variant="button" label="Copy HTML" text={state.deliverables.plotCard} title="Copy the raw Plot Card HTML (paste into a playroom or test render)" />
                     </div>
                   </div>
-                  <iframe
+                  <CardPreview
                     title="Plot Card Preview"
-                    sandbox=""
-                    className="w-full h-[520px] rounded-3xl border border-border shadow-2xl"
-                    style={{ backgroundColor: state.palette[0] || "#18181b" }}
-                    srcDoc={state.deliverables.plotCard}
+                    html={state.deliverables.plotCard}
+                    bg={state.palette[0] || "#18181b"}
+                    height={520}
                   />
                   <p className="text-[10px] text-text-dim px-1">This is the real HTML the player will see. Tinker the palette on the right and hit <span className="text-text-muted font-bold">Apply Palette &amp; Iterate</span>, or ask for changes in chat — the AI re-emits the card and this preview refreshes.</p>
                 </div>
@@ -4917,12 +4975,13 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                           </span>
                         </summary>
                         <div className="p-3 pt-0">
-                          <iframe
+                          <CardPreview
                             title={`Character Card — ${char.name}`}
-                            sandbox=""
-                            className="w-full h-[360px] rounded-xl border border-border"
-                            style={{ backgroundColor: state.palette[0] || "#18181b" }}
-                            srcDoc={char.card}
+                            html={char.card}
+                            bg={state.palette[0] || "#18181b"}
+                            height={360}
+                            rounded="rounded-xl"
+                            shadow={false}
                           />
                         </div>
                       </details>
