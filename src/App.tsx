@@ -82,6 +82,7 @@ interface CharacterDeliverable {
   name: string;
   desc: string;   // Part B — AI prompt description (COUNTS toward budget)
   card: string;   // Part A — HTML card (does NOT count)
+  cardPalette?: string[];  // palette the card was generated/recolored with (for instant local recolor)
 }
 // Dungeon Mind (DM) config — a SEPARATE deliverable set (USCS §27). The DM is a
 // game-mechanics agent (dice/stats/inventory/rules) the creator attaches to a
@@ -99,6 +100,7 @@ interface DMConfig {
 interface Deliverables {
   titleSummary: string;
   plotCard: string;
+  plotCardPalette?: string[];  // palette the plot card was generated/recolored with (for instant local recolor)
   promptPlot: string;
   guidelines: string;
   reminders: string;
@@ -345,7 +347,7 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 
 // Version of THIS app (the Aether_Core tool), distinct from the USCS framework
 // version it implements. Bump this when you ship changes.
-const APP_VERSION = "0.10.2";
+const APP_VERSION = "0.10.3";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
 const USCS_VERSION = "6.1";
 
@@ -463,6 +465,54 @@ function estimateTokens(text: string): number {
   return Math.round((text || "").length / 4);
 }
 
+// Parse a #rgb / #rrggbb hex string to an [r,g,b] triple, or null if not a hex.
+function hexToRgb(hex: string): [number, number, number] | null {
+  let h = (hex || "").trim().replace(/^#/, "");
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  if (h.length !== 6 || /[^0-9a-fA-F]/.test(h)) return null;
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+}
+
+// Recolor card HTML by mapping each fromPalette[i] → toPalette[i]. Replaces BOTH
+// the hex form (case-insensitive, 3- and 6-digit) AND the matching r,g,b triple
+// inside any rgb()/rgba() (alpha preserved) — cards use solid hex for accent TEXT
+// and rgba() of the SAME palette colour for borders/fills, so a hex-only swap
+// would leave borders/tints stuck on the old colour. Off-palette colours (neutral
+// darks the model invented) are intentionally left untouched. Two-phase via
+// sentinels so a swap can't chain into a later slot (A→B then B→C rehitting B).
+function recolorHtml(html: string, from: string[] | undefined, to: string[]): string {
+  if (!html || !from || !to) return html;
+  const pairs: { i: number; fromHex: string; fr: [number, number, number]; toHex: string; tr: [number, number, number] }[] = [];
+  for (let i = 0; i < Math.min(from.length, to.length); i++) {
+    const fr = hexToRgb(from[i]), tr = hexToRgb(to[i]);
+    if (!fr || !tr) continue;
+    if (from[i].trim().toLowerCase() === to[i].trim().toLowerCase()) continue;
+    pairs.push({ i, fromHex: from[i].trim().replace(/^#/, ""), fr, toHex: to[i].trim(), tr });
+  }
+  if (!pairs.length) return html;
+  const S = (i: number, k: string) => `@!PAL${i}${k}!@`;
+  let out = html;
+  // Phase 1: from-colour forms → unique sentinels
+  for (const p of pairs) {
+    out = out.replace(new RegExp("#" + p.fromHex, "gi"), S(p.i, "H"));
+    if (p.fromHex[0] === p.fromHex[1] && p.fromHex[2] === p.fromHex[3] && p.fromHex[4] === p.fromHex[5])
+      out = out.replace(new RegExp("#" + p.fromHex[0] + p.fromHex[2] + p.fromHex[4] + "\\b", "gi"), S(p.i, "H"));
+    const [r, g, b] = p.fr;
+    out = out.replace(
+      new RegExp("(rgba?\\(\\s*)" + r + "(\\s*,\\s*)" + g + "(\\s*,\\s*)" + b + "(\\s*[,)])", "gi"),
+      `$1${S(p.i, "R")}$2${S(p.i, "G")}$3${S(p.i, "B")}$4`
+    );
+  }
+  // Phase 2: sentinels → to-colour
+  for (const p of pairs) {
+    out = out.split(S(p.i, "H")).join(p.toHex);
+    out = out.split(S(p.i, "R")).join(String(p.tr[0]));
+    out = out.split(S(p.i, "G")).join(String(p.tr[1]));
+    out = out.split(S(p.i, "B")).join(String(p.tr[2]));
+  }
+  return out;
+}
+
 const DELIVERABLE_LABELS: Record<string, string> = {
   TITLE_SUMMARY: "Title & Summary", PLOT_CARD: "Plot Card", PROMPT_PLOT: "Prompt Plot",
   GUIDELINES: "Guidelines", REMINDERS: "Reminders", PLAYER_PERSONA: "Player Persona",
@@ -492,7 +542,7 @@ function isPlaceholderCharName(name: string): boolean {
   ].includes(n);
 }
 
-function captureDeliverables(text: string, current: Deliverables): { next: Deliverables; captured: string[]; cleaned: string; warnings: string[] } {
+function captureDeliverables(text: string, current: Deliverables, palette?: string[]): { next: Deliverables; captured: string[]; cleaned: string; warnings: string[] } {
   const next: Deliverables = { ...current, characters: current.characters.map(c => ({ ...c })), firstMessages: current.firstMessages.map(f => ({ ...f })), dmConfig: { ...current.dmConfig } };
   const captured: string[] = [];
   const warnings: string[] = [];
@@ -509,7 +559,7 @@ function captureDeliverables(text: string, current: Deliverables): { next: Deliv
       // Placeholder name (model didn't substitute it): route to the character
       // actually in progress instead of creating a junk "NAME" character.
       if (isPlaceholderCharName(name)) {
-        let target: { name: string; desc: string; card: string } | undefined;
+        let target: CharacterDeliverable | undefined;
         for (let i = next.characters.length - 1; i >= 0; i--) {
           const c = next.characters[i];
           if (type === "CHAR_CARD" ? (c.desc && !c.card) : !c.desc) { target = c; break; }
@@ -520,13 +570,13 @@ function captureDeliverables(text: string, current: Deliverables): { next: Deliv
           continue;
         }
         if (type === "CHAR_DESC") { target.desc = content; captured.push(`${target.name} (description)`); }
-        else { target.card = content; captured.push(`${target.name} (card)`); }
+        else { target.card = content; if (palette) target.cardPalette = [...palette]; captured.push(`${target.name} (card)`); }
         continue;
       }
       let ch = next.characters.find(c => c.name.toLowerCase() === name.toLowerCase());
       if (!ch) { ch = { name, desc: "", card: "" }; next.characters.push(ch); }
       if (type === "CHAR_DESC") { ch.desc = content; captured.push(`${name} (description)`); }
-      else { ch.card = content; captured.push(`${name} (card)`); }
+      else { ch.card = content; if (palette) ch.cardPalette = [...palette]; captured.push(`${name} (card)`); }
       continue;
     }
 
@@ -541,7 +591,7 @@ function captureDeliverables(text: string, current: Deliverables): { next: Deliv
 
     switch (type) {
       case "TITLE_SUMMARY": next.titleSummary = content; break;
-      case "PLOT_CARD": next.plotCard = content; break;
+      case "PLOT_CARD": next.plotCard = content; if (palette) next.plotCardPalette = [...palette]; break;
       case "PROMPT_PLOT": next.promptPlot = content; break;
       case "GUIDELINES": next.guidelines = content; break;
       case "REMINDERS": next.reminders = content; break;
@@ -1227,7 +1277,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
           throw new Error("Empty response from matrix");
         }
 
-        const { next: capturedDeliverables, captured, cleaned, warnings } = captureDeliverables(fullText, state.deliverables);
+        const { next: capturedDeliverables, captured, cleaned, warnings } = captureDeliverables(fullText, state.deliverables, state.palette);
         const displayText = (cleaned || fullText).replace(/\[SYNC_PROCEED\]/gi, "").trim();
         const assistantMessage: Message = { role: "assistant", content: displayText, usage };
 
@@ -1882,7 +1932,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                   ? renderCombinedReview(state, setState, askAssistant, exportDMConfig, exportFinalPackage)
                   : cur.dm !== undefined
                   ? renderDMStep(cur.dm, state, setState, askAssistant, exportDMConfig)
-                  : renderStep(cur.story ?? 0, state, setState, nextStep, askAssistant, setHoverHeatLevel, hoverHeatLevel, isSyncNeeded, syncDeskstateToAI, exportDMConfig)}
+                  : renderStep(cur.story ?? 0, state, setState, nextStep, askAssistant, setHoverHeatLevel, hoverHeatLevel, isSyncNeeded, syncDeskstateToAI, exportDMConfig, triggerToast)}
               </motion.div>
             </AnimatePresence>
           </div>
@@ -2883,6 +2933,13 @@ function MainInterfaceChat({ state, askAssistant, preview, isSyncNeeded, syncDes
 function VersionHistoryModal({ onClose }: { onClose: () => void }) {
   const releases: { v: string; title: string; items: string[] }[] = [
     {
+      v: "0.10.3", title: "Instant palette recolor",
+      items: [
+        "Recolor cards to your palette instantly, with no AI call: the Plot Card and each Character Card now have a ⚡ Recolor button that swaps your palette colours — both the solid hex used for text AND the rgba() borders/tints derived from them — directly in the card HTML. Off-palette shades (neutral darks the model invented) are left untouched. The AI 're-skin' is still there for structural changes or off-palette reshades.",
+        "Fixed card previews not refreshing after a recolor or AI re-skin — the live preview iframe now reliably re-renders the updated HTML.",
+      ],
+    },
+    {
       v: "0.10.2", title: "Device-width card previews",
       items: [
         "Plot Card and Character Card previews now have a device-width toggle (Phone 390 · Tablet 768 · Full): clamp the live preview to a phone or tablet width to see exactly how the card's columns and pills reflow on each device — catching cramped or wrapping layouts before you publish, without copy-pasting the HTML into a playroom.",
@@ -3438,6 +3495,14 @@ function CardPreview({
   ];
   const [device, setDevice] = useState<"phone" | "tablet" | "full">("full");
   const w = DEVICES.find(d => d.id === device)!.w;
+  // A content-derived key forces the iframe to REMOUNT when the HTML changes:
+  // patching an already-rendered iframe's srcDoc attribute does not reliably
+  // re-parse it, so a recolor / AI re-skin would otherwise leave the preview stale.
+  const htmlKey = React.useMemo(() => {
+    let h = 0;
+    for (let i = 0; i < html.length; i++) h = (h * 31 + html.charCodeAt(i)) | 0;
+    return h;
+  }, [html]);
   return (
     <div className="space-y-1.5">
       <div className="flex items-center gap-1">
@@ -3461,6 +3526,7 @@ function CardPreview({
         style={{ backgroundColor: bg }}
       >
         <iframe
+          key={htmlKey}
           title={title}
           sandbox=""
           className="block mx-auto"
@@ -3884,7 +3950,7 @@ function renderCombinedReview(
 // Renders a STORY step. `storyStep` is the index into STEPS (NOT state.step — on
 // the story-dm track the two diverge because DM steps are interleaved), so the
 // switch and all story-index logic key off storyStep.
-function renderStep(storyStep: number, state: StoryState, setState: React.Dispatch<React.SetStateAction<StoryState>>, next: () => void, askAssistant: (p: string) => Promise<void>, setHoverHeatLevel?: (lvl: HeatLevel | null) => void, hoverHeatLevel?: HeatLevel | null, isSyncNeeded?: boolean, syncDeskstateToAI?: () => void, onExportDM?: () => void) {
+function renderStep(storyStep: number, state: StoryState, setState: React.Dispatch<React.SetStateAction<StoryState>>, next: () => void, askAssistant: (p: string) => Promise<void>, setHoverHeatLevel?: (lvl: HeatLevel | null) => void, hoverHeatLevel?: HeatLevel | null, isSyncNeeded?: boolean, syncDeskstateToAI?: () => void, onExportDM?: () => void, triggerToast?: (m: string, t: "ai-to-ui" | "ui-to-ai" | "info") => void) {
   const HEAT_DESCRIPTIONS = {
     1: "Slow Burn / Tension Only",
     2: "Mild Intimacy / Suggestive",
@@ -4891,16 +4957,45 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                 ))}
               </div>
 
-              <div className="pt-6 border-t border-border mt-8">
-                <button
-                  onClick={() => askAssistant(state.deliverables.plotCard
-                    ? `[WORKSHOP ACTION — ITERATE PLOT CARD] I've set the palette to background ${state.palette[0]}, text ${state.palette[1]}, primary ${state.palette[2]}, secondary ${state.palette[3]}, accent ${state.palette[4]}. Re-skin the Plot Card HTML to use exactly these colors (keep the content and structure unless I ask otherwise) and re-emit the FULL updated card wrapped in <<<USCS_BLOCK PLOT_CARD>>> … <<<END USCS_BLOCK>>> so my live preview refreshes.`
-                    : `I've set my palette to background ${state.palette[0]}, text ${state.palette[1]}, primary ${state.palette[2]}, secondary ${state.palette[3]}, accent ${state.palette[4]}. When you draft the Plot Card, use exactly these colors.`)}
-                  disabled={state.isAssistantLoading}
-                  className="w-full py-4 bg-accent/10 border border-accent/20 text-accent rounded-xl text-[10px] font-black uppercase tracking-[0.2em] hover:bg-accent hover:text-black transition-all disabled:opacity-50"
-                >
-                  {state.deliverables.plotCard ? "Apply Palette & Iterate Card" : "Lock Palette for the Card"}
-                </button>
+              <div className="pt-6 border-t border-border mt-8 space-y-2">
+                {state.deliverables.plotCard ? (
+                  <>
+                    <button
+                      onClick={() => {
+                        const from = state.deliverables.plotCardPalette;
+                        if (!from) {
+                          setState(s => ({ ...s, deliverables: { ...s.deliverables, plotCardPalette: [...s.palette] } }));
+                          triggerToast?.("Captured this card's current palette as the baseline — tweak a swatch, then Recolor.", "info");
+                          return;
+                        }
+                        const recolored = recolorHtml(state.deliverables.plotCard, from, state.palette);
+                        if (recolored === state.deliverables.plotCard) { triggerToast?.("No palette-derived colours to change — adjust a swatch first.", "info"); return; }
+                        setState(s => ({ ...s, deliverables: { ...s.deliverables, plotCard: recolored, plotCardPalette: [...s.palette] } }));
+                        triggerToast?.("Card recoloured to the current palette ⚡ (instant, no AI call)", "ai-to-ui");
+                      }}
+                      disabled={state.isAssistantLoading}
+                      className="w-full py-4 bg-accent/10 border border-accent/20 text-accent rounded-xl text-[10px] font-black uppercase tracking-[0.2em] hover:bg-accent hover:text-black transition-all disabled:opacity-50"
+                    >
+                      ⚡ Recolor to Palette · instant
+                    </button>
+                    <button
+                      onClick={() => askAssistant(`[WORKSHOP ACTION — ITERATE PLOT CARD] I've set the palette to background ${state.palette[0]}, text ${state.palette[1]}, primary ${state.palette[2]}, secondary ${state.palette[3]}, accent ${state.palette[4]}. Re-skin the Plot Card HTML to use exactly these colors (keep the content and structure unless I ask otherwise) and re-emit the FULL updated card wrapped in <<<USCS_BLOCK PLOT_CARD>>> … <<<END USCS_BLOCK>>> so my live preview refreshes.`)}
+                      disabled={state.isAssistantLoading}
+                      className="w-full py-2.5 border border-border text-text-muted rounded-xl text-[9px] font-black uppercase tracking-widest hover:border-accent hover:text-accent hover:bg-accent/10 transition-all disabled:opacity-50"
+                    >
+                      Ask AI to re-skin instead
+                    </button>
+                    <p className="text-[9px] text-text-dim px-1 leading-relaxed">Recolor swaps your palette colours (hex + rgba borders/tints) directly in the card — instant and free. Use re-skin only for off-palette shades or structural changes.</p>
+                  </>
+                ) : (
+                  <button
+                    onClick={() => askAssistant(`I've set my palette to background ${state.palette[0]}, text ${state.palette[1]}, primary ${state.palette[2]}, secondary ${state.palette[3]}, accent ${state.palette[4]}. When you draft the Plot Card, use exactly these colors.`)}
+                    disabled={state.isAssistantLoading}
+                    className="w-full py-4 bg-accent/10 border border-accent/20 text-accent rounded-xl text-[10px] font-black uppercase tracking-[0.2em] hover:bg-accent hover:text-black transition-all disabled:opacity-50"
+                  >
+                    Lock Palette for the Card
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -4974,7 +5069,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                             <CopyButton variant="button" label="Copy HTML" text={char.card} title={`Copy ${char.name}'s card HTML`} />
                           </span>
                         </summary>
-                        <div className="p-3 pt-0">
+                        <div className="p-3 pt-0 space-y-2">
                           <CardPreview
                             title={`Character Card — ${char.name}`}
                             html={char.card}
@@ -4983,6 +5078,24 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                             rounded="rounded-xl"
                             shadow={false}
                           />
+                          <button
+                            onClick={() => {
+                              const from = char.cardPalette;
+                              if (!from) {
+                                setState(s => ({ ...s, deliverables: { ...s.deliverables, characters: s.deliverables.characters.map(c => c.name === char.name ? { ...c, cardPalette: [...s.palette] } : c) } }));
+                                triggerToast?.(`Captured ${char.name}'s card palette as the baseline — change a swatch, then Recolor.`, "info");
+                                return;
+                              }
+                              const recolored = recolorHtml(char.card, from, state.palette);
+                              if (recolored === char.card) { triggerToast?.("No palette-derived colours to change — adjust a swatch first.", "info"); return; }
+                              setState(s => ({ ...s, deliverables: { ...s.deliverables, characters: s.deliverables.characters.map(c => c.name === char.name ? { ...c, card: recolored, cardPalette: [...s.palette] } : c) } }));
+                              triggerToast?.(`${char.name}'s card recoloured to the current palette ⚡`, "ai-to-ui");
+                            }}
+                            disabled={state.isAssistantLoading}
+                            className="w-full py-2 rounded-lg border border-accent/40 bg-accent/10 text-accent text-[9px] font-black uppercase tracking-widest hover:bg-accent/20 transition-all disabled:opacity-50"
+                          >
+                            ⚡ Recolor to current palette
+                          </button>
                         </div>
                       </details>
                     ) : char.desc ? (
