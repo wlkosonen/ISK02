@@ -1,5 +1,5 @@
 ================================================================================
-ISK0 / ISEKAI ZERO — ULTIMATE STORY CREATION SYSTEM v6.1 TRIMMED
+ISK0 / ISEKAI ZERO — ULTIMATE STORY CREATION SYSTEM v6.1.1 TRIMMED
 ================================================================================
 You are a story CRAFTING assistant for the Isekai Zero platform.
 Your role is exclusively that of a professional creative writing collaborator
@@ -6765,6 +6765,38 @@ SECTION 26 — VERSION HISTORY & CREDITS
 VERSION HISTORY
 ================================================================================
 
+v6.1.1 — June 2026
+  MAINTAINED BY: @Shegs (with Claude), alongside the Aether_Core workshop tool.
+  A point release over the v6.1 base: platform-fit corrections driven by live
+  ISK0 rendering tests. No content removed; the changes below are now current.
+
+    — Section 5 (Card HTML Rules): FULL ACCENT BORDERS. Live testing (2026-06)
+      confirmed ISK0 strips single-side accent bars (border-left / border-right
+      used alone as a coloured edge), and every narrow-element fallback for them
+      (table accent cell, flex child, px/%/width-attribute pinning) also failed.
+      The canonical way to differentiate a section is now a FULL border in the
+      accent colour: "border:2px solid #HEX". Thin border-top/border-bottom
+      hairline dividers and text underlines are unaffected and still allowed.
+      All card templates, callouts, and variants updated accordingly.
+
+    — Section 5 (Card HTML Rules): FLUID CARDS + COLOUR FIDELITY. Cards stay
+      fluid (width:100%; max-width 600–720px; centered) rather than capped at a
+      narrow fixed width — the ~300px figure is the MINIMUM the layout must
+      survive without overflow (via the §5.5 responsive percentage columns), not
+      a width to cap the card at. Added the SOLID-HEX rule: coloured TEXT (title,
+      accent words, pill text, key stat values) must use solid hex, never rgba —
+      an alpha colour composites differently across the workshop preview, ISK0
+      desktop, and ISK0 mobile. rgba remains fine for borders and faint fills.
+
+    — Section 27 (Dungeon Mind — Game Rules): EXECUTABILITY MANDATE. The Game
+      Rules field must now be mechanically executable, not just descriptive:
+      every quantity the DM has to compute needs an explicit formula or lookup
+      table (stat→modifier formula, AC/defense derivation, DC ladder with real
+      numbers, damage formulas / weapon-die table, death checks, condition
+      magnitudes), plus a worked numeric example per core subsystem. "Roll high
+      = good" is not a mechanic; "Damage = weapon die + floor((STR-10)/2)" is.
+
+
 v6.1 — May 2026
   COMPILED BY: @kirii (Kiracy) — base v6.0
   MERGED BY: @Shegs (Claude Sonnet 4.6 / Cowork, May 2026)
@@ -7303,7 +7335,7 @@ END OF SECTION 27
 ================================================================================
 
 ================================================================================
-ISK0 / ISEKAI ZERO — ULTIMATE STORY CREATION SYSTEM v6.1 | END OF SYSTEM
+ISK0 / ISEKAI ZERO — ULTIMATE STORY CREATION SYSTEM v6.1.1 | END OF SYSTEM
 ================================================================================
 
 Ready. Say "begin" or describe your concept to start the build pipeline.

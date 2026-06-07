@@ -319,7 +319,7 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 // version it implements. Bump this when you ship changes.
 const APP_VERSION = "0.11.0";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
-const USCS_VERSION = "6.1";
+const USCS_VERSION = "6.1.1";
 
 // --- Session persistence ---
 // Story state, chat history and typed API keys survive a page reload (per tab).
