@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
+import { captureDeliverables, type Deliverables, type DMConfig } from "./lib/capture";
 import { 
   Settings, 
   BookOpen, 
@@ -78,40 +79,8 @@ function cleanStreamingText(raw: string): string {
 // all count toward the 20k platform ceiling — including first messages, which ISK0
 // counts too. The rest (HTML cards, scenarios planning, image prompts) are part of
 // the export but do NOT count toward the budget.
-interface CharacterDeliverable {
-  name: string;
-  desc: string;   // Part B — AI prompt description (COUNTS toward budget)
-  card: string;   // Part A — HTML card (does NOT count)
-  cardPalette?: string[];  // palette the card was generated/recolored with (for instant local recolor)
-}
-// Dungeon Mind (DM) config — a SEPARATE deliverable set (USCS §27). The DM is a
-// game-mechanics agent (dice/stats/inventory/rules) the creator attaches to a
-// storyline on ISK0; these seven fields mirror ISK0's DM editor. Not part of the
-// story package and NOT subject to the 20k story-package ceiling.
-interface DMConfig {
-  name: string;             // Field 1 — config name
-  model: string;            // Field 2 — recommended ISK0 DM model (a note, not our provider)
-  statSchema: string;       // Field 7 — stat list (modes: Numeric/Text/Enum; Alive always present)
-  gameRules: string;        // Field 3 — ruleset (cap 10,000 tok)
-  gameRuleReminder: string; // Field 4 — 3–5 must-never-forget rules (~500 tok)
-  instruction: string;      // Field 5 — bridge telling the story-AI when to invoke the DM
-  playerGuide: string;      // Field 6 — player-facing guide (max 1000 CHARACTERS)
-}
-interface Deliverables {
-  titleSummary: string;
-  plotCard: string;
-  plotCardPalette?: string[];  // palette the plot card was generated/recolored with (for instant local recolor)
-  promptPlot: string;
-  guidelines: string;
-  reminders: string;
-  playerPersona: string;
-  scenarios: string;
-  imagePrompts: string;
-  characters: CharacterDeliverable[];
-  firstMessages: { label: string; content: string }[];   // one per scenario variant — COUNTS
-  dmConfig: DMConfig;     // Dungeon Mind config (USCS §27) — only built on DM tracks
-}
-
+// Deliverable types (CharacterDeliverable, DMConfig, Deliverables) live in
+// ./lib/capture, next to the capture parser that produces them.
 const EMPTY_DM_CONFIG: DMConfig = {
   name: "", model: "", statSchema: "", gameRules: "", gameRuleReminder: "", instruction: "", playerGuide: "",
 };
@@ -166,6 +135,7 @@ interface StoryState {
     model: string;
     temperature: number;
     maxTokens: number;
+    maxTokensTouched?: boolean;  // user moved the slider → stop auto-defaulting per model
     ollamaBaseUrl?: string;
     geminiApiKey?: string;
     anthropicApiKey?: string;
@@ -347,7 +317,7 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 
 // Version of THIS app (the Aether_Core tool), distinct from the USCS framework
 // version it implements. Bump this when you ship changes.
-const APP_VERSION = "0.10.5";
+const APP_VERSION = "0.11.0";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
 const USCS_VERSION = "6.1";
 
@@ -414,13 +384,71 @@ const DEFAULT_STATE: StoryState = {
   modelSettings: {
     model: "gemini-2.5-flash",
     temperature: 1.0,
-    maxTokens: 4096,
+    maxTokens: 8192,  // default to the model's output ceiling (see getModelTokenCeiling);
+                      // refreshed per model on change unless the user sets it manually
     geminiApiKey: "",
     anthropicApiKey: "",
     openRouterApiKey: "",
     mistralApiKey: "",
   },
 };
+
+// --- Deskstate sync: single source of truth -------------------------------
+// "Has the creator changed a synced parameter since the AI last saw it?" is
+// driven by ONE field list. isSyncNeeded, the change summary in the sync toast,
+// and the post-sync baseline snapshot all derive from it — so adding a synced
+// field is a single entry here, not three parallel edits that silently drift
+// (the old failure mode: forget to compare or snapshot a new field and a change
+// either never triggers a sync, or is forgotten the moment one fires).
+type DeskSnapshot = Pick<StoryState,
+  "mode" | "heatLevel" | "workshopTrack" | "concept" | "settingType" | "tone" |
+  "artStyle" | "palette" | "aestheticMode" | "groundingRules" | "title" | "summary" |
+  "tokenBudgetMin" | "tokenBudgetMax" | "budgetTierMode" | "customLimits" | "step">;
+
+const deskArrEq = (a: string[], b: string[]) => a.join(",") === b.join(",");
+const deskJsonEq = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+const tokenBudgetLabel = (s: StoryState) => `Token Budget: ~${s.tokenBudgetMin / 1000}k–${s.tokenBudgetMax / 1000}k`;
+
+// key = both the StoryState field and its snapshot slot; eq overrides strict
+// equality for arrays/objects; label (optional) is the human line in the sync toast.
+const DESKSTATE_FIELDS: { key: keyof DeskSnapshot; eq?: (a: any, b: any) => boolean; label?: (s: StoryState) => string }[] = [
+  { key: "mode", label: s => `Mode: ${s.mode || "None"}` },
+  { key: "heatLevel", label: s => `Heat: ${s.heatLevel}` },
+  { key: "workshopTrack", label: s => `Track: ${TRACK_LABELS[s.workshopTrack]}` },
+  { key: "concept", label: () => "Narrative Seed modified" },
+  { key: "settingType", label: s => `Setting: ${s.settingType || "None"}` },
+  { key: "tone", label: s => `Tone: ${s.tone || "None"}` },
+  { key: "artStyle", label: s => `Style: ${s.artStyle}` },
+  { key: "palette", eq: deskArrEq, label: () => "Visual Palette updated" },
+  { key: "aestheticMode", label: s => `Aesthetic Mode: ${s.aestheticMode}` },
+  { key: "groundingRules", label: () => "Grounding Rules modified" },
+  { key: "title", label: s => `Title: ${s.title || "Untitled"}` },
+  { key: "summary", label: () => "Narrative Summary modified" },
+  // Min/Max share one label; the Set in the sync handler dedupes when both move.
+  { key: "tokenBudgetMin", label: tokenBudgetLabel },
+  { key: "tokenBudgetMax", label: tokenBudgetLabel },
+  { key: "budgetTierMode", label: s => `Budget-Tier Mode: ${s.budgetTierMode ? "ON" : "OFF"}` },
+  { key: "customLimits", eq: deskJsonEq, label: () => "Custom section limits changed" },
+  { key: "step", label: s => `Moved to Step: ${s.step + 1} (${getActiveSteps(s.workshopTrack)[s.step]})` },
+];
+
+function deskSnapshot(s: StoryState): DeskSnapshot {
+  return {
+    mode: s.mode, heatLevel: s.heatLevel, workshopTrack: s.workshopTrack,
+    concept: s.concept, settingType: s.settingType, tone: s.tone, artStyle: s.artStyle,
+    palette: [...s.palette], aestheticMode: s.aestheticMode, groundingRules: s.groundingRules,
+    title: s.title, summary: s.summary, tokenBudgetMin: s.tokenBudgetMin, tokenBudgetMax: s.tokenBudgetMax,
+    budgetTierMode: s.budgetTierMode, customLimits: { ...s.customLimits }, step: s.step,
+  };
+}
+
+// The synced fields whose value differs from the AI's last-seen baseline.
+function deskFieldsChanged(s: StoryState, last: DeskSnapshot) {
+  return DESKSTATE_FIELDS.filter(f => {
+    const eq = f.eq ?? ((a, b) => a === b);
+    return !eq((s as any)[f.key], (last as any)[f.key]);
+  });
+}
 
 // True if loadInitialState restored a non-trivial prior session (used to warn
 // the user they're resuming an old story rather than starting fresh).
@@ -533,117 +561,8 @@ function recolorHtml(html: string, from: string[] | undefined, to: string[]): st
   return out;
 }
 
-const DELIVERABLE_LABELS: Record<string, string> = {
-  TITLE_SUMMARY: "Title & Summary", PLOT_CARD: "Plot Card", PROMPT_PLOT: "Prompt Plot",
-  GUIDELINES: "Guidelines", REMINDERS: "Reminders", PLAYER_PERSONA: "Player Persona",
-  SCENARIOS: "Scenarios", IMAGE_PROMPTS: "Image Prompts",
-  DM_STAT_SCHEMA: "Stat Schema", DM_GAME_RULES: "Game Rules", DM_REMINDER: "Game Rule Reminder",
-  DM_INSTRUCTION: "Story-AI Instruction", DM_PLAYER_GUIDE: "Player Guide", DM_NAME_MODEL: "Name & Model",
-};
-
-// Parse <<<USCS_BLOCK TYPE>>> … <<<END USCS_BLOCK>>> sentinels out of an assistant
-// message: capture the latest version of each block into the package, and return
-// the message text with the marker lines removed (the block content stays visible).
-// The closing marker tolerates a repeated type (`<<<END USCS_BLOCK TYPE>>>`) —
-// weaker models often echo it there, and we'd rather capture than drop the field.
-const BLOCK_RE = /<<<USCS_BLOCK\s+([A-Z_]+)(?::\s*([^>\n]+?))?\s*>>>[ \t]*\r?\n?([\s\S]*?)\r?\n?[ \t]*<<<END\s+USCS_BLOCK(?:[ \t:]+[^>\n]*)?>>>/g;
-
-// Weak models sometimes echo the literal placeholder from the prompt
-// ("<<<USCS_BLOCK CHAR_DESC: Name>>>") instead of substituting the real
-// character name. Treat those as "no real name" so we don't spawn a ghost
-// character literally called "Name"/"NAME" (and silently duplicate the cast).
-function isPlaceholderCharName(name: string): boolean {
-  const n = name.trim().replace(/^[<[("'{]+|[>\])"'}]+$/g, "").trim().toLowerCase();
-  return [
-    "", "name", "names", "character", "character name", "characters name",
-    "character's name", "char name", "char_name", "charname", "your name",
-    "the name", "name here", "full name", "character_name", "tbd", "todo",
-    "example", "example name", "placeholder", "n/a",
-  ].includes(n);
-}
-
-function captureDeliverables(text: string, current: Deliverables, palette?: string[]): { next: Deliverables; captured: string[]; cleaned: string; warnings: string[] } {
-  const next: Deliverables = { ...current, characters: current.characters.map(c => ({ ...c })), firstMessages: current.firstMessages.map(f => ({ ...f })), dmConfig: { ...current.dmConfig } };
-  const captured: string[] = [];
-  const warnings: string[] = [];
-  let m: RegExpExecArray | null;
-  BLOCK_RE.lastIndex = 0;
-  while ((m = BLOCK_RE.exec(text)) !== null) {
-    const type = m[1].toUpperCase();
-    const name = (m[2] || "").trim();
-    const content = (m[3] || "").trim();
-    if (!content) continue;
-
-    if (type === "CHAR_DESC" || type === "CHAR_CARD") {
-      if (!name) continue;
-      // Placeholder name (model didn't substitute it): route to the character
-      // actually in progress instead of creating a junk "NAME" character.
-      if (isPlaceholderCharName(name)) {
-        let target: CharacterDeliverable | undefined;
-        for (let i = next.characters.length - 1; i >= 0; i--) {
-          const c = next.characters[i];
-          if (type === "CHAR_CARD" ? (c.desc && !c.card) : !c.desc) { target = c; break; }
-        }
-        if (!target) {
-          // Nothing sensible to attach to — drop it rather than spawn a ghost.
-          warnings.push(`A ${type === "CHAR_CARD" ? "card" : "description"} came back without a real character name — re-run that character and it'll capture.`);
-          continue;
-        }
-        if (type === "CHAR_DESC") { target.desc = content; captured.push(`${target.name} (description)`); }
-        else { target.card = content; if (palette) target.cardPalette = [...palette]; captured.push(`${target.name} (card)`); }
-        continue;
-      }
-      let ch = next.characters.find(c => c.name.toLowerCase() === name.toLowerCase());
-      if (!ch) { ch = { name, desc: "", card: "" }; next.characters.push(ch); }
-      if (type === "CHAR_DESC") { ch.desc = content; captured.push(`${name} (description)`); }
-      else { ch.card = content; if (palette) ch.cardPalette = [...palette]; captured.push(`${name} (card)`); }
-      continue;
-    }
-
-    if (type === "FIRST_MESSAGE" || type === "FIRST_MESSAGES") {
-      const label = name || `${next.firstMessages.length + 1}`;
-      let fm = next.firstMessages.find(f => f.label.toLowerCase() === label.toLowerCase());
-      if (!fm) { fm = { label, content: "" }; next.firstMessages.push(fm); }
-      fm.content = content;
-      captured.push(`First Message ${label}`);
-      continue;
-    }
-
-    switch (type) {
-      case "TITLE_SUMMARY": next.titleSummary = content; break;
-      case "PLOT_CARD": next.plotCard = content; if (palette) next.plotCardPalette = [...palette]; break;
-      case "PROMPT_PLOT": next.promptPlot = content; break;
-      case "GUIDELINES": next.guidelines = content; break;
-      case "REMINDERS": next.reminders = content; break;
-      case "PLAYER_PERSONA": next.playerPersona = content; break;
-      case "SCENARIOS": next.scenarios = content; break;
-      case "IMAGE_PROMPTS": next.imagePrompts = content; break;
-      // Dungeon Mind config fields (USCS §27)
-      case "DM_STAT_SCHEMA": next.dmConfig.statSchema = content; break;
-      case "DM_GAME_RULES": next.dmConfig.gameRules = content; break;
-      case "DM_REMINDER": next.dmConfig.gameRuleReminder = content; break;
-      case "DM_INSTRUCTION": next.dmConfig.instruction = content; break;
-      case "DM_PLAYER_GUIDE": next.dmConfig.playerGuide = content; break;
-      case "DM_NAME_MODEL": {
-        // "Name | Model" or "Name :: Model" or two lines — split leniently.
-        const parts = content.split(/\s*(?:\||::|\n)\s*/).map(s => s.replace(/^(name|model)\s*[:=-]\s*/i, "").trim()).filter(Boolean);
-        next.dmConfig.name = parts[0] || content.trim();
-        if (parts[1]) next.dmConfig.model = parts[1];
-        break;
-      }
-      default: continue;
-    }
-    captured.push(DELIVERABLE_LABELS[type] || type);
-  }
-
-  // Remove only the sentinel marker lines for display; keep the block content.
-  const cleaned = text
-    .replace(/^[ \t]*<<<USCS_BLOCK[^>]*>>>[ \t]*\r?\n?/gm, "")
-    .replace(/^[ \t]*<<<END\s+USCS_BLOCK[^>]*>>>[ \t]*\r?\n?/gm, "")
-    .trim();
-
-  return { next, captured, cleaned, warnings };
-}
+// DELIVERABLE_LABELS, BLOCK_RE, isPlaceholderCharName and captureDeliverables
+// now live in ./lib/capture (pure + unit-tested in capture.test.ts).
 
 // Tokens that count toward the USCS §21.1 platform ceiling.
 function countingPackageTokens(d: Deliverables): number {
@@ -715,26 +634,7 @@ export default function App() {
     try { window.localStorage.setItem(CHAT_LAYOUT_KEY, JSON.stringify({ dockedChatWidth, chatSize })); } catch { /* ignore */ }
   }, [dockedChatWidth, chatSize]);
 
-  const [lastSyncedState, setLastSyncedState] = useState({
-    mode: null as Mode | null,
-    heatLevel: 1 as HeatLevel,
-    workshopTrack: "story" as WorkshopTrack,
-    concept: "",
-    settingType: "",
-    tone: "",
-    artStyle: "Anime/VN Style",
-    imageService: "Midjourney",
-    palette: ["#1a1a24", "#f8f8f8", "#14b8a6", "#f43f5e", "#fbbf24"],
-    aestheticMode: "Structured" as "Literary" | "Structured" | "Chaos",
-    groundingRules: "",
-    title: "",
-    summary: "",
-    tokenBudgetMin: 7000,
-    tokenBudgetMax: 10000,
-    budgetTierMode: false,
-    customLimits: { promptPlot: null, guidelines: null, reminders: null, characters: null },
-    step: 0
-  });
+  const [lastSyncedState, setLastSyncedState] = useState<DeskSnapshot>(() => deskSnapshot(DEFAULT_STATE));
 
   const [toast, setToast] = useState<{ message: string; type: "ai-to-ui" | "ui-to-ai" | "info" } | null>(null);
 
@@ -960,12 +860,20 @@ export default function App() {
     return () => { isMounted = false; controller.abort(); clearTimeout(timeoutId); };
   }, [state.aiProvider, state.modelSettings.anthropicApiKey, state.modelSettings.geminiApiKey, state.modelSettings.openRouterApiKey, state.modelSettings.mistralApiKey]);
 
-  // Keep Max_Tokens within the active model's real output ceiling.
+  // Max_Tokens follows the active model's real output ceiling. Until the creator
+  // moves the slider themselves (maxTokensTouched), we DEFAULT it to that ceiling
+  // on every model/provider change — so a model that can emit 8k isn't silently
+  // stuck at an old 4k value and truncating long HTML cards / guideline sets. Once
+  // touched, we only clamp DOWN to the new ceiling and never override their choice.
   useEffect(() => {
     const ceiling = getModelTokenCeiling(state.aiProvider, state.modelSettings.model);
-    if (state.modelSettings.maxTokens > ceiling) {
-      setState(s => ({ ...s, modelSettings: { ...s.modelSettings, maxTokens: ceiling } }));
-    }
+    setState(s => {
+      const target = s.modelSettings.maxTokensTouched
+        ? Math.min(s.modelSettings.maxTokens, ceiling)
+        : ceiling;
+      if (target === s.modelSettings.maxTokens) return s;
+      return { ...s, modelSettings: { ...s.modelSettings, maxTokens: target } };
+    });
   }, [state.aiProvider, state.modelSettings.model]);
 
   const providerFavourites = favourites[state.aiProvider] || [];
@@ -1003,24 +911,7 @@ export default function App() {
     : hostedModels;
   const tokenCeiling = getModelTokenCeiling(state.aiProvider, state.modelSettings.model);
 
-  const isSyncNeeded =
-    state.mode !== lastSyncedState.mode ||
-    state.heatLevel !== lastSyncedState.heatLevel ||
-    state.workshopTrack !== lastSyncedState.workshopTrack ||
-    state.concept !== lastSyncedState.concept ||
-    state.settingType !== lastSyncedState.settingType ||
-    state.tone !== lastSyncedState.tone ||
-    state.artStyle !== lastSyncedState.artStyle ||
-    state.palette.join(",") !== lastSyncedState.palette.join(",") ||
-    state.aestheticMode !== lastSyncedState.aestheticMode ||
-    state.groundingRules !== lastSyncedState.groundingRules ||
-    state.title !== lastSyncedState.title ||
-    state.summary !== lastSyncedState.summary ||
-    state.tokenBudgetMin !== lastSyncedState.tokenBudgetMin ||
-    state.tokenBudgetMax !== lastSyncedState.tokenBudgetMax ||
-    state.budgetTierMode !== lastSyncedState.budgetTierMode ||
-    JSON.stringify(state.customLimits) !== JSON.stringify(lastSyncedState.customLimits) ||
-    state.step !== lastSyncedState.step;
+  const isSyncNeeded = deskFieldsChanged(state, lastSyncedState).length > 0;
 
   // Editing a deskstate field after the AI marked the step complete invalidates
   // that "complete" signal, so disarm the gate until the AI re-confirms.
@@ -1029,43 +920,11 @@ export default function App() {
   }, [isSyncNeeded]);
 
   const syncDeskstateToAI = () => {
-    const updatedFields: string[] = [];
-    if (state.mode !== lastSyncedState.mode) updatedFields.push(`Mode: ${state.mode || "None"}`);
-    if (state.heatLevel !== lastSyncedState.heatLevel) updatedFields.push(`Heat: ${state.heatLevel}`);
-    if (state.workshopTrack !== lastSyncedState.workshopTrack) updatedFields.push(`Track: ${TRACK_LABELS[state.workshopTrack]}`);
-    if (state.concept !== lastSyncedState.concept) updatedFields.push(`Narrative Seed modified`);
-    if (state.settingType !== lastSyncedState.settingType) updatedFields.push(`Setting: ${state.settingType || "None"}`);
-    if (state.tone !== lastSyncedState.tone) updatedFields.push(`Tone: ${state.tone || "None"}`);
-    if (state.artStyle !== lastSyncedState.artStyle) updatedFields.push(`Style: ${state.artStyle}`);
-    if (state.palette.join(",") !== lastSyncedState.palette.join(",")) updatedFields.push(`Visual Palette updated`);
-    if (state.aestheticMode !== lastSyncedState.aestheticMode) updatedFields.push(`Aesthetic Mode: ${state.aestheticMode}`);
-    if (state.groundingRules !== lastSyncedState.groundingRules) updatedFields.push(`Grounding Rules modified`);
-    if (state.title !== lastSyncedState.title) updatedFields.push(`Title: ${state.title || "Untitled"}`);
-    if (state.summary !== lastSyncedState.summary) updatedFields.push(`Narrative Summary modified`);
-    if (state.tokenBudgetMin !== lastSyncedState.tokenBudgetMin || state.tokenBudgetMax !== lastSyncedState.tokenBudgetMax) updatedFields.push(`Token Budget: ~${state.tokenBudgetMin / 1000}k–${state.tokenBudgetMax / 1000}k`);
-    if (state.budgetTierMode !== lastSyncedState.budgetTierMode) updatedFields.push(`Budget-Tier Mode: ${state.budgetTierMode ? "ON" : "OFF"}`);
-    if (JSON.stringify(state.customLimits) !== JSON.stringify(lastSyncedState.customLimits)) updatedFields.push(`Custom section limits changed`);
-    if (state.step !== lastSyncedState.step) updatedFields.push(`Moved to Step: ${state.step + 1} (${activeSteps[state.step]})`);
+    const updatedFields = [...new Set(
+      deskFieldsChanged(state, lastSyncedState).map(f => f.label?.(state)).filter(Boolean)
+    )] as string[];
 
-    setLastSyncedState({
-      mode: state.mode,
-      heatLevel: state.heatLevel,
-      workshopTrack: state.workshopTrack,
-      concept: state.concept,
-      settingType: state.settingType,
-      tone: state.tone,
-      artStyle: state.artStyle,
-      palette: [...state.palette],
-      aestheticMode: state.aestheticMode,
-      groundingRules: state.groundingRules,
-      title: state.title,
-      summary: state.summary,
-      tokenBudgetMin: state.tokenBudgetMin,
-      tokenBudgetMax: state.tokenBudgetMax,
-      budgetTierMode: state.budgetTierMode,
-      customLimits: { ...state.customLimits },
-      step: state.step
-    });
+    setLastSyncedState(deskSnapshot(state));
 
     triggerToast(`Workspace parameters synced to collaborator!`, "ui-to-ai");
 
@@ -1621,15 +1480,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
       aiProvider: s.aiProvider,
       modelSettings: s.modelSettings,
     }));
-    setLastSyncedState({
-      mode: null, heatLevel: 1, workshopTrack: "story", concept: "", settingType: "", tone: "",
-      artStyle: "Anime/VN Style", imageService: "Midjourney",
-      palette: ["#1a1a24", "#f8f8f8", "#14b8a6", "#f43f5e", "#fbbf24"],
-      aestheticMode: "Structured", groundingRules: "", title: "", summary: "",
-      tokenBudgetMin: 7000, tokenBudgetMax: 10000, budgetTierMode: false,
-      customLimits: { promptPlot: null, guidelines: null, reminders: null, characters: null },
-      step: 0
-    });
+    setLastSyncedState(deskSnapshot(DEFAULT_STATE));
     setResponseTruncated(false);
     setReadyToAdvance(false);
     setShowSettings(false);
@@ -1748,15 +1599,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
     setState(restored);
     // Realign the sync baseline so a freshly loaded project doesn't show a
     // spurious "sync needed" banner (the deskstate IS the loaded state).
-    setLastSyncedState({
-      mode: restored.mode, heatLevel: restored.heatLevel, workshopTrack: restored.workshopTrack,
-      concept: restored.concept, settingType: restored.settingType, tone: restored.tone,
-      artStyle: restored.artStyle, imageService: restored.imageService, palette: [...restored.palette],
-      aestheticMode: restored.aestheticMode, groundingRules: restored.groundingRules,
-      title: restored.title, summary: restored.summary,
-      tokenBudgetMin: restored.tokenBudgetMin, tokenBudgetMax: restored.tokenBudgetMax,
-      budgetTierMode: restored.budgetTierMode, customLimits: { ...restored.customLimits }, step: restored.step,
-    });
+    setLastSyncedState(deskSnapshot(restored));
     setResponseTruncated(false);
     setReadyToAdvance(false);
     setShowRestoreNotice(false);
@@ -2511,7 +2354,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                       value={Math.min(state.modelSettings.maxTokens, tokenCeiling)}
                       onChange={(e) => setState(s => ({
                         ...s,
-                        modelSettings: { ...s.modelSettings, maxTokens: Math.min(parseInt(e.target.value), tokenCeiling) }
+                        modelSettings: { ...s.modelSettings, maxTokens: Math.min(parseInt(e.target.value), tokenCeiling), maxTokensTouched: true }
                       }))}
                       className="w-full h-1 bg-border rounded-full appearance-none accent-accent cursor-pointer"
                     />
@@ -2888,6 +2731,16 @@ function CollaboratorChat({ state, setState, compact, askAssistant, setIsChatOpe
 
 function VersionHistoryModal({ onClose }: { onClose: () => void }) {
   const releases: { v: string; title: string; items: string[] }[] = [
+    {
+      v: "0.11.0", title: "Curated palettes · sturdier capture · smarter token limits",
+      items: [
+        "Added 12 curated colour palettes to the Visual Registry — one-click presets (Eldritch Void, Crimson Noir, Emerald Grove, Royal Amethyst, two light themes, and more), each contrast-checked so your main text always stays readable on its background. Picking one fills all five swatches; you can still fine-tune any colour by hand.",
+        "Deliverable capture is far more forgiving of how different AI models format their output. Some models (notably Mistral on longer chats) drop a bracket, omit the closing marker, or wrap a block in a code fence — which used to make a finished character sheet, scenario, or plot card silently fail to save. The workshop now recovers these automatically, while still ignoring genuinely cut-off (truncated) responses.",
+        "Max Tokens now defaults to each model's real output ceiling instead of a flat 4,096 — so long HTML cards and full character sheets no longer get truncated mid-block. If you set the slider yourself, your choice is kept and only ever clamped down to a model's limit.",
+        "The card preview now warns when a card uses styling ISK0 silently strips (single-side borders, box-shadows) so you can fix it before export.",
+        "Under the hood: capture logic moved into its own unit-tested module, server error logs now redact API keys, and assorted build/doc cleanup.",
+      ],
+    },
     {
       v: "0.10.5", title: "Collaborator chat fits small & short screens",
       items: [
@@ -3484,6 +3337,16 @@ function CardPreview({
     for (let i = 0; i < html.length; i++) h = (h * 31 + html.charCodeAt(i)) | 0;
     return h;
   }, [html]);
+  // ISK0's renderer silently STRIPS single-side borders and box-shadows (the v0.10.4
+  // accent-bar finding), so a weak model that ignored the prompt and used them will
+  // look fine here but lose its section accents on the platform. Flag it so the
+  // creator can ask for a re-skin using a full `border:2px solid` instead.
+  const complianceWarnings = React.useMemo(() => {
+    const w: string[] = [];
+    if (/border-(?:left|right|top|bottom)\s*:/i.test(html)) w.push("a single-side border (border-left / -right / -top / -bottom)");
+    if (/box-shadow\s*:/i.test(html)) w.push("a box-shadow");
+    return w;
+  }, [html]);
   return (
     <div className="space-y-1.5">
       <div className="flex items-center gap-1">
@@ -3502,6 +3365,15 @@ function CardPreview({
           </button>
         ))}
       </div>
+      {complianceWarnings.length > 0 && (
+        <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-[#fbbf24]/10 border border-[#fbbf24]/30 text-[#fbbf24]">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <p className="text-[10px] leading-relaxed">
+            <span className="font-black uppercase tracking-wider">Won't render on ISK0:</span>{" "}
+            this card uses {complianceWarnings.join(" and ")} — ISK0 strips these, so the section accents will vanish on the platform. Ask the collaborator to re-skin it using a full <span className="font-mono">border:2px solid #hex</span> instead.
+          </p>
+        </div>
+      )}
       <div
         className={`w-full overflow-x-auto border border-border ${rounded} ${shadow ? "shadow-2xl" : ""}`}
         style={{ backgroundColor: bg }}
@@ -4432,6 +4304,27 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
       );
 
     case 4: // Palette & Identity
+      // Curated palettes — order is [Background, Main Text, Accent 1, Accent 2, Contrast].
+      // Every preset is contrast-checked: main-text vs background ≥ 13:1 (WCAG AAA),
+      // and each accent stays visible against the background (≥ 2.9:1). See palette notes.
+      const PALETTE_PRESETS: { name: string; vibe: string; colors: string[] }[] = [
+        { name: "Classic Slate",   vibe: "Default · cool & balanced",   colors: ["#1a1a24", "#f8f8f8", "#14b8a6", "#f43f5e", "#fbbf24"] },
+        { name: "Eldritch Void",   vibe: "Cosmic horror · arcane",      colors: ["#0d0a1a", "#ECE8FF", "#8b5cf6", "#d946ef", "#2dd4bf"] },
+        { name: "Crimson Noir",    vibe: "Hard-boiled · bloody",        colors: ["#14100F", "#F5EDED", "#ef4444", "#b91c1c", "#f59e0b"] },
+        { name: "Emerald Grove",   vibe: "Verdant · natural fantasy",   colors: ["#0B130E", "#EAF6EE", "#10b981", "#34d399", "#fbbf24"] },
+        { name: "Ember Forge",     vibe: "Warm · industrial heat",      colors: ["#1a0f0a", "#FBEFE2", "#f97316", "#fbbf24", "#ef4444"] },
+        { name: "Arctic Steel",    vibe: "Cold sci-fi · clinical",      colors: ["#0E1620", "#EAF2FA", "#38bdf8", "#22d3ee", "#94a3b8"] },
+        { name: "Royal Amethyst",  vibe: "Regal · high magic",          colors: ["#15122B", "#ECEAFB", "#a855f7", "#818cf8", "#fbbf24"] },
+        { name: "Sakura Dusk",     vibe: "Soft · romance & slice",      colors: ["#1C1320", "#FBEAF2", "#f472b6", "#fb7185", "#c084fc"] },
+        { name: "Solar Flare",     vibe: "High energy · shonen",        colors: ["#100D08", "#FCF6E8", "#facc15", "#fb923c", "#ef4444"] },
+        { name: "Oceanic Deep",    vibe: "Aquatic · deep blue",         colors: ["#08171C", "#E5F4F6", "#2dd4bf", "#60a5fa", "#22d3ee"] },
+        { name: "Parchment Light", vibe: "Light · old manuscript",      colors: ["#F4ECD8", "#2A2118", "#B45309", "#0F766E", "#1E3A8A"] },
+        { name: "Monochrome Ink",  vibe: "Light · minimal print",       colors: ["#F5F5F4", "#1C1917", "#525252", "#b91c1c", "#DC2626"] },
+      ];
+      const paletteMatches = (cols: string[]) =>
+        cols.length === state.palette.length &&
+        cols.every((c, i) => c.toLowerCase() === (state.palette[i] || "").toLowerCase());
+
       return (
         <div className="space-y-10 py-12 text-center">
           <div className="space-y-4">
@@ -4484,9 +4377,46 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
             ))}
           </div>
 
+          {/* Curated palette presets */}
+          <div className="space-y-6">
+            <div className="flex items-center justify-center gap-3">
+              <div className="h-px w-10 bg-border" />
+              <h3 className="text-[11px] text-label font-black uppercase tracking-[0.3em]">Or select a curated palette</h3>
+              <div className="h-px w-10 bg-border" />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-3xl mx-auto">
+              {PALETTE_PRESETS.map((preset) => {
+                const active = paletteMatches(preset.colors);
+                return (
+                  <button
+                    key={preset.name}
+                    type="button"
+                    onClick={() => setState(s => ({ ...s, palette: [...preset.colors] }))}
+                    aria-pressed={active}
+                    className={`group text-left p-4 rounded-2xl border transition-all active:scale-[0.98] ${active ? "border-accent bg-accent/10 shadow-[0_0_20px_rgba(20,184,166,0.18)]" : "border-border bg-card hover:border-accent/40 hover:bg-header/30"}`}
+                  >
+                    <div className="flex items-center justify-between gap-2 mb-3">
+                      <div className="min-w-0">
+                        <div className="text-xs font-black uppercase tracking-wide text-text-main truncate">{preset.name}</div>
+                        <div className="text-[10px] text-text-dim font-medium truncate">{preset.vibe}</div>
+                      </div>
+                      {active && <Check className="w-4 h-4 text-accent shrink-0" />}
+                    </div>
+                    <div className="flex h-6 rounded-lg overflow-hidden border border-white/10">
+                      {preset.colors.map((c, i) => (
+                        <div key={i} className="flex-1" style={{ backgroundColor: c }} title={c} />
+                      ))}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           <div className="p-6 bg-header/20 rounded-xl border border-border inline-block mx-auto mb-10">
             <p className="text-[10px] text-label font-bold uppercase tracking-[0.3em]">
-              * Click the cards to open visual color picker
+              * Click a swatch above to fine-tune any color
             </p>
           </div>
         </div>

@@ -9,6 +9,18 @@ import { buildStepContext, buildDMStepContext, buildDMIntegrationContext, uscsLo
 
 dotenv.config();
 
+// Build a log-safe summary of a provider/SDK error. A full error object can carry
+// the request config — including the Authorization / x-api-key header that holds a
+// visitor's key on a public BYOK deploy — so we never log it raw. Keep status +
+// message only, and redact any key-shaped token a provider might echo back.
+function safeErr(err: unknown): string {
+  const e = err as any;
+  const status = e?.status ?? e?.statusCode ?? e?.response?.status;
+  let msg = typeof e === "string" ? e : (e?.message ?? String(e));
+  msg = msg.replace(/\b(sk-[A-Za-z0-9_-]{8,}|AIza[A-Za-z0-9_-]{8,}|[A-Za-z0-9_-]{32,})\b/g, "[redacted]");
+  return status ? `[${status}] ${msg}` : msg;
+}
+
 // Lazy initialization helpers
 let anthropicClient: Anthropic | null = null;
 function getAnthropic() {
@@ -377,7 +389,7 @@ async function startServer() {
           const truncated = (result as any)?.candidates?.[0]?.finishReason === "MAX_TOKENS";
           return res.json({ text, truncated });
         } catch (geminiErr: any) {
-          console.error("Gemini model call failed:", geminiErr);
+          console.error("Gemini model call failed:", safeErr(geminiErr));
           const errorDetail = geminiErr.message || JSON.stringify(geminiErr);
           let errorMsg = `Gemini API error: ${errorDetail}`;
           
@@ -461,7 +473,7 @@ async function startServer() {
                 streamed = true;
                 break;
               } catch (err: any) {
-                console.warn("Stream failed with Anthropic model %s:", candidateModel, err.message || err);
+                console.warn("Stream failed with Anthropic model %s:", candidateModel, safeErr(err));
                 lastError = err;
                 if (wroteAny) throw err; // already streaming this model — cannot fall back mid-stream
                 continue;
@@ -484,7 +496,7 @@ async function startServer() {
               console.log("Success with Anthropic model: %s", candidateModel);
               break; // Successfully got response
             } catch (err: any) {
-              console.warn("Failed with Anthropic model %s:", candidateModel, err.message || err);
+              console.warn("Failed with Anthropic model %s:", candidateModel, safeErr(err));
               lastError = err;
               continue; // Try the next available candidate model in the sequence
             }
@@ -507,7 +519,7 @@ async function startServer() {
           } : undefined;
           return res.json({ text, truncated, usage });
         } catch (anthropicErr: any) {
-          console.error("Anthropic failed completely:", anthropicErr);
+          console.error("Anthropic failed completely:", safeErr(anthropicErr));
           
           const errorDetail = anthropicErr.message || JSON.stringify(anthropicErr);
           const statusCode = anthropicErr.status || anthropicErr.statusCode;
@@ -645,7 +657,7 @@ async function startServer() {
           const truncated = responseData?.done_reason === "length";
           return res.json({ text, truncated });
         } catch (ollamaErr: any) {
-          console.error("Local Ollama bridge failed:", ollamaErr);
+          console.error("Local Ollama bridge failed:", safeErr(ollamaErr));
           return failOut(500, `Could not connect to Ollama at ${target}. Error details: ${ollamaErr.message || ollamaErr}. Please verify that Ollama is running ('ollama serve') and accessible from the container.`);
         }
       }
@@ -733,7 +745,7 @@ async function startServer() {
           const truncated = responseData?.choices?.[0]?.finish_reason === "length";
           return res.json({ text, truncated });
         } catch (orErr: any) {
-          console.error("OpenRouter bridge failed:", orErr);
+          console.error("OpenRouter bridge failed:", safeErr(orErr));
           return failOut(400, orErr.message || String(orErr));
         }
       }
@@ -821,14 +833,14 @@ async function startServer() {
           const truncated = responseData?.choices?.[0]?.finish_reason === "length";
           return res.json({ text, truncated });
         } catch (mErr: any) {
-          console.error("Mistral bridge failed:", mErr);
+          console.error("Mistral bridge failed:", safeErr(mErr));
           return failOut(400, mErr.message || String(mErr));
         }
       }
 
       res.status(400).json({ error: "Unsupported AI provider." });
     } catch (error: any) {
-      console.error("AI API Error:", error);
+      console.error("AI API Error:", safeErr(error));
       res.status(500).json({ error: error.message });
     }
   });

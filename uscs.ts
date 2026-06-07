@@ -157,6 +157,7 @@ interface ParsedDoc {
 }
 
 let cache: ParsedDoc | null = null;
+let cacheMtimeMs = 0;
 
 function sliceBlocks(lines: string[], headerRe: RegExp, includeLineAbove: boolean): Map<string, string> {
   const map = new Map<string, string>();
@@ -177,9 +178,17 @@ function sliceBlocks(lines: string[], headerRe: RegExp, includeLineAbove: boolea
 }
 
 function load(): ParsedDoc {
-  if (cache) return cache;
-
   const docPath = path.join(process.cwd(), "docs", "USCS_v6.1.txt");
+  // Production: parse once and cache for the process lifetime. Dev: re-read when
+  // the master doc's mtime changes, so edits to docs/USCS_v6.1.txt take effect
+  // WITHOUT a server restart (paired with `tsx watch`, which restarts the process
+  // on server.ts / uscs.ts edits). The statSync gate keeps the steady state a
+  // cheap no-op — we only re-parse when the file actually changes on disk.
+  if (cache) {
+    if (process.env.NODE_ENV === "production") return cache;
+    try { if (fs.statSync(docPath).mtimeMs === cacheMtimeMs) return cache; } catch { return cache; }
+  }
+
   try {
     const raw = fs.readFileSync(docPath, "utf-8");
     const lines = raw.split(/\r?\n/);
@@ -287,6 +296,7 @@ function load(): ParsedDoc {
     const steps = sliceBlocks(section2.split(/\r?\n/), STEP_RE, false);
 
     cache = { sections, steps, loaded: sections.size > 0 };
+    try { cacheMtimeMs = fs.statSync(docPath).mtimeMs; } catch { /* ignore */ }
     console.log(`USCS v6.1 loaded: ${sections.size} sections, ${steps.size} step blocks.`);
   } catch (err: any) {
     console.warn(`USCS master doc could not be loaded from ${docPath}: ${err.message || err}. Falling back to core directive only.`);
