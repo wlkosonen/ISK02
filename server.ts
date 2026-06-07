@@ -21,6 +21,43 @@ function getAnthropic() {
   return anthropicClient;
 }
 
+// Normalize a Gemini-style chat history (+ the new user prompt) into a strictly
+// ALTERNATING user/assistant message list. Anthropic (400) and Mistral (422
+// "roles must alternate") hard-reject non-alternating roles; OpenRouter/Ollama
+// tolerate it but behave better with clean input. Two things break alternation
+// in the raw history: (1) an empty assistant turn left by a failed/aborted
+// generation or a mid-stream network drop — once its empty text is dropped, two
+// user turns sit adjacent; (2) a partial double-submit. We drop empty turns,
+// drop any leading assistant turn (the first message must be the user's), then
+// MERGE consecutive same-role turns so the sequence always alternates.
+// `assistantRole` is "model" for Gemini, "assistant" for every other provider.
+function buildAlternatingMessages(
+  history: any[] | undefined,
+  prompt: string,
+  assistantRole: "assistant" | "model" = "assistant"
+): { role: "user" | "assistant" | "model"; content: string }[] {
+  const raw = [
+    ...(history || []).map((h: any) => ({
+      role: (h.role === "model" || h.role === "assistant" ? assistantRole : "user") as
+        "user" | "assistant" | "model",
+      content: (h.parts?.[0]?.text || "").trim(),
+    })),
+    { role: "user" as const, content: (prompt || "").trim() },
+  ].filter(m => m.content !== "");
+
+  // The first message must come from the user.
+  while (raw.length && raw[0].role === assistantRole) raw.shift();
+
+  // Merge consecutive same-role turns so roles strictly alternate.
+  const out: { role: "user" | "assistant" | "model"; content: string }[] = [];
+  for (const m of raw) {
+    const last = out[out.length - 1];
+    if (last && last.role === m.role) last.content += "\n\n" + m.content;
+    else out.push({ ...m });
+  }
+  return out;
+}
+
 // SSRF guard for the Ollama proxy. On a public deploy the server must not be
 // usable to fetch arbitrary URLs (e.g. cloud metadata endpoints). Allow only
 // loopback / private-LAN targets, which is all a real Ollama setup needs. A
@@ -304,12 +341,10 @@ async function startServer() {
 
           const modelName = settings.model || "gemini-2.5-flash";
           
-          // Format history for generateContent
-          const contents = (history || []).map((h: any) => ({
-            role: h.role,
-            parts: h.parts
-          }));
-          contents.push({ role: "user", parts: [{ text: prompt }] });
+          // Format history for generateContent (Gemini uses the "model" role and
+          // a parts[] shape). Normalized to strictly alternate user/model.
+          const contents = buildAlternatingMessages(history, prompt, "model")
+            .map(m => ({ role: m.role, parts: [{ text: m.content }] }));
 
           const geminiConfig = {
             systemInstruction: fullSystem || "You are a professional creative writing collaborator.",
@@ -361,15 +396,8 @@ async function startServer() {
 
         const anthropic = new Anthropic({ apiKey: anthropicApiKey });
         
-        // Convert history for Anthropic (expects strictly user/assistant alternating)
-        const messages = (history || [])
-          .map((h: any) => ({
-            role: h.role === "model" ? "assistant" : "user",
-            content: h.parts[0]?.text || ""
-          }))
-          .filter(m => m.content.trim() !== "");
-
-        messages.push({ role: "user", content: prompt });
+        // Convert history for Anthropic (requires strictly user/assistant alternating).
+        const messages = buildAlternatingMessages(history, prompt) as Anthropic.MessageParam[];
 
         // claude-3-5-haiku-20241022 or other models might not be available in all regions or accounts yet.
         // We compile a fallback list of models to try in sequence if a 404 error is encountered.
@@ -514,24 +542,10 @@ async function startServer() {
 
         const modelName = settings.model || "llama3";
 
-        // Format history for Ollama /api/chat
-        const messages = [];
-        
-        // Add system message if present
-        if (fullSystem) {
-          messages.push({ role: "system", content: fullSystem });
-        }
-
-        // Add history
-        (history || []).forEach((h: any) => {
-          messages.push({
-            role: h.role === "model" ? "assistant" : "user",
-            content: h.parts[0]?.text || ""
-          });
-        });
-
-        // Add current user prompt
-        messages.push({ role: "user", content: prompt });
+        // Format history for Ollama /api/chat (system first, then alternating turns).
+        const messages: any[] = [];
+        if (fullSystem) messages.push({ role: "system", content: fullSystem });
+        messages.push(...buildAlternatingMessages(history, prompt));
 
         try {
           console.log("Forwarding request to Ollama at %s with model %s", target, modelName);
@@ -642,13 +656,7 @@ async function startServer() {
         // OpenRouter uses the OpenAI chat-completions shape.
         const messages: any[] = [];
         if (fullSystem) messages.push({ role: "system", content: fullSystem });
-        (history || []).forEach((h: any) => {
-          messages.push({
-            role: h.role === "model" ? "assistant" : "user",
-            content: h.parts[0]?.text || ""
-          });
-        });
-        messages.push({ role: "user", content: prompt });
+        messages.push(...buildAlternatingMessages(history, prompt));
 
         try {
           console.log("Forwarding request to OpenRouter with model %s", modelName);
@@ -733,16 +741,11 @@ async function startServer() {
 
         const modelName = settings.model || "mistral-medium-latest";
 
-        // Mistral's API is OpenAI chat-completions compatible.
+        // Mistral's API is OpenAI chat-completions compatible — and strict about
+        // alternation (422 "roles must alternate"), so normalize before sending.
         const messages: any[] = [];
         if (fullSystem) messages.push({ role: "system", content: fullSystem });
-        (history || []).forEach((h: any) => {
-          messages.push({
-            role: h.role === "model" ? "assistant" : "user",
-            content: h.parts[0]?.text || ""
-          });
-        });
-        messages.push({ role: "user", content: prompt });
+        messages.push(...buildAlternatingMessages(history, prompt));
 
         try {
           console.log("Forwarding request to Mistral with model %s", modelName);
