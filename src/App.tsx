@@ -347,7 +347,7 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 
 // Version of THIS app (the Aether_Core tool), distinct from the USCS framework
 // version it implements. Bump this when you ship changes.
-const APP_VERSION = "0.10.4";
+const APP_VERSION = "0.10.5";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
 const USCS_VERSION = "6.1";
 
@@ -365,6 +365,26 @@ function loadFavourites(): Record<string, string[]> {
     if (raw) return JSON.parse(raw);
   } catch { /* ignore */ }
   return {};
+}
+
+// Docked-width + floating-window size persist across sessions so a creator who
+// has sized the collaborator chat to their screen doesn't reset to defaults on
+// every reload.
+const CHAT_LAYOUT_KEY = "aether_core_chat_layout_v1";
+function loadChatLayout(): { dockedChatWidth: number; chatSize: { width: number; height: number } } {
+  const fallback = { dockedChatWidth: 384, chatSize: { width: 400, height: 600 } };
+  if (typeof window === "undefined") return fallback;
+  try {
+    const raw = window.localStorage.getItem(CHAT_LAYOUT_KEY);
+    if (raw) {
+      const p = JSON.parse(raw);
+      return {
+        dockedChatWidth: typeof p.dockedChatWidth === "number" ? p.dockedChatWidth : fallback.dockedChatWidth,
+        chatSize: p.chatSize && typeof p.chatSize.width === "number" ? p.chatSize : fallback.chatSize,
+      };
+    }
+  } catch { /* ignore */ }
+  return fallback;
 }
 
 const DEFAULT_STATE: StoryState = {
@@ -673,21 +693,27 @@ export default function App() {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [isXL, setIsXL] = useState(false);
+  const [isShort, setIsShort] = useState(false); // short viewport height — drives compact chat density
   const [isChatDetached, setIsChatDetached] = useState(false);
   const [chatPosition, setChatPosition] = useState({ x: 0, y: 0 });
-  const [chatSize, setChatSize] = useState({ width: 400, height: 600 });
-  const [dockedChatWidth, setDockedChatWidth] = useState(384); // Default w-96
+  const [chatSize, setChatSize] = useState(() => loadChatLayout().chatSize);
+  const [dockedChatWidth, setDockedChatWidth] = useState(() => loadChatLayout().dockedChatWidth); // Default w-96
   const [hoverHeatLevel, setHoverHeatLevel] = useState<HeatLevel | null>(null);
 
   useEffect(() => {
     const checkScreen = () => {
       setIsMobile(window.innerWidth < 1024);
       setIsXL(window.innerWidth >= 1280);
+      setIsShort(window.innerHeight < 820);
     };
     checkScreen();
     window.addEventListener('resize', checkScreen);
     return () => window.removeEventListener('resize', checkScreen);
   }, []);
+
+  useEffect(() => {
+    try { window.localStorage.setItem(CHAT_LAYOUT_KEY, JSON.stringify({ dockedChatWidth, chatSize })); } catch { /* ignore */ }
+  }, [dockedChatWidth, chatSize]);
 
   const [lastSyncedState, setLastSyncedState] = useState({
     mode: null as Mode | null,
@@ -1918,7 +1944,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
         </AnimatePresence>
 
         {/* Content Area */}
-        <section className="flex-1 overflow-y-auto p-4 lg:p-8 flex flex-col items-center">
+        <section className="flex-1 overflow-y-auto custom-scrollbar p-4 lg:p-8 flex flex-col items-center">
           <div className="w-full max-w-4xl space-y-8 pb-32">
             <AnimatePresence mode="wait">
               <motion.div
@@ -2001,9 +2027,10 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                 />
               )}
 
-              <CollaboratorChat 
-                state={state} 
-                setState={setState} 
+              <CollaboratorChat
+                state={state}
+                compact={isMobile || isShort}
+                setState={setState}
                 askAssistant={askAssistant} 
                 setIsChatOpen={setIsChatOpen}
                 isDetached={isChatDetached}
@@ -2549,9 +2576,10 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
   );
 }
 
-function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDetached, setIsDetached, isSyncNeeded, syncDeskstateToAI, onExport, onExportDM, onSnapshot, onSaveWorkspace, onLoadWorkspace, isExporting, exportProgress, readyToAdvance, onAdvance, responseTruncated, onContinue, onRetry }: {
+function CollaboratorChat({ state, setState, compact, askAssistant, setIsChatOpen, isDetached, setIsDetached, isSyncNeeded, syncDeskstateToAI, onExport, onExportDM, onSnapshot, onSaveWorkspace, onLoadWorkspace, isExporting, exportProgress, readyToAdvance, onAdvance, responseTruncated, onContinue, onRetry }: {
   state: StoryState,
   setState: React.Dispatch<React.SetStateAction<StoryState>>,
+  compact?: boolean,
   askAssistant: (p: string) => Promise<void>,
   setIsChatOpen: (o: boolean) => void,
   isDetached?: boolean,
@@ -2573,9 +2601,14 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
 }) {
   const workspaceFileRef = useRef<HTMLInputElement>(null);
   const activeSteps = getActiveSteps(state.workshopTrack);
+  // On short/mobile viewports the composer + workspace buttons are collapsed by
+  // default so the message area keeps maximum reading height; a toggle reveals
+  // them. On normal screens this gate is inert — everything renders as before.
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const showWorkspace = !compact || workspaceOpen;
   return (
     <>
-      <div className={`p-4 border-b border-border bg-header/60 flex items-center justify-between shrink-0 ${isDetached ? 'cursor-grab active:cursor-grabbing h-10 py-0' : 'p-6'}`}>
+      <div className={`p-4 border-b border-border bg-header/60 flex items-center justify-between shrink-0 ${isDetached ? 'cursor-grab active:cursor-grabbing h-10 py-0' : (compact ? 'p-3' : 'p-6')}`}>
         {!isDetached && (
           <div className="flex items-center gap-3">
             <div className="p-2 bg-accent/10 rounded-lg">
@@ -2624,7 +2657,7 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar bg-bg/30">
+      <div className={`flex-1 overflow-y-auto custom-scrollbar bg-bg/30 ${compact ? 'p-3 space-y-3' : 'p-6 space-y-6'}`}>
         {state.assistantHistory.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center space-y-4 opacity-40">
             <Sparkles className="w-8 h-8 text-accent animate-pulse" />
@@ -2716,7 +2749,7 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
         <ChatScrollAnchor history={state.assistantHistory} isLoading={state.isAssistantLoading} />
       </div>
       
-      <div className="p-6 border-t border-border bg-[#18181b]/80 shrink-0">
+      <div className={`border-t border-border bg-[#18181b]/80 shrink-0 ${compact ? 'p-3' : 'p-6'}`}>
         {responseTruncated && onContinue && (
           <button
             onClick={onContinue}
@@ -2765,20 +2798,33 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
             </span>
           </button>
         )}
-        <ChatInput onSend={askAssistant} isLoading={state.isAssistantLoading} />
-        
+        {compact && (
+          <button
+            type="button"
+            onClick={() => setWorkspaceOpen(o => !o)}
+            title={workspaceOpen ? "Hide the composer & workspace tools" : "Show the composer & workspace tools"}
+            className="w-full flex items-center gap-2 py-1.5 text-label hover:text-accent transition-colors text-[9px] font-black uppercase tracking-widest"
+          >
+            <ChevronRight className={`w-3 h-3 transition-transform ${workspaceOpen ? 'rotate-90' : ''}`} />
+            {workspaceOpen ? "Hide composer & tools" : "Compose & tools"}
+          </button>
+        )}
+        {showWorkspace && (
+          <>
+        <ChatInput onSend={askAssistant} isLoading={state.isAssistantLoading} compact={compact} />
+
         {isExporting && exportProgress && (
           <div className="mt-4 flex items-center gap-2 text-[9px] font-mono text-accent uppercase tracking-widest animate-pulse">
             <RefreshCw className="w-3 h-3 animate-spin shrink-0" />
             <span className="truncate">Compiling · {exportProgress}</span>
           </div>
         )}
-        <div className="grid grid-cols-2 gap-3 mt-4">
+        <div className={`grid grid-cols-2 gap-3 ${compact ? 'mt-2' : 'mt-4'}`}>
           <button
             onClick={onSnapshot}
             disabled={state.assistantHistory.length === 0}
             title="Download a full backup of this session (deskstate + entire chat) as a .txt"
-            className="py-2.5 bg-border/40 hover:bg-border/60 border border-border rounded-lg flex items-center justify-center gap-2 text-[9px] font-black uppercase tracking-widest transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+            className={`${compact ? 'py-1.5' : 'py-2'} bg-border/40 hover:bg-border/60 border border-border rounded-lg flex items-center justify-center gap-2 text-[9px] font-black uppercase tracking-widest transition-all disabled:opacity-30 disabled:cursor-not-allowed`}
           >
             <Save className="w-3 h-3" /> Snapshot
           </button>
@@ -2786,7 +2832,7 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
             <button
               onClick={onExportDM}
               title="Download the Dungeon Mind config (Name, Model, Stat Schema, Game Rules, Reminder, Instruction, Player Guide) as a clean .txt — copy-paste-ready for ISK0's DM editor"
-              className="py-2.5 bg-accent/10 hover:bg-accent/20 border border-accent/20 text-accent rounded-lg flex items-center justify-center gap-2 text-[9px] font-black uppercase tracking-widest transition-all"
+              className={`${compact ? 'py-1.5' : 'py-2'} bg-accent/10 hover:bg-accent/20 border border-accent/20 text-accent rounded-lg flex items-center justify-center gap-2 text-[9px] font-black uppercase tracking-widest transition-all`}
             >
               <Download className="w-3 h-3" /> Export DM
             </button>
@@ -2795,7 +2841,7 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
               onClick={onExport}
               disabled={isExporting || state.assistantHistory.length === 0}
               title="Compile the final ISK0 package (Title, Plot Card, Characters, Scenarios, Prompt Plot, Guidelines, Reminders) and download it as a clean .txt — no chat"
-              className="py-2.5 bg-accent/10 hover:bg-accent/20 border border-accent/20 text-accent rounded-lg flex items-center justify-center gap-2 text-[9px] font-black uppercase tracking-widest transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              className={`${compact ? 'py-1.5' : 'py-2'} bg-accent/10 hover:bg-accent/20 border border-accent/20 text-accent rounded-lg flex items-center justify-center gap-2 text-[9px] font-black uppercase tracking-widest transition-all disabled:opacity-40 disabled:cursor-not-allowed`}
             >
               {isExporting ? (
                 <><RefreshCw className="w-3 h-3 animate-spin" /> Compiling…</>
@@ -2806,18 +2852,18 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
           )}
         </div>
         {/* Portable workspace backup — full state + chat as re-loadable JSON */}
-        <div className="grid grid-cols-2 gap-3 mt-3">
+        <div className={`grid grid-cols-2 gap-3 ${compact ? 'mt-2' : 'mt-3'}`}>
           <button
             onClick={onSaveWorkspace}
             title="Save a portable .json backup of the whole workspace (deskstate + deliverables + chat) — re-loadable later or on another machine. API keys are NOT included."
-            className="py-2.5 bg-border/40 hover:bg-border/60 border border-border rounded-lg flex items-center justify-center gap-2 text-[9px] font-black uppercase tracking-widest transition-all"
+            className={`${compact ? 'py-1.5' : 'py-2'} bg-border/40 hover:bg-border/60 border border-border rounded-lg flex items-center justify-center gap-2 text-[9px] font-black uppercase tracking-widest transition-all`}
           >
             <Download className="w-3 h-3" /> Save Workspace
           </button>
           <button
             onClick={() => workspaceFileRef.current?.click()}
             title="Load a previously saved .aether.json workspace backup — replaces the current story, chat & deliverables (your typed API keys are kept)"
-            className="py-2.5 bg-border/40 hover:bg-border/60 border border-border rounded-lg flex items-center justify-center gap-2 text-[9px] font-black uppercase tracking-widest transition-all"
+            className={`${compact ? 'py-1.5' : 'py-2'} bg-border/40 hover:bg-border/60 border border-border rounded-lg flex items-center justify-center gap-2 text-[9px] font-black uppercase tracking-widest transition-all`}
           >
             <Save className="w-3 h-3" /> Load Workspace
           </button>
@@ -2833,105 +2879,24 @@ function CollaboratorChat({ state, setState, askAssistant, setIsChatOpen, isDeta
             }}
           />
         </div>
+          </>
+        )}
       </div>
     </>
   );
 }
 
-function MainInterfaceChat({ state, askAssistant, preview, isSyncNeeded, syncDeskstateToAI }: { 
-  state: StoryState, 
-  askAssistant: (p: string) => Promise<void>, 
-  preview?: React.ReactNode,
-  isSyncNeeded?: boolean,
-  syncDeskstateToAI?: () => void
-}) {
-  return (
-    <div className="flex flex-col gap-8 w-full">
-      {preview && <div className="w-full">{preview}</div>}
-      
-      <div className="bg-card border border-border rounded-3xl shadow-2xl flex flex-col h-[600px] overflow-hidden">
-        <div className="p-6 border-b border-border bg-header/40 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <div className="p-2 bg-accent/10 rounded-lg">
-              <Terminal className="w-4 h-4 text-accent" />
-            </div>
-            <div>
-              <h3 className="text-xs font-black uppercase tracking-widest text-accent">Interface_Link Active</h3>
-              <p className="text-[10px] text-text-dim uppercase tracking-tighter">Collaborative Pipeline Stream</p>
-            </div>
-          </div>
-          
-          <div className="flex items-center gap-2">
-            <span className={`inline-block w-2 h-2 rounded-full ${isSyncNeeded ? "bg-[#fbbf24] animate-pulse" : "bg-[#10b981]"}`} />
-            <span className="text-[9px] font-mono text-text-dim uppercase tracking-widest">
-              {isSyncNeeded ? "Sync Outdated" : "System Swarmed & Synced"}
-            </span>
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-8 space-y-8 custom-scrollbar">
-          {state.assistantHistory.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-center space-y-4 opacity-40">
-              <Sparkles className="w-12 h-12 text-accent animate-pulse" />
-              <p className="text-xs uppercase font-black tracking-[0.4em]">Establish Communication Link</p>
-              <p className="max-w-sm text-sm italic text-text-muted">"Current module: {getActiveSteps(state.workshopTrack)[state.step]}. Waiting for instructions."</p>
-            </div>
-          ) : (
-            state.assistantHistory.map((m, i) => (
-              <div key={i} className={`flex ${m.role === "assistant" ? "justify-start" : "justify-end"} w-full min-w-0`}>
-                <div className={`max-w-[85%] p-6 rounded-2xl leading-relaxed text-sm break-words ${
-                  m.role === "assistant" 
-                    ? "bg-header border border-border text-text-main shadow-lg" 
-                    : "bg-accent/10 border border-accent/20 text-accent font-medium shadow-[0_0_20px_rgba(20,184,166,0.1)]"
-                }`}>
-                  <div className="flex items-center gap-2 mb-3 opacity-40">
-                    <div className={`w-1 h-1 rounded-full ${m.role === "assistant" ? "bg-accent" : "bg-white"}`} />
-                    <span className="text-[9px] uppercase font-bold tracking-[0.2em]">{m.role === "assistant" ? "Aether_Core" : "User_Node"}</span>
-                  </div>
-                  <p className="whitespace-pre-wrap break-words">{m.content}</p>
-                </div>
-              </div>
-            ))
-          )}
-          {state.isAssistantLoading && (
-            <div className="flex items-center gap-3 text-accent animate-pulse">
-              <div className="flex gap-1">
-                <div className="w-1.5 h-1.5 bg-accent rounded-full animate-bounce" />
-                <div className="w-1.5 h-1.5 bg-accent rounded-full animate-bounce [animation-delay:0.2s]" />
-                <div className="w-1.5 h-1.5 bg-accent rounded-full animate-bounce [animation-delay:0.4s]" />
-              </div>
-              <span className="text-[10px] uppercase font-black tracking-widest">Processing_Core_Response</span>
-            </div>
-          )}
-          <ChatScrollAnchor history={state.assistantHistory} isLoading={state.isAssistantLoading} />
-        </div>
-
-        <div className="p-8 border-t border-border bg-header/20">
-          {isSyncNeeded && syncDeskstateToAI && (
-            <button 
-              onClick={syncDeskstateToAI}
-              className="mb-4 w-full py-3 px-4 bg-[#fbbf24]/10 hover:bg-[#fbbf24]/20 border border-[#fbbf24]/20 hover:border-[#fbbf24]/40 rounded-xl flex items-center justify-between text-left transition-all active:scale-[0.99] group shadow-[0_0_15px_rgba(251,191,36,0.05)] animate-pulse"
-            >
-              <div className="flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-[#fbbf24] shrink-0" />
-                <span className="text-xs font-black uppercase tracking-widest text-[#fbbf24]">
-                  ✦ UI workspace settings changed
-                </span>
-              </div>
-              <span className="text-[10px] font-black text-white uppercase bg-[#fbbf24]/30 px-3 py-1 rounded font-mono group-hover:bg-[#fbbf24]/50 transition-colors">
-                PUSH CURRENT STATE TO COLLABORATOR ↺
-              </span>
-            </button>
-          )}
-          <ChatInput onSend={askAssistant} isLoading={state.isAssistantLoading} variant="large" />
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function VersionHistoryModal({ onClose }: { onClose: () => void }) {
   const releases: { v: string; title: string; items: string[] }[] = [
+    {
+      v: "0.10.5", title: "Collaborator chat fits small & short screens",
+      items: [
+        "The Collaborator Chat no longer auto-scrolls to the bottom on every streamed token — it only follows the response if you're already near the bottom, so you can scroll up and read earlier messages while a reply is still generating.",
+        "On small or short viewports the chat now switches to a compact density (tighter padding, slimmer Snapshot/Export/Save/Load buttons) and the composer + workspace buttons collapse behind a one-tap \"Compose & tools\" toggle, giving the message area far more reading height. Normal-sized screens are unchanged.",
+        "Your docked chat width and floating-window size now persist across reloads.",
+        "Themed the main workshop scrollbar to match the rest of the app (accent teal instead of the default grey), and removed an unused legacy chat component.",
+      ],
+    },
     {
       v: "0.10.4", title: "Card accent borders that survive ISK0",
       items: [
@@ -3432,7 +3397,7 @@ function StatusMonitor({ state, onTighten }: { state: StoryState; onTighten?: (p
   );
 }
 
-function ChatInput({ onSend, isLoading, variant = "default" }: { onSend: (p: string) => void, isLoading: boolean, variant?: "default" | "large" }) {
+function ChatInput({ onSend, isLoading, compact = false }: { onSend: (p: string) => void, isLoading: boolean, compact?: boolean }) {
   const [text, setText] = useState("");
   const handleSend = () => {
     if (text.trim() && !isLoading) {
@@ -3445,7 +3410,7 @@ function ChatInput({ onSend, isLoading, variant = "default" }: { onSend: (p: str
     <div className="relative group">
       <textarea 
         placeholder="Discuss architecture..."
-        rows={variant === "large" ? 4 : 3}
+        rows={compact ? 2 : 3}
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
@@ -3454,7 +3419,7 @@ function ChatInput({ onSend, isLoading, variant = "default" }: { onSend: (p: str
             handleSend();
           }
         }}
-        className={`w-full bg-bg border border-border rounded-xl px-4 py-4 focus:border-accent focus:outline-none transition-all placeholder:text-text-dim resize-none shadow-inner leading-relaxed ${variant === "large" ? "text-sm" : "text-xs"}`}
+        className="w-full bg-bg border border-border rounded-xl px-4 py-4 focus:border-accent focus:outline-none transition-all placeholder:text-text-dim resize-none shadow-inner leading-relaxed text-xs"
       />
       <div className="absolute right-3 bottom-3 flex items-center gap-2">
         <span className="text-[8px] font-mono text-text-dim opacity-50 hidden sm:inline">ENT_SEND</span>
@@ -3476,8 +3441,18 @@ function ChatInput({ onSend, isLoading, variant = "default" }: { onSend: (p: str
 
 function ChatScrollAnchor({ history, isLoading }: { history: any[], isLoading?: boolean }) {
   const anchorRef = useRef<HTMLDivElement>(null);
+  // Sticky auto-scroll: only follow new content when the user is already parked
+  // near the bottom. If they've scrolled up to read history, leave them there
+  // instead of yanking them back down on every streamed token. During streaming
+  // use "auto" (instant) so the follow doesn't fight a smooth animation each tick.
   useEffect(() => {
-    anchorRef.current?.scrollIntoView({ behavior: "smooth" });
+    const anchor = anchorRef.current;
+    const scroller = anchor?.parentElement; // the flex-1 overflow-y-auto messages pane
+    if (!anchor || !scroller) return;
+    const distanceFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    if (distanceFromBottom < 120) {
+      anchor.scrollIntoView({ behavior: isLoading ? "auto" : "smooth" });
+    }
   }, [history, isLoading]);
   return <div ref={anchorRef} className="h-px w-full shrink-0" />;
 }
