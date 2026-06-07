@@ -22,15 +22,18 @@ function getAnthropic() {
 }
 
 // Normalize a Gemini-style chat history (+ the new user prompt) into a strictly
-// ALTERNATING user/assistant message list. Anthropic (400) and Mistral (422
-// "roles must alternate") hard-reject non-alternating roles; OpenRouter/Ollama
-// tolerate it but behave better with clean input. Two things break alternation
-// in the raw history: (1) an empty assistant turn left by a failed/aborted
-// generation or a mid-stream network drop — once its empty text is dropped, two
-// user turns sit adjacent; (2) a partial double-submit. We drop empty turns,
-// drop any leading assistant turn (the first message must be the user's), then
-// MERGE consecutive same-role turns so the sequence always alternates.
-// `assistantRole` is "model" for Gemini, "assistant" for every other provider.
+// ALTERNATING user/assistant message list. NOTE: as of 2026-06 every provider we
+// call (Anthropic, Mistral, Gemini, OpenRouter, Ollama) was live-verified to
+// TOLERATE non-alternating roles and empty turns — so this is DEFENSIVE/cleanup,
+// not a guard against a current hard error. It still earns its keep: it strips
+// empty turns (a failed/aborted generation or mid-stream drop leaves an empty
+// assistant turn; once dropped, two user turns sit adjacent) and dedupes the
+// five providers' identical role-mapping. It also protects against stricter
+// older model snapshots / third-party OpenRouter models that historically 400'd
+// or 422'd on non-alternating input. We drop empty turns, drop any leading
+// assistant turn (the first message must be the user's), then MERGE consecutive
+// same-role turns so the sequence always alternates. `assistantRole` is "model"
+// for Gemini, "assistant" for every other provider.
 function buildAlternatingMessages(
   history: any[] | undefined,
   prompt: string,
@@ -741,8 +744,9 @@ async function startServer() {
 
         const modelName = settings.model || "mistral-medium-latest";
 
-        // Mistral's API is OpenAI chat-completions compatible — and strict about
-        // alternation (422 "roles must alternate"), so normalize before sending.
+        // Mistral's API is OpenAI chat-completions compatible. (Mistral medium was
+        // live-verified to tolerate non-alternating roles; we still normalize for
+        // consistency with the other providers — see buildAlternatingMessages.)
         const messages: any[] = [];
         if (fullSystem) messages.push({ role: "system", content: fullSystem });
         messages.push(...buildAlternatingMessages(history, prompt));
