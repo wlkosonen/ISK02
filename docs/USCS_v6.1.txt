@@ -1210,9 +1210,18 @@ BORDERS:
   border: Xpx double #HEX — confirmed (@shirumi); double border style
     renders correctly. Effective for retro/graphic aesthetic frames.
   border-radius (px and 999px pill — confirmed)
-  border-left, border-top, border-bottom (accent borders — confirmed)
-    Accent left border pattern: border-left:4px solid #HEX — confirmed;
-    effective for section differentiation and visual hierarchy.
+  SINGLE-SIDE ACCENT BARS (border-left / border-right used ALONE as a coloured
+    strip down one edge) DO NOT RENDER ON ISK0. Verified by live testing
+    (2026-06): "border-left:Npx solid #HEX" is stripped/ignored, and every
+    attempt to fake the bar with a narrow element failed too — table accent
+    cell, flex child, and px / % / HTML-`width`-attribute / table-layout:fixed
+    width-pinning all collapsed or ballooned. DO NOT use a left/right accent bar.
+    To differentiate or accent a section, use a FULL border in the accent
+    colour instead:  border:2px solid #HEX  (confirmed working on ISK0 — this
+    is the canonical replacement for the old border-left pattern).
+  border-bottom / border-top as a thin hairline DIVIDER or text underline
+    (e.g. on table header <td> cells or a <span>) is a SEPARATE use and still
+    works — the prohibition above is specifically about single-side accent BARS.
   border-color via rgba() (confirmed — widely used for subtle edges)
 
 VISUAL EFFECTS:
@@ -1382,7 +1391,8 @@ Never change the top-to-bottom sequence of elements that are included.
    — Content blocks using DIV CARD pattern (see 5.6)
    — Plot summary, mechanics, world details, cast context — each its own card
    — Alternate color palette between cards to create visual rhythm
-   — Accent left borders to differentiate sections visually
+   — Full accent borders (border:2px solid #HEX) to differentiate sections
+     visually — NOT a single-side border-left bar (stripped by ISK0)
 
 6. IMAGE FRAMES (within a section card or as a standalone cast block)
    — Use NO-BACKGROUND BORDER FRAME pattern (see 5.8)
@@ -1409,8 +1419,10 @@ STANDARD CARD:
   Content
 </div>
 
-ACCENT LEFT BORDER VARIANT (for differentiated sections):
-<div style="border:1px solid rgba(R,G,B,0.35); border-left:6px solid #HEX;
+ACCENT BORDER VARIANT (for differentiated sections):
+A single-side accent bar (border-left) DOES NOT render on ISK0 — use a FULL
+border in the accent colour to set the section apart:
+<div style="border:2px solid #HEX;
             border-radius:12px; background:rgba(0,0,0,0.25);
             padding:14px; box-sizing:border-box;">
   Content
@@ -2116,7 +2128,8 @@ LITERARY / EDITORIAL
 
 STRUCTURED / DASHBOARD
   Representative story: "Crash Into Another World" (Isk0 Platform Staff)
-  Key techniques: div-card sections with accent left borders, Section Title
+  Key techniques: div-card sections with FULL accent borders (border:2px solid
+    #HEX — not border-left bars, which ISK0 strips), Section Title
     Badges, World Elements Pills, Badge Pills, NO-BACKGROUND BORDER FRAME
     for images, Act Header with Emoji, Chapter Break Pills, Arrow Lists,
     Inline Phrase Highlighting.
@@ -2317,7 +2330,9 @@ HTML SEMANTIC TAGS IN OUTPUT — ALL CONFIRMED:
 BLOCK HTML IN OUTPUT — ALL CONFIRMED:
   <p style="color:#HEX;">text</p>
   <div style="color:#HEX;">text</div>
-  <div style="border-left:3px solid #HEX; padding-left:10px; color:#HEX;">text</div>
+  <div style="border:2px solid #HEX; border-radius:6px; padding:8px; color:#HEX;">text</div>
+    (NOTE: a single-side accent bar — border-left:3px solid #HEX — does NOT
+    render on ISK0; use the full border above to set a callout apart.)
   <div style="background-color:rgba(R,G,B,A); padding:8px; border-radius:6px;">text</div>
   <table> with inline styles — confirmed (see 5A.4 for full rules)
 
@@ -2459,8 +2474,8 @@ BACKGROUND KILL VALUES — ALL EQUIVALENT (use transparent as canonical):
 For highlighted output lines, sidebars, and status headers that need
 more visual weight than a plain span:
 
-LEFT BORDER CALLOUT (confirmed):
-  <div style="border-left:3px solid #HEX; padding-left:10px;
+ACCENT CALLOUT (full border — a single-side border-left bar does NOT render on ISK0):
+  <div style="border:2px solid #HEX; border-radius:8px; padding:8px 12px;
               color:#FFFFFF; font-size:12px; letter-spacing:0.06em;">
     Day 1 (Monday) · 08:30 AM · Stage 1 — Arrival
   </div>
@@ -3591,7 +3606,8 @@ DASHBOARD OUTPUT FORMAT UPGRADE (confirmed March 6, 2026):
     deployment, creator wants exact color control over every cell.
 
   PATTERN D — CALLOUT DIV (moderate tokens, high visual weight):
-    <div style="border-left:3px solid #80CBC4; padding-left:10px;
+    (full border — a single-side border-left bar does NOT render on ISK0)
+    <div style="border:2px solid #80CBC4; border-radius:8px; padding:8px 12px;
                 color:#FFFFFF; font-size:12px; letter-spacing:0.06em;">
       Day 1 · 08:30 AM · Stage 1 — Arrival · Trust: Neutral · HP: 80%
     </div>
@@ -4787,8 +4803,7 @@ values shown in the templates if they ever disagree):
   <div style="height:14px;"></div>
 
   <!-- Physical Presence card -->
-  <div style="border:1px solid rgba([R],[G],[B],0.22);
-              border-left:6px solid [ACCENT COLOR]; border-radius:12px;
+  <div style="border:2px solid [ACCENT COLOR]; border-radius:12px;
               background:rgba(0,0,0,0.25); padding:14px;
               box-sizing:border-box;">
     <div style="font-size:11px; letter-spacing:0.22em; text-transform:uppercase;
@@ -4804,8 +4819,7 @@ values shown in the templates if they ever disagree):
   <div style="height:10px;"></div>
 
   <!-- Personality card -->
-  <div style="border:1px solid rgba([R],[G],[B],0.22);
-              border-left:6px solid [ACCENT COLOR 2]; border-radius:12px;
+  <div style="border:2px solid [ACCENT COLOR 2]; border-radius:12px;
               background:rgba(0,0,0,0.25); padding:14px;
               box-sizing:border-box;">
     <div style="font-size:11px; letter-spacing:0.22em; text-transform:uppercase;
@@ -4822,8 +4836,7 @@ values shown in the templates if they ever disagree):
   <div style="height:10px;"></div>
 
   <!-- Background card -->
-  <div style="border:1px solid rgba([R],[G],[B],0.22);
-              border-left:6px solid [ACCENT COLOR 3]; border-radius:12px;
+  <div style="border:2px solid [ACCENT COLOR 3]; border-radius:12px;
               background:rgba(0,0,0,0.25); padding:14px;
               box-sizing:border-box;">
     <div style="font-size:11px; letter-spacing:0.22em; text-transform:uppercase;

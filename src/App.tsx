@@ -347,7 +347,7 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 
 // Version of THIS app (the Aether_Core tool), distinct from the USCS framework
 // version it implements. Bump this when you ship changes.
-const APP_VERSION = "0.10.3";
+const APP_VERSION = "0.10.4";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
 const USCS_VERSION = "6.1";
 
@@ -2933,6 +2933,12 @@ function MainInterfaceChat({ state, askAssistant, preview, isSyncNeeded, syncDes
 function VersionHistoryModal({ onClose }: { onClose: () => void }) {
   const releases: { v: string; title: string; items: string[] }[] = [
     {
+      v: "0.10.4", title: "Card accent borders that survive ISK0",
+      items: [
+        "Fixed section accent strips silently disappearing on the ISK0 platform. Single-side accent bars (border-left) — and every fallback for them (inset shadow, gradient strip, narrow table/flex cell) — are stripped by ISK0's renderer; confirmed across three rounds of live testing. The card spec and the plot/character card prompts now use a FULL accent border (border:2px solid #hex) to differentiate sections, which renders reliably on the platform. Cards generated from here on will keep their section accents on ISK0.",
+      ],
+    },
+    {
       v: "0.10.3", title: "Instant palette recolor",
       items: [
         "Recolor cards to your palette instantly, with no AI call: the Plot Card and each Character Card now have a ⚡ Recolor button that swaps your palette colours — both the solid hex used for text AND the rgba() borders/tints derived from them — directly in the card HTML. Off-palette shades (neutral darks the model invented) are left untouched. The AI 're-skin' is still there for structural changes or off-palette reshades.",
@@ -4829,7 +4835,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
             </div>
             <div className="flex gap-4">
               <button
-                onClick={() => askAssistant(`[WORKSHOP ACTION — DRAFT PLOT CARD] Draft the COMPLETE user-facing Plot Card for "${state.title || 'this story'}" as self-contained HTML, following the injected USCS Plot Card spec. Use my locked visual identity — background ${state.palette[0]}, text ${state.palette[1]}, primary ${state.palette[2]}, secondary ${state.palette[3]}, accent ${state.palette[4]} — and the ${state.aestheticMode} aesthetic. Include every required field; do not abbreviate. Emit the finished card wrapped in <<<USCS_BLOCK PLOT_CARD>>> … <<<END USCS_BLOCK>>> so it loads into my live preview; keep only a brief note in chat.`)}
+                onClick={() => askAssistant(`[WORKSHOP ACTION — DRAFT PLOT CARD] Draft the COMPLETE user-facing Plot Card for "${state.title || 'this story'}" as self-contained HTML, following the injected USCS Plot Card spec. Use my locked visual identity — background ${state.palette[0]}, text ${state.palette[1]}, primary ${state.palette[2]}, secondary ${state.palette[3]}, accent ${state.palette[4]} — and the ${state.aestheticMode} aesthetic. Include every required field; do not abbreviate. ACCENT BORDERS: to set apart or colour-code a section, use a FULL border (border:2px solid #hex) in the accent colour — NEVER a single-side left/right accent bar (border-left:Npx solid …), nor an inset box-shadow or gradient strip faking one; ISK0 strips all of those, so the accent silently vanishes on the platform. Emit the finished card wrapped in <<<USCS_BLOCK PLOT_CARD>>> … <<<END USCS_BLOCK>>> so it loads into my live preview; keep only a brief note in chat.`)}
                 disabled={state.isAssistantLoading}
                 className="px-6 py-2 bg-accent text-black rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-white transition-all flex items-center gap-2 disabled:opacity-50"
               >
@@ -5100,7 +5106,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                       </details>
                     ) : char.desc ? (
                       <button
-                        onClick={() => askAssistant(`[WORKSHOP ACTION — CHARACTER HTML CARD] The narration guidance for "${char.name}" is defined — now produce their user-facing Part A HTML card based on it, using my locked palette and ${state.aestheticMode} aesthetic, per the injected USCS HTML spec. HARD CONSTRAINTS: the card is FLUID, never a narrow fixed width — width:100%; max-width:600px; margin:0 auto (fills a phone, caps and centers on desktop). Any multi-column section uses PERCENTAGE-width cells (width:50%/33%/100% + padding + box-sizing:border-box) inside display:flex; flex-wrap:wrap, so it reflows from ~300px to 600px; any fixed-px decorative element stays ≤300px. The OUTER CARD BACKGROUND must be EXACTLY ${state.palette[0]} (the locked palette background — not an off-palette near-black). Use ${state.palette[2]} as the SOLID hex for accent TEXT (title, accent words, pill text) — rgba is fine for borders and faint background tints, never for text. Emit it wrapped in <<<USCS_BLOCK CHAR_CARD: ${char.name}>>> … <<<END USCS_BLOCK>>> so it loads into the preview here. Keep only a brief note in chat.`)}
+                        onClick={() => askAssistant(`[WORKSHOP ACTION — CHARACTER HTML CARD] The narration guidance for "${char.name}" is defined — now produce their user-facing Part A HTML card based on it, using my locked palette and ${state.aestheticMode} aesthetic, per the injected USCS HTML spec. HARD CONSTRAINTS: the card is FLUID, never a narrow fixed width — width:100%; max-width:600px; margin:0 auto (fills a phone, caps and centers on desktop). Any multi-column section uses PERCENTAGE-width cells (width:50%/33%/100% + padding + box-sizing:border-box) inside display:flex; flex-wrap:wrap, so it reflows from ~300px to 600px; any fixed-px decorative element stays ≤300px. The OUTER CARD BACKGROUND must be EXACTLY ${state.palette[0]} (the locked palette background — not an off-palette near-black). Use ${state.palette[2]} as the SOLID hex for accent TEXT (title, accent words, pill text) — rgba is fine for borders and faint background tints, never for text. ACCENT BORDERS: to set apart a section, use a FULL border (border:2px solid #hex) — NEVER a single-side border-left/right bar, inset box-shadow, or gradient strip; ISK0 strips those so the accent vanishes on the platform. Emit it wrapped in <<<USCS_BLOCK CHAR_CARD: ${char.name}>>> … <<<END USCS_BLOCK>>> so it loads into the preview here. Keep only a brief note in chat.`)}
                         disabled={state.isAssistantLoading}
                         className="w-full py-2.5 rounded-lg border border-accent/40 bg-accent/10 text-accent text-[9px] font-black uppercase tracking-widest hover:bg-accent/20 transition-all disabled:opacity-50"
                       >
