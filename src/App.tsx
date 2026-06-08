@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef } from "react";
+import { encode } from "gpt-tokenizer";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
 import { captureDeliverables, type Deliverables, type DMConfig } from "./lib/capture";
@@ -517,10 +518,10 @@ function stripSyncTags(text: string): string {
   return text.replace(/\[(?:SET_[A-Z_]+:[^\]]*|SYNC_PROCEED)\]/gi, "").trim();
 }
 
-// Rough token estimate (~4 chars/token). Used for the budget gauge — applied to
-// the captured deliverables only, so it reflects the real package, not chat.
+// Token count via cl100k_base (gpt-tokenizer). Close enough to Claude's tokenizer
+// to replace the old chars/4 heuristic which overestimated by ~20%.
 function estimateTokens(text: string): number {
-  return Math.round((text || "").length / 4);
+  return encode(text || "").length;
 }
 
 // Parse a #rgb / #rrggbb hex string to an [r,g,b] triple, or null if not a hex.
