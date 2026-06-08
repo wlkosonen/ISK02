@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 #
-# aether-update.sh — nightly git watcher + Docker rebuild/restart for ISK02 (Aether).
+# aether-update.sh — hourly git watcher + Docker rebuild/restart for ISK02 (Aether).
 #
 # Canonical, version-controlled copy of the deploy-server watcher. Point your
 # systemd unit's ExecStart at THIS file so the watcher itself stays up to date on
-# every pull. Pairs with aether-update.service / aether-update.timer (03:30 daily).
+# every pull. Pairs with aether-update.service / aether-update.timer (top of every hour).
+# Timer: OnCalendar=*-*-* *:00:00
 #
 # What it does: fetch origin; if origin/<branch> moved, hard-reset to it, rebuild
 # the container, and prune dangling images + build cache so the disk doesn't fill.
@@ -22,7 +23,7 @@ COMPOSE_FILE_ARGS=""
 log() { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')" "$*"; }
 die() { log "ERROR: $*"; exit 1; }
 
-log "=== Aether nightly watcher starting ==="
+log "=== Aether hourly watcher starting ==="
 
 [ -d "$DEPLOY_DIR" ] || die "Deploy dir not found: $DEPLOY_DIR"
 cd "$(realpath "$DEPLOY_DIR")" || die "cd failed"
@@ -38,7 +39,7 @@ REMOTE=$(git rev-parse "origin/${BRANCH}" 2>/dev/null || git rev-parse "origin/H
 
 if [ "$LOCAL" = "$REMOTE" ]; then
   log "No changes on origin/${BRANCH}. Local is up to date."
-  log "=== Aether watcher finished (no-op) ==="
+  log "=== Aether hourly watcher finished (no-op) ==="
   exit 0
 fi
 
@@ -64,4 +65,4 @@ docker image prune -f   || log "WARN: image prune failed (continuing)"
 docker builder prune -f  || log "WARN: builder prune failed (continuing)"
 
 log "Now at: $(git rev-parse --short HEAD)"
-log "=== Aether watcher finished (rebuilt) ==="
+log "=== Aether hourly watcher finished (rebuilt) ==="
