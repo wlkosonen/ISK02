@@ -11,9 +11,9 @@
   --color-header: #18181b;
   --color-border: #27272a;
   --color-text-main: #e4e4e7;
-  --color-text-muted: #a1a1aa;
-  --color-text-dim: #82828c;
-  --color-label: #8a8a93;
+  --color-text-muted: #c4c4ce;
+  --color-text-dim: #9c9ca8;
+  --color-label: #aeaeb9;
   --color-accent: #14b8a6;
 }
 
@@ -60,4 +60,36 @@
 .custom-scrollbar::-webkit-scrollbar-thumb:hover,
 .cs-scrollbar::-webkit-scrollbar-thumb:hover {
   background: rgba(20, 184, 166, 0.65);
+}
+
+/* Aether color-picker channel sliders — a white thumb riding a custom gradient
+   track (the track background is set inline per-channel by the component). */
+.aether-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 10px;
+  border-radius: 9999px;
+  outline: none;
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.aether-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  background: #ffffff;
+  border: 2px solid rgba(0, 0, 0, 0.4);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.55);
+  cursor: pointer;
+}
+.aether-range::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  background: #ffffff;
+  border: 2px solid rgba(0, 0, 0, 0.4);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.55);
+  cursor: pointer;
 }

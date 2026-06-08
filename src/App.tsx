@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
 import { captureDeliverables, type Deliverables, type DMConfig } from "./lib/capture";
 import { 
@@ -37,7 +38,8 @@ import {
   EyeOff,
   Star,
   Copy,
-  Check
+  Check,
+  Pipette
 } from "lucide-react";
 
 // --- Types ---
@@ -126,6 +128,10 @@ interface StoryState {
   // Per-component overrides: relax the §21 cap for these blocks (richer output),
   // while the 20k total platform ceiling still holds.
   customLimits: { promptPlot: number | null; guidelines: number | null; reminders: number | null; characters: number | null };
+  // Per-block creator-authored compacting/shaping rules (free text; "" = none).
+  // Tells the AI HOW to trim/shape each block — the qualitative companion to the
+  // numeric customLimits. Injected into the system prompt and the Tighten action.
+  compactRules: { promptPlot: string; guidelines: string; reminders: string; characters: string };
   leanGuidelines: boolean;   // Guidelines step "Compact mode" — assemble a leaner rule set
   deliverables: Deliverables;
   assistantHistory: Message[];
@@ -318,7 +324,7 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 
 // Version of THIS app (the Aether_Core tool), distinct from the USCS framework
 // version it implements. Bump this when you ship changes.
-const APP_VERSION = "0.12.1";
+const APP_VERSION = "0.12.4";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
 const USCS_VERSION = "6.1.1";
 
@@ -377,6 +383,7 @@ const DEFAULT_STATE: StoryState = {
   tokenBudgetMax: 10000,
   budgetTierMode: false,
   customLimits: { promptPlot: null, guidelines: null, reminders: null, characters: null },
+  compactRules: { promptPlot: "", guidelines: "", reminders: "", characters: "" },
   leanGuidelines: false,
   deliverables: EMPTY_DELIVERABLES,
   assistantHistory: [],
@@ -404,7 +411,7 @@ const DEFAULT_STATE: StoryState = {
 type DeskSnapshot = Pick<StoryState,
   "mode" | "heatLevel" | "workshopTrack" | "concept" | "settingType" | "tone" |
   "artStyle" | "palette" | "aestheticMode" | "groundingRules" | "title" | "summary" |
-  "tokenBudgetMin" | "tokenBudgetMax" | "budgetTierMode" | "customLimits" | "step">;
+  "tokenBudgetMin" | "tokenBudgetMax" | "budgetTierMode" | "customLimits" | "compactRules" | "step">;
 
 const deskArrEq = (a: string[], b: string[]) => a.join(",") === b.join(",");
 const deskJsonEq = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
@@ -430,6 +437,7 @@ const DESKSTATE_FIELDS: { key: keyof DeskSnapshot; eq?: (a: any, b: any) => bool
   { key: "tokenBudgetMax", label: tokenBudgetLabel },
   { key: "budgetTierMode", label: s => `Budget-Tier Mode: ${s.budgetTierMode ? "ON" : "OFF"}` },
   { key: "customLimits", eq: deskJsonEq, label: () => "Custom section limits changed" },
+  { key: "compactRules", eq: deskJsonEq, label: () => "Custom compacting rules changed" },
   { key: "step", label: s => `Moved to Step: ${s.step + 1} (${getActiveSteps(s.workshopTrack)[s.step]})` },
 ];
 
@@ -439,7 +447,7 @@ function deskSnapshot(s: StoryState): DeskSnapshot {
     concept: s.concept, settingType: s.settingType, tone: s.tone, artStyle: s.artStyle,
     palette: [...s.palette], aestheticMode: s.aestheticMode, groundingRules: s.groundingRules,
     title: s.title, summary: s.summary, tokenBudgetMin: s.tokenBudgetMin, tokenBudgetMax: s.tokenBudgetMax,
-    budgetTierMode: s.budgetTierMode, customLimits: { ...s.customLimits }, step: s.step,
+    budgetTierMode: s.budgetTierMode, customLimits: { ...s.customLimits }, compactRules: { ...s.compactRules }, step: s.step,
   };
 }
 
@@ -486,6 +494,7 @@ function loadInitialState(): StoryState {
         modelSettings: { ...DEFAULT_STATE.modelSettings, ...(parsed.modelSettings || {}) },
         deliverables: { ...EMPTY_DELIVERABLES, ...(parsed.deliverables || {}), dmConfig: { ...EMPTY_DM_CONFIG, ...(parsed.deliverables?.dmConfig || {}) } },
         customLimits: { ...DEFAULT_STATE.customLimits, ...(parsed.customLimits || {}) },
+        compactRules: { ...DEFAULT_STATE.compactRules, ...(parsed.compactRules || {}) },
       };
     }
   } catch (err) {
@@ -888,7 +897,7 @@ export default function App() {
     const fav = isFavourite(m);
     return (
       <div key={m} className={`flex items-center rounded-lg border transition-all ${selected ? "border-accent bg-accent/5" : "border-border bg-bg hover:bg-white/5"}`}>
-        <button onClick={() => selectModel(m)} className={`flex-1 min-w-0 p-3 text-left text-[11px] font-mono flex items-center justify-between gap-2 ${selected ? "text-accent" : "text-text-dim hover:text-text-muted"}`}>
+        <button onClick={() => selectModel(m)} className={`flex-1 min-w-0 p-3 text-left text-[12px] font-mono flex items-center justify-between gap-2 ${selected ? "text-accent" : "text-text-dim hover:text-text-muted"}`}>
           <span className="truncate">{m}</span>
           {badge}
         </button>
@@ -941,8 +950,12 @@ export default function App() {
     if (state.mode) established.push(`Narrative Mode: ${state.mode} (${TRACK_LABELS[state.workshopTrack]})`);
     else pending.push("Narrative Mode (SFW/NSFW)");
 
-    if (state.mode || state.heatLevel !== d.heatLevel) established.push(`Heat Level: ${state.heatLevel}/5`);
-    else pending.push("Heat Level");
+    // Heat Level applies ONLY in NSFW mode (USCS §3.2 / §10 — "omit entirely in
+    // SFW Mode"). In SFW we feed nothing about heat to the collaborator: not as
+    // established, not as pending. Listing the default (1/5) here is what made
+    // the model "lock" an SFW story to heat 1.
+    if (state.mode === "NSFW") established.push(`Heat Level: ${state.heatLevel}/5`);
+    else if (!state.mode) pending.push("Heat Level");
 
     if (state.settingType) established.push(`Setting Type: ${state.settingType}`);
     else pending.push("Setting Type");
@@ -1018,6 +1031,13 @@ Acknowledge the established parameters, leave everything under NOT YET DECIDED u
       cl.reminders != null && `Reminders ≤${cl.reminders}`,
       cl.characters != null && `each character ≤${cl.characters}`,
     ].filter(Boolean).join(", ");
+    const crr = state.compactRules;
+    const compactRuleLines = [
+      crr.promptPlot.trim() && `Prompt Plot — ${crr.promptPlot.trim()}`,
+      crr.guidelines.trim() && `Guidelines — ${crr.guidelines.trim()}`,
+      crr.reminders.trim() && `Reminders — ${crr.reminders.trim()}`,
+      crr.characters.trim() && `Character descriptions — ${crr.characters.trim()}`,
+    ].filter(Boolean).join("\n  · ");
     // 1. Immediately update UI with user message and loading state
     const userMessage: Message = { role: "user", content: prompt };
     setState(s => ({
@@ -1052,8 +1072,7 @@ ${activeSteps.map((s, i) => `    ${i + 1}. ${s}${i === state.step ? "   ← CURR
   Work ONLY on the current step. Do not advance to, pre-empt, or ask the creator about anything that belongs to a later step.
 - CURRENT STEP: ${activeSteps[state.step]} (step ${state.step + 1} of ${activeSteps.length})
 - ⚠️ OUTPUT TRACK — LOCKED VIA UI, DO NOT RE-ASK: The creator has ALREADY selected the "${TRACK_LABELS[state.workshopTrack]}" track using a dedicated on-screen control. ${state.workshopTrack === "dm-only" ? "This is a STANDALONE DUNGEON MIND build (USCS §27): produce ONLY the DM game-mechanics config (stat schema, game rules, reminder, story-AI instruction, player guide, name & model) — do NOT produce a plot card, character sheets, prompt plot, or any story-package deliverable." : state.workshopTrack === "story-dm" ? "This is a full story package WITH a Dungeon Mind attached: build the story first, then the DM config (USCS §27), applying the §27.5 integration guidance." : "This is a Full Story Package (a continuous narrative protagonist with a story spine)."} This is final and authoritative. Do NOT ask, confirm, double-check, or re-open the track question in any form, and do NOT list it as an open/pending decision. If the USCS framework text says to establish this track, consider it ALREADY established by the UI selection. Simply proceed.
-- Mode: ${state.mode || "Pending"}
-- Heat Level: ${state.heatLevel}
+- Mode: ${state.mode || "Pending"}${state.mode === "NSFW" ? `\n- Heat Level: ${state.heatLevel}` : ""}
 - Setting: ${state.settingType || "Pending"}
 - Concept: ${state.concept || "Variable"}
 - Tone: ${state.tone || "Undefined"}
@@ -1063,7 +1082,9 @@ ${state.groundingRules || "No strict rules established yet."}${state.groundingRu
 - Target Instruction-Package Budget: ~${state.tokenBudgetMin / 1000}k–${state.tokenBudgetMax / 1000}k tokens. This counts ONLY the AI instruction package (Prompt Plot + Prompt Guidelines + AI Reminders + Character AI prompt descriptions + Player Persona), per USCS §21.1. HTML cards and image/location prompts do NOT count.
   HOW TO HIT THIS BUDGET: The per-block §21 caps (Prompt Plot ≤2500, Guidelines ≤3000, Reminders ≤800, Player Persona ≤500, each character ≤1500 primary / ≤800 supporting) are HARD ceilings — NEVER inflate a block beyond its cap to reach a number. The fixed blocks total ~6,800 tokens at most; the rest of the budget comes from CAST SIZE (USCS guide: ~2 chars ≈ 8–10k, ~4 ≈ 12–15k, ~6 ≈ 16–19k) plus any optional systems. If the chosen budget cannot be met within the caps at the current number of characters, say so and suggest adjusting the cast — do not bloat individual blocks. A higher budget means a larger ensemble, not a bigger Prompt Plot.${state.budgetTierMode ? `
 - BUDGET-TIER MODE: ACTIVE (story targets free/budget models such as DeepSeek/Ministral/GLM). Apply the USCS Section 21 budget-tier optimizations throughout: use concrete state-based triggers instead of session-number pacing; require a mandatory status block at the start of every response; add a worked example for any rule that contradicts a model's default training; enforce strict document separation (facts in Plot, behavior in Guidelines, non-negotiables in Reminders — never duplicated); and follow the §21 trim-priority order if over budget.` : ""}${customLimitLines ? `
-- CREATOR-SET SECTION LIMITS (override the standard §21 caps for these blocks): ${customLimitLines}. Treat each as that block's target ceiling instead of the default. If a limit is LOWER than the default, produce a leaner block — fewer rules, condensed detail — to fit it. If HIGHER, you MAY add richer, more detailed content. All other blocks keep their §21 defaults. The 20,000-token TOTAL platform ceiling still applies — never exceed it. Reminder: a larger Prompt Plot or Guidelines costs tokens on EVERY turn of the deployed story.` : ""}
+- CREATOR-SET SECTION LIMITS (override the standard §21 caps for these blocks): ${customLimitLines}. Treat each as that block's target ceiling instead of the default. If a limit is LOWER than the default, produce a leaner block — fewer rules, condensed detail — to fit it. If HIGHER, you MAY add richer, more detailed content. All other blocks keep their §21 defaults. The 20,000-token TOTAL platform ceiling still applies — never exceed it. Reminder: a larger Prompt Plot or Guidelines costs tokens on EVERY turn of the deployed story.` : ""}${compactRuleLines ? `
+- CREATOR-SET COMPACTING / SHAPING RULES — apply the matching block's rule whenever you PRODUCE or TIGHTEN that block. These govern HOW to shape and trim it (what to keep vs. cut, structure, voice), not merely its size; honour them together with any token ceiling above:
+  · ${compactRuleLines}` : ""}
 ${cur.story !== undefined && STEP_MANDATES[cur.story] ? `
 ================================================================================
 MANDATORY OUTPUT CHECKLIST FOR THIS STEP — DO NOT ABBREVIATE OR SKIP
@@ -1560,7 +1581,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
 
       const pkg = countingPackageTokens(d);
       const pkgFmt = pkg >= 1000 ? `${(pkg / 1000).toFixed(1)}k` : `${pkg}`;
-      const header = `ISK0 STORY PACKAGE — "${state.title || "Untitled"}"\nGenerated: ${new Date().toLocaleString()}\nMode: ${state.mode || "—"} · Heat: ${state.heatLevel}/5 · Setting: ${state.settingType || "—"}\nInstruction-package size (§21.1 est.): ~${pkgFmt} tokens · Target: ${state.tokenBudgetMin / 1000}k–${state.tokenBudgetMax / 1000}k${pkg > state.tokenBudgetMax ? " · OVER BUDGET" : ""}`;
+      const header = `ISK0 STORY PACKAGE — "${state.title || "Untitled"}"\nGenerated: ${new Date().toLocaleString()}\nMode: ${state.mode || "—"}${state.mode === "NSFW" ? ` · Heat: ${state.heatLevel}/5` : ""} · Setting: ${state.settingType || "—"}\nInstruction-package size (§21.1 est.): ~${pkgFmt} tokens · Target: ${state.tokenBudgetMin / 1000}k–${state.tokenBudgetMax / 1000}k${pkg > state.tokenBudgetMax ? " · OVER BUDGET" : ""}`;
       const fileBody = `${header}\n${"=".repeat(80)}\n\n${parts.join("\n\n\n")}\n`;
       downloadTextFile(`${sanitizeFilename(state.title)}_ISK0_Package.txt`, fileBody);
 
@@ -1604,7 +1625,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
     const ds = [
       `Title:    ${state.title || "Untitled"}`,
       `Mode:     ${state.mode || "—"} (${TRACK_LABELS[state.workshopTrack]})`,
-      `Heat:     ${state.heatLevel}/5`,
+      ...(state.mode === "NSFW" ? [`Heat:     ${state.heatLevel}/5`] : []),
       `Setting:  ${state.settingType || "—"}`,
       `Tone:     ${state.tone || "—"}`,
       `Aesthetic:${state.aestheticMode} · Art Style: ${state.artStyle}`,
@@ -1704,6 +1725,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
       workshopTrack: migrateTrack(loaded),
       deliverables: { ...EMPTY_DELIVERABLES, ...(loaded.deliverables || {}), dmConfig: { ...EMPTY_DM_CONFIG, ...(loaded.deliverables?.dmConfig || {}) } },
       customLimits: { ...DEFAULT_STATE.customLimits, ...(loaded.customLimits || {}) },
+      compactRules: { ...DEFAULT_STATE.compactRules, ...(loaded.compactRules || {}) },
     };
     setState(restored);
     // Realign the sync baseline so a freshly loaded project doesn't show a
@@ -1724,12 +1746,12 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
             <div className="w-8 h-8 bg-accent rounded flex items-center justify-center text-black font-black shrink-0 shadow-[0_0_15px_rgba(20,184,166,0.2)]">A</div>
             <div className="hidden sm:block">
               <h1 className="text-base lg:text-lg font-bold tracking-tight uppercase leading-none">Aether_Core</h1>
-              <span className="text-[8px] lg:text-[10px] font-mono opacity-50 uppercase tracking-[0.2em]">USCS v{USCS_VERSION}</span>
+              <span className="text-[8px] lg:text-[11px] font-mono opacity-50 uppercase tracking-[0.2em]">USCS v{USCS_VERSION}</span>
             </div>
           </div>
           <div className="h-4 w-[1px] bg-border hidden md:block"></div>
           <div className="hidden md:flex flex-col">
-            <span className="text-[10px] uppercase tracking-widest text-label">Workshop</span>
+            <span className="text-[11px] uppercase tracking-widest text-label">Workshop</span>
             <span className="text-sm font-mono tracking-tighter">Story Architect</span>
           </div>
         </div>
@@ -1749,7 +1771,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
           <button
             onClick={startNewProject}
             title="Start a new project — clears the current story & chat (keeps your provider, keys & favourites)"
-            className="flex px-2 sm:px-3 py-2 border border-[#f43f5e]/40 text-[#f43f5e] rounded-md items-center gap-1.5 text-[10px] font-black uppercase tracking-widest hover:bg-[#f43f5e]/10 hover:border-[#f43f5e]/60 transition-all"
+            className="flex px-2 sm:px-3 py-2 border border-[#f43f5e]/40 text-[#f43f5e] rounded-md items-center gap-1.5 text-[11px] font-black uppercase tracking-widest hover:bg-[#f43f5e]/10 hover:border-[#f43f5e]/60 transition-all"
           >
             <RefreshCw className="w-4 h-4 sm:w-3.5 sm:h-3.5" /> <span className="hidden sm:inline">New</span>
           </button>
@@ -1772,7 +1794,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
           <button
             onClick={nextStep}
             disabled={state.step === activeSteps.length - 1 || (state.step === 0 && state.workshopTrack !== "dm-only" && !state.mode)}
-            className={`flex px-4 lg:px-6 py-2 bg-accent text-black rounded-lg items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] hover:bg-white active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed transition-all z-50 border border-accent/50 ${
+            className={`flex px-4 lg:px-6 py-2 bg-accent text-black rounded-lg items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] hover:bg-white active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed transition-all z-50 border border-accent/50 ${
               readyToAdvance
                 ? "ring-2 ring-accent ring-offset-2 ring-offset-header animate-pulse shadow-[0_0_28px_rgba(20,184,166,0.7)]"
                 : "shadow-[0_0_20px_rgba(20,184,166,0.3)]"
@@ -1798,20 +1820,20 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
             <div className="px-4 lg:px-6 py-2.5 flex items-center justify-between gap-3 flex-wrap">
               <div className="flex items-center gap-2 min-w-0">
                 <AlertTriangle className="w-4 h-4 text-[#fbbf24] shrink-0" />
-                <p className="text-[11px] sm:text-xs text-[#fbbf24] font-medium leading-snug">
+                <p className="text-[12px] sm:text-xs text-[#fbbf24] font-medium leading-snug">
                   <span className="font-black uppercase tracking-wide">Resuming a saved session.</span> You're continuing a previous story{state.title ? ` ("${state.title}")` : ""} — the AI still has its earlier chat as context. Starting something new? Click <span className="font-black">New Project</span>.
                 </p>
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 <button
                   onClick={startNewProject}
-                  className="px-3 py-1.5 bg-[#fbbf24] text-black rounded-md text-[10px] font-black uppercase tracking-widest hover:bg-[#fbbf24]/80 transition-all flex items-center gap-1.5"
+                  className="px-3 py-1.5 bg-[#fbbf24] text-black rounded-md text-[11px] font-black uppercase tracking-widest hover:bg-[#fbbf24]/80 transition-all flex items-center gap-1.5"
                 >
                   <RefreshCw className="w-3 h-3" /> New Project
                 </button>
                 <button
                   onClick={() => setShowRestoreNotice(false)}
-                  className="px-3 py-1.5 border border-[#fbbf24]/40 text-[#fbbf24] rounded-md text-[10px] font-black uppercase tracking-widest hover:bg-[#fbbf24]/10 transition-all"
+                  className="px-3 py-1.5 border border-[#fbbf24]/40 text-[#fbbf24] rounded-md text-[11px] font-black uppercase tracking-widest hover:bg-[#fbbf24]/10 transition-all"
                 >
                   Keep working
                 </button>
@@ -1835,18 +1857,18 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
               <div className="flex items-center justify-between lg:hidden mb-8 shrink-0">
                 <div className="flex items-center gap-2">
                   <BookOpen className="w-4 h-4 text-accent" />
-                  <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-accent">Navigation</h2>
+                  <h2 className="text-[11px] font-black uppercase tracking-[0.3em] text-accent">Navigation</h2>
                 </div>
                 <button 
                   onClick={() => setIsSidebarOpen(false)} 
                   className="p-3 bg-white/5 hover:bg-white/10 rounded-xl text-label flex items-center gap-2 transition-all active:scale-95"
                 >
-                  <span className="text-[10px] font-bold uppercase tracking-widest">Close</span>
+                  <span className="text-[11px] font-bold uppercase tracking-widest">Close</span>
                   <X className="w-5 h-5" />
                 </button>
               </div>
               
-              <h2 className="text-[10px] font-bold text-label uppercase tracking-[0.3em] mb-4 hidden lg:block shrink-0">Pipeline Workflow</h2>
+              <h2 className="text-[11px] font-bold text-label uppercase tracking-[0.3em] mb-4 hidden lg:block shrink-0">Pipeline Workflow</h2>
 
               <div className="flex-1 overflow-y-auto space-y-1.5 custom-scrollbar pr-1 mb-4">
                 {activeSteps.map((step, idx) => (
@@ -2055,7 +2077,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
           <button 
             onClick={prevStep}
             disabled={state.step === 0}
-            className="px-4 lg:px-6 py-2 border border-border rounded-md flex items-center gap-2 text-[10px] lg:text-xs font-bold uppercase tracking-widest hover:bg-white/5 disabled:opacity-10 transition-all font-mono"
+            className="px-4 lg:px-6 py-2 border border-border rounded-md flex items-center gap-2 text-[11px] lg:text-xs font-bold uppercase tracking-widest hover:bg-white/5 disabled:opacity-10 transition-all font-mono"
           >
             <ChevronLeft className="w-3 h-3 lg:w-4 h-4" /> REVERT
           </button>
@@ -2086,7 +2108,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
               triggerToast("Referral code HK08YR5L copied — new users get free tokens!", "info");
             }}
             title="Copy referral code — new users get free tokens"
-            className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-text-dim hover:text-accent transition-colors active:scale-95"
+            className="flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-widest text-text-dim hover:text-accent transition-colors active:scale-95"
           >
             <span className="opacity-50">Referral</span>
             <span className="text-accent font-bold tracking-wider">HK08YR5L</span>
@@ -2128,7 +2150,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
               <div className="flex justify-between items-start gap-3 mb-8 sticky top-0 z-20 bg-header/95 backdrop-blur-sm pt-5 sm:pt-8 -mx-5 px-5 sm:-mx-8 sm:px-8 pb-3 border-b border-border/60">
                 <div className="space-y-1 text-left">
                   <h2 className="text-xl font-black uppercase tracking-tighter">Model_Configuration</h2>
-                  <p className="text-[10px] text-label font-bold uppercase tracking-widest">Aether_Core System Settings</p>
+                  <p className="text-[11px] text-label font-bold uppercase tracking-widest">Aether_Core System Settings</p>
                 </div>
                 <button
                   onClick={() => setShowSettings(false)}
@@ -2142,7 +2164,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
               <div className="space-y-8 text-left">
                 {/* Provider Selection */}
                 <div className="space-y-4">
-                  <label className="text-[10px] uppercase tracking-[0.3em] font-black text-label block">AI_Provider</label>
+                  <label className="text-[11px] uppercase tracking-[0.3em] font-black text-label block">AI_Provider</label>
                   <div className="grid grid-cols-2 gap-3">
                     {(Object.keys(PROVIDERS) as Array<keyof typeof PROVIDERS>).map((p) => (
                       <button
@@ -2176,7 +2198,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                   <div className="p-5 border border-accent/20 bg-accent/5 rounded-2xl space-y-4 font-sans">
                     <div className="space-y-1.5">
                       <div className="flex justify-between items-center">
-                        <label className="text-[10px] uppercase tracking-[0.2em] font-black text-accent">Ollama Base URL</label>
+                        <label className="text-[11px] uppercase tracking-[0.2em] font-black text-accent">Ollama Base URL</label>
                         <span className="text-[8px] font-mono text-text-dim">Required</span>
                       </div>
                       <input 
@@ -2203,8 +2225,8 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                         aria-pressed={!!state.modelSettings.ollamaDirect}
                       >
                         <div className="min-w-0">
-                          <div className="text-[10px] uppercase tracking-[0.2em] font-black text-accent">Use my own machine (direct)</div>
-                          <div className="text-[10px] text-text-dim leading-snug">Connect this browser straight to your local Ollama — your hardware, your models. Turn this ON when using a hosted/shared instance of the app.</div>
+                          <div className="text-[11px] uppercase tracking-[0.2em] font-black text-accent">Use my own machine (direct)</div>
+                          <div className="text-[11px] text-text-dim leading-snug">Connect this browser straight to your local Ollama — your hardware, your models. Turn this ON when using a hosted/shared instance of the app.</div>
                         </div>
                         <span className={`shrink-0 w-9 h-5 rounded-full transition-colors relative ${state.modelSettings.ollamaDirect ? "bg-accent" : "bg-border"}`}>
                           <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${state.modelSettings.ollamaDirect ? "left-[18px]" : "left-0.5"}`} />
@@ -2212,7 +2234,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                       </button>
 
                       {state.modelSettings.ollamaDirect ? (
-                        <div className="text-[10px] text-text-dim leading-relaxed bg-black/20 border border-border rounded-lg p-2.5 space-y-2">
+                        <div className="text-[11px] text-text-dim leading-relaxed bg-black/20 border border-border rounded-lg p-2.5 space-y-2">
                           <p className="text-text-main font-bold">Run models on YOUR hardware through this site:</p>
                           <p><span className="text-text-main font-semibold">1.</span> Install <a className="text-accent underline" href="https://ollama.com" target="_blank" rel="noreferrer">Ollama</a> and pull <span className="italic">any</span> model you want — e.g. <code className="bg-black/40 px-1 rounded font-mono">ollama pull llama3.1</code> (or qwen2.5, mistral, gemma…). Any model you've installed shows up below; this is just an example.</p>
                           <p><span className="text-text-main font-semibold">2.</span> Let this site reach your Ollama by setting <code className="bg-black/40 px-1 rounded font-mono">OLLAMA_ORIGINS</code> to its address (browsers block cross-origin calls otherwise):</p>
@@ -2225,7 +2247,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                           <p className="text-[#fbbf24]/90">Privacy: the prompt is assembled on this server, but the model runs on your machine — no API key, and your generated text never passes through the server.</p>
                         </div>
                       ) : (
-                        <div className="text-[10px] text-text-dim leading-relaxed bg-black/20 border border-border rounded-lg p-2.5 space-y-1.5">
+                        <div className="text-[11px] text-text-dim leading-relaxed bg-black/20 border border-border rounded-lg p-2.5 space-y-1.5">
                           <p className="text-text-main font-bold">Server-side Ollama (you are self-hosting this app):</p>
                           <p>The app's SERVER makes the call, so <code className="bg-black/40 px-1 rounded font-mono">localhost</code> here = the server's machine. Use this when you run Aether yourself with Ollama on the same box — start Ollama with <code className="bg-black/40 px-1 rounded font-mono">OLLAMA_HOST=0.0.0.0 ollama serve</code> (and <code className="bg-black/40 px-1 rounded font-mono">host.docker.internal</code> under Docker).</p>
                           <p>On a hosted/shared instance the server has no Ollama for you — turn ON <span className="text-accent font-semibold">"Use my own machine"</span> above to run on your hardware instead.</p>
@@ -2234,7 +2256,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-[10px] uppercase tracking-[0.2em] font-black text-accent">Custom Model Override</label>
+                      <label className="text-[11px] uppercase tracking-[0.2em] font-black text-accent">Custom Model Override</label>
                       <input 
                         type="text"
                         value={state.modelSettings.model}
@@ -2245,7 +2267,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                         className="w-full bg-header/60 border border-border rounded-lg p-2 font-mono text-xs text-text-main focus:border-accent focus:outline-none"
                         placeholder="e.g. llama3, deepseek-coder..."
                       />
-                      <p className="text-[11px] text-text-dim leading-normal">
+                      <p className="text-[12px] text-text-dim leading-normal">
                         Type any model currently downloaded on your machine (e.g., <code className="font-mono text-white/50 text-[8px]">ollama run llama3</code>).
                       </p>
                     </div>
@@ -2257,7 +2279,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                   <div className="p-5 border border-accent/20 bg-accent/5 rounded-2xl space-y-4 font-sans">
                     <div className="space-y-1.5">
                       <div className="flex justify-between items-center">
-                        <label className="text-[10px] uppercase tracking-[0.2em] font-black text-accent">Gemini API Key (Local Override)</label>
+                        <label className="text-[11px] uppercase tracking-[0.2em] font-black text-accent">Gemini API Key (Local Override)</label>
                         <span className="text-[8px] font-mono text-text-dim">Optional</span>
                       </div>
                       <div className="relative flex items-center">
@@ -2279,7 +2301,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                           {showGeminiKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                         </button>
                       </div>
-                      <p className="text-[11px] text-text-dim leading-normal">
+                      <p className="text-[12px] text-text-dim leading-normal">
                         💡 Key is processed server-side so it is never exposed in the browser's developer console. Leave empty to use server environment variable default.
                       </p>
                     </div>
@@ -2291,7 +2313,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                   <div className="p-5 border border-accent/20 bg-accent/5 rounded-2xl space-y-4 font-sans">
                     <div className="space-y-1.5">
                       <div className="flex justify-between items-center">
-                        <label className="text-[10px] uppercase tracking-[0.2em] font-black text-accent">Anthropic API Key (Local Override)</label>
+                        <label className="text-[11px] uppercase tracking-[0.2em] font-black text-accent">Anthropic API Key (Local Override)</label>
                         <span className="text-[8px] font-mono text-text-dim">Optional</span>
                       </div>
                       <div className="relative flex items-center">
@@ -2313,7 +2335,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                           {showAnthropicKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                         </button>
                       </div>
-                      <p className="text-[11px] text-text-dim leading-normal">
+                      <p className="text-[12px] text-text-dim leading-normal">
                         💡 Key is processed server-side so it is never exposed in the browser's developer console. Leave empty to use server environment variable default.
                       </p>
                     </div>
@@ -2325,7 +2347,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                   <div className="p-5 border border-accent/20 bg-accent/5 rounded-2xl space-y-4 font-sans">
                     <div className="space-y-1.5">
                       <div className="flex justify-between items-center">
-                        <label className="text-[10px] uppercase tracking-[0.2em] font-black text-accent">OpenRouter API Key</label>
+                        <label className="text-[11px] uppercase tracking-[0.2em] font-black text-accent">OpenRouter API Key</label>
                         <span className="text-[8px] font-mono text-text-dim">Required to chat</span>
                       </div>
                       <div className="relative flex items-center">
@@ -2359,7 +2381,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                   <div className="p-5 border border-accent/20 bg-accent/5 rounded-2xl space-y-4 font-sans">
                     <div className="space-y-1.5">
                       <div className="flex justify-between items-center">
-                        <label className="text-[10px] uppercase tracking-[0.2em] font-black text-accent">Mistral API Key</label>
+                        <label className="text-[11px] uppercase tracking-[0.2em] font-black text-accent">Mistral API Key</label>
                         <span className="text-[8px] font-mono text-text-dim">Required to chat</span>
                       </div>
                       <div className="relative flex items-center">
@@ -2390,7 +2412,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
 
                 {/* Model Selection */}
                 <div className="space-y-4">
-                  <label className="text-[10px] uppercase tracking-[0.3em] font-black text-label block">Target_Model</label>
+                  <label className="text-[11px] uppercase tracking-[0.3em] font-black text-label block">Target_Model</label>
 
                   {providerFavourites.length > 0 && (
                     <div className="space-y-2 p-3 rounded-xl border border-[#fbbf24]/20 bg-[#fbbf24]/5">
@@ -2413,7 +2435,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                       )}
                       
                       {ollamaError && (
-                        <div className="p-3 border border-red-500/10 bg-red-500/5 text-red-500 rounded-lg text-[10px] leading-relaxed space-y-1 font-sans">
+                        <div className="p-3 border border-red-500/10 bg-red-500/5 text-red-500 rounded-lg text-[11px] leading-relaxed space-y-1 font-sans">
                           <p className="font-bold flex items-center gap-1.5 text-red-400">
                             ⚠️ Connection Issue
                           </p>
@@ -2458,7 +2480,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                       )}
                       <div className="grid grid-cols-1 gap-2 max-h-[220px] overflow-y-auto custom-scrollbar pr-1">
                         {visibleHostedModels.length === 0 && (
-                          <p className="text-[10px] font-mono text-text-dim py-2">No models match "{modelFilter}".</p>
+                          <p className="text-[11px] font-mono text-text-dim py-2">No models match "{modelFilter}".</p>
                         )}
                         {visibleHostedModels.map((m) => renderModelRow(m, hostedBadge(m)))}
                       </div>
@@ -2470,8 +2492,8 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                 <div className="grid grid-cols-2 gap-8 pt-4">
                   <div className="space-y-3">
                     <div className="flex justify-between items-center">
-                      <label className="text-[10px] uppercase tracking-[0.2em] font-black text-label">Temperature</label>
-                      <span className="text-[10px] font-mono text-accent">{state.modelSettings.temperature}</span>
+                      <label className="text-[11px] uppercase tracking-[0.2em] font-black text-label">Temperature</label>
+                      <span className="text-[11px] font-mono text-accent">{state.modelSettings.temperature}</span>
                     </div>
                     <input 
                       type="range"
@@ -2491,8 +2513,8 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                   </div>
                   <div className="space-y-3">
                     <div className="flex justify-between items-center">
-                      <label className="text-[10px] uppercase tracking-[0.2em] font-black text-label">Max_Tokens</label>
-                      <span className="text-[10px] font-mono text-accent">{state.modelSettings.maxTokens} <span className="text-text-dim">/ {tokenCeiling}</span></span>
+                      <label className="text-[11px] uppercase tracking-[0.2em] font-black text-label">Max_Tokens</label>
+                      <span className="text-[11px] font-mono text-accent">{state.modelSettings.maxTokens} <span className="text-text-dim">/ {tokenCeiling}</span></span>
                     </div>
                     <input
                       type="range"
@@ -2506,7 +2528,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                       }))}
                       className="w-full h-1 bg-border rounded-full appearance-none accent-accent cursor-pointer"
                     />
-                    <p className="text-[11px] text-text-dim leading-normal">Capped to the selected model's output limit. Higher values prevent long HTML cards / guideline sets from being truncated.</p>
+                    <p className="text-[12px] text-text-dim leading-normal">Capped to the selected model's output limit. Higher values prevent long HTML cards / guideline sets from being truncated.</p>
                   </div>
                 </div>
               </div>
@@ -2552,7 +2574,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
               <Sparkles className="w-4 h-4" />
             </div>
             <div>
-              <p className="text-[10px] font-black uppercase tracking-widest opacity-60">
+              <p className="text-[11px] font-black uppercase tracking-widest opacity-60">
                 {toast.type === "ai-to-ui" ? "AI COLLABORATOR SYNC" : toast.type === "ui-to-ai" ? "DESKSTATE SYNCHRONIZED" : "SYSTEM MESSAGE"}
               </p>
               <p className="text-xs font-medium mt-1 leading-relaxed text-white">
@@ -2606,7 +2628,7 @@ function CollaboratorChat({ state, setState, compact, askAssistant, setIsChatOpe
               <MessageSquare className="w-4 h-4 text-accent" />
             </div>
             <div>
-              <h2 className="text-[10px] font-black uppercase tracking-[0.2em] text-accent">Collaborator_Chat</h2>
+              <h2 className="text-[11px] font-black uppercase tracking-[0.2em] text-accent">Collaborator_Chat</h2>
               <div className="flex items-center gap-1.5 mt-0.5">
                 <span className={`inline-block w-1.5 h-1.5 rounded-full ${isSyncNeeded ? "bg-[#fbbf24] animate-pulse" : "bg-[#10b981]"}`} />
                 <span className="text-[8px] font-mono text-text-dim uppercase tracking-tighter">
@@ -2652,7 +2674,7 @@ function CollaboratorChat({ state, setState, compact, askAssistant, setIsChatOpe
         {state.assistantHistory.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center space-y-4 opacity-40">
             <Sparkles className="w-8 h-8 text-accent animate-pulse" />
-            <p className="text-[10px] uppercase font-black tracking-[0.3em]">Awaiting directive...</p>
+            <p className="text-[11px] uppercase font-black tracking-[0.3em]">Awaiting directive...</p>
             <p className="text-xs text-text-muted max-w-[200px] leading-relaxed italic">
               "Discussion initialized for {getActiveSteps(state.workshopTrack)[state.step]}."
             </p>
@@ -2685,9 +2707,9 @@ function CollaboratorChat({ state, setState, compact, askAssistant, setIsChatOpe
                         ? "This model is rate-limited or out of free allocation right now."
                         : "The request didn't go through."}
                     </p>
-                    <p className="whitespace-pre-wrap break-words text-red-200/80 text-[11px]">{rawErr}</p>
+                    <p className="whitespace-pre-wrap break-words text-red-200/80 text-[12px]">{rawErr}</p>
                     {isRateLimited && (
-                      <p className="text-red-200/60 text-[11px] leading-relaxed">Free OpenRouter models share a daily cap and can be busy. Hit <span className="font-bold">Retry</span> to try the same model again, or switch to another model in Settings.</p>
+                      <p className="text-red-200/60 text-[12px] leading-relaxed">Free OpenRouter models share a daily cap and can be busy. Hit <span className="font-bold">Retry</span> to try the same model again, or switch to another model in Settings.</p>
                     )}
                   </div>
                 ) : (
@@ -2702,7 +2724,7 @@ function CollaboratorChat({ state, setState, compact, askAssistant, setIsChatOpe
                 return (
                   <div
                     title={`Input ${u.input} full-price + ${u.cacheRead} from cache + ${u.cacheWrite} written to cache · Output ${u.output}. Cached input costs ~10% of full price.`}
-                    className="flex items-center gap-2 text-[11px] font-mono text-text-muted px-1"
+                    className="flex items-center gap-2 text-[12px] font-mono text-text-muted px-1"
                   >
                     <span>{fmt(totalIn)} in · {fmt(u.output)} out</span>
                     {u.cacheRead > 0 ? (
@@ -2718,7 +2740,7 @@ function CollaboratorChat({ state, setState, compact, askAssistant, setIsChatOpe
                   onClick={onRetry}
                   disabled={state.isAssistantLoading}
                   title="Re-send your last message (keeps the conversation; just retries the request)"
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 rounded-lg text-[10px] font-black uppercase tracking-wider text-red-200 transition-all active:scale-95 disabled:opacity-50"
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 rounded-lg text-[11px] font-black uppercase tracking-wider text-red-200 transition-all active:scale-95 disabled:opacity-50"
                 >
                   <RefreshCw className="w-3 h-3" /> Retry
                 </button>
@@ -2750,7 +2772,7 @@ function CollaboratorChat({ state, setState, compact, askAssistant, setIsChatOpe
           >
             <div className="flex items-center gap-1.5 min-w-0">
               <AlertTriangle className="w-3.5 h-3.5 text-[#fbbf24] shrink-0" />
-              <span className="text-[10px] font-black uppercase tracking-wider text-[#fbbf24] truncate">
+              <span className="text-[11px] font-black uppercase tracking-wider text-[#fbbf24] truncate">
                 Cut off at token limit
               </span>
             </div>
@@ -2764,7 +2786,7 @@ function CollaboratorChat({ state, setState, compact, askAssistant, setIsChatOpe
           >
             <div className="flex items-center gap-1.5 min-w-0">
               <CheckCircle2 className="w-3.5 h-3.5 text-accent shrink-0" />
-              <span className="text-[10px] font-black uppercase tracking-wider text-accent truncate">
+              <span className="text-[11px] font-black uppercase tracking-wider text-accent truncate">
                 Step complete — lock in &amp; continue
               </span>
             </div>
@@ -2780,7 +2802,7 @@ function CollaboratorChat({ state, setState, compact, askAssistant, setIsChatOpe
           >
             <div className="flex items-center gap-1.5">
               <Sparkles className="w-3.5 h-3.5 text-[#fbbf24] animate-pulse shrink-0" />
-              <span className="text-[10px] font-black uppercase tracking-wider text-[#fbbf24] truncate">
+              <span className="text-[11px] font-black uppercase tracking-wider text-[#fbbf24] truncate">
                 ✦ UI settings out of sync
               </span>
             </div>
@@ -2879,6 +2901,27 @@ function CollaboratorChat({ state, setState, compact, askAssistant, setIsChatOpe
 
 function VersionHistoryModal({ onClose }: { onClose: () => void }) {
   const releases: { v: string; title: string; items: string[] }[] = [
+    {
+      v: "0.12.4", title: "More legible explanatory text",
+      items: [
+        "Bumped the contrast and size of the small grey helper/explanatory text across the app. The three muted text tokens (dim, label, muted) are brighter for better readability against the dark background, and the two smallest explanatory text tiers were each enlarged by 1px.",
+      ],
+    },
+    {
+      v: "0.12.3", title: "Per-block compacting rules",
+      items: [
+        "The Advanced panel on Concept Intake (now \"per-block limits & compacting rules\") lets you write free-text compacting rules for each block — Prompt Plot, Guidelines, Reminders, and Characters — telling the collaborator HOW to shape and trim it (what to keep vs. cut, structure, voice), not just a token ceiling. This generalises the Guidelines step's Compact-mode toggle to every block, and as custom rules rather than a fixed preset.",
+        "Your rules are injected into the collaborator's system context (so every build of that block honours them) and appended to that block's \"Tighten to cap\" action (so a tighten follows your shaping intent, not just the number). They persist with the workspace and trigger a sync when changed.",
+      ],
+    },
+    {
+      v: "0.12.2", title: "Custom colour picker · SFW drops Heat Level",
+      items: [
+        "New Aether-styled colour picker replaces the OS default across the Palette & Identity step. It opens centred (no longer pinned to the top-left corner) with a hue ring + saturation/value field, RGB and HSL sliders with numeric entry, a hex field, live preview, and a screen eyedropper (Chrome/Edge; hidden where the browser lacks the EyeDropper API). Changes apply live as you drag.",
+        "Selecting SFW mode now omits Heat Level entirely instead of feeding the collaborator a default \"1/5\". Previously a synced SFW workspace listed \"Heat Level: 1/5\" as a locked parameter, which made the AI treat any SFW story as hard-capped at heat 1 (fade-to-black on anything warmer) — heat is an NSFW-only concept (USCS §3.2 / §10) and is now absent from SFW.",
+        "Heat is dropped from the workspace state-sync (no longer listed as established or pending in SFW), from the collaborator system-prompt deskstate, and from the exported package header and session-snapshot config. NSFW stories are unchanged. The strict-SFW enforcement for underage characters remains governed by the USCS doc and is unaffected.",
+      ],
+    },
     {
       v: "0.12.1", title: "Clearer Ollama setup guidance",
       items: [
@@ -3044,7 +3087,7 @@ function VersionHistoryModal({ onClose }: { onClose: () => void }) {
         <div className="flex justify-between items-start p-8 pb-4 shrink-0">
           <div className="space-y-1 text-left">
             <h2 className="text-xl font-black uppercase tracking-tighter flex items-center gap-2"><Zap className="w-5 h-5 text-accent" /> Version History</h2>
-            <p className="text-[10px] text-label font-bold uppercase tracking-widest">Aether_Core · currently v{APP_VERSION}</p>
+            <p className="text-[11px] text-label font-bold uppercase tracking-widest">Aether_Core · currently v{APP_VERSION}</p>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-white/5 rounded-lg text-label hover:text-white transition-all">
             <X className="w-5 h-5" />
@@ -3076,7 +3119,7 @@ function HelpModal({ onClose }: { onClose: () => void }) {
     <a href={href} target="_blank" rel="noopener noreferrer" className="text-accent underline decoration-accent/40 hover:decoration-accent break-all">{children}</a>
   );
   const H = ({ children }: { children: React.ReactNode }) => (
-    <h3 className="text-[11px] font-black uppercase tracking-[0.2em] text-accent flex items-center gap-2 pt-2">
+    <h3 className="text-[12px] font-black uppercase tracking-[0.2em] text-accent flex items-center gap-2 pt-2">
       <div className="w-2 h-[1px] bg-accent" />{children}
     </h3>
   );
@@ -3096,7 +3139,7 @@ function HelpModal({ onClose }: { onClose: () => void }) {
         <div className="flex justify-between items-start p-8 pb-4 shrink-0">
           <div className="space-y-1 text-left">
             <h2 className="text-xl font-black uppercase tracking-tighter flex items-center gap-2"><HelpCircle className="w-5 h-5 text-accent" /> How It Works</h2>
-            <p className="text-[10px] text-label font-bold uppercase tracking-widest">Aether_Core · Quick Guide</p>
+            <p className="text-[11px] text-label font-bold uppercase tracking-widest">Aether_Core · Quick Guide</p>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-white/5 rounded-lg text-label hover:text-white transition-all">
             <X className="w-5 h-5" />
@@ -3107,7 +3150,7 @@ function HelpModal({ onClose }: { onClose: () => void }) {
           <section className="space-y-2">
             <H>What this is</H>
             <p>Aether_Core is a <span className="text-text-main">workshop</span>, not a chatbot. You collaborate step-by-step with an AI to build a complete, copy-paste-ready <span className="text-text-main">story package</span> for the ISK0 platform — using the USCS v6.1 framework under the hood. The AI is a co-author and architect; it never plays the story itself.</p>
-            <p>As you finish each piece (plot card, character sheets, guidelines, etc.), the app captures it into a structured package and tracks its token budget. When you're done, <span className="text-text-main">Export_Core</span> assembles everything into one clean <code className="bg-black/30 px-1 rounded text-[11px]">.txt</code> file.</p>
+            <p>As you finish each piece (plot card, character sheets, guidelines, etc.), the app captures it into a structured package and tracks its token budget. When you're done, <span className="text-text-main">Export_Core</span> assembles everything into one clean <code className="bg-black/30 px-1 rounded text-[12px]">.txt</code> file.</p>
           </section>
 
           <section className="space-y-2">
@@ -3144,29 +3187,29 @@ function HelpModal({ onClose }: { onClose: () => void }) {
               <li>• <span className="text-text-main">Local Ollama</span> — runs models on your own machine, fully free and offline.</li>
             </ul>
             <p>For the four cloud options you need an <span className="text-text-main">API key</span> — a password-like string that lets this app use your account. You paste it into Settings; it stays on your machine and is sent only to your chosen provider.</p>
-            <p className="text-[11px] text-text-dim"><span className="text-text-main">Which model?</span> If a provider offers several, the app pre-selects a sensible default and you can switch in Settings → Target_Model. For most stories a mid-tier model (e.g. <span className="text-text-main">Mistral Medium 3.5</span>, <span className="text-text-main">Gemini 2.5 Flash</span>) hits the sweet spot of quality, speed and cost; reach for a flagship (Claude, Mistral Large, GPT-4o) only if you want the richest prose and don't mind paying.</p>
+            <p className="text-[12px] text-text-dim"><span className="text-text-main">Which model?</span> If a provider offers several, the app pre-selects a sensible default and you can switch in Settings → Target_Model. For most stories a mid-tier model (e.g. <span className="text-text-main">Mistral Medium 3.5</span>, <span className="text-text-main">Gemini 2.5 Flash</span>) hits the sweet spot of quality, speed and cost; reach for a flagship (Claude, Mistral Large, GPT-4o) only if you want the richest prose and don't mind paying.</p>
           </section>
 
           <section className="space-y-2">
             <H>Getting an API key</H>
             <div className="p-3 rounded-xl border border-border bg-bg/50 space-y-1">
               <p className="text-text-main font-bold">Google Gemini (free tier)</p>
-              <p>Go to <Link href="https://aistudio.google.com/apikey">aistudio.google.com/apikey</Link>, sign in with a Google account, click <span className="text-text-main">Create API key</span>. Copy the key (starts with <code className="bg-black/30 px-1 rounded text-[11px]">AIza…</code>) into Settings → Gemini.</p>
+              <p>Go to <Link href="https://aistudio.google.com/apikey">aistudio.google.com/apikey</Link>, sign in with a Google account, click <span className="text-text-main">Create API key</span>. Copy the key (starts with <code className="bg-black/30 px-1 rounded text-[12px]">AIza…</code>) into Settings → Gemini.</p>
             </div>
             <div className="p-3 rounded-xl border border-border bg-bg/50 space-y-1">
               <p className="text-text-main font-bold">Anthropic Claude (paid)</p>
-              <p>Go to <Link href="https://console.anthropic.com/settings/keys">console.anthropic.com</Link>, create an account, add a little credit (about $5 minimum), then create a key (starts with <code className="bg-black/30 px-1 rounded text-[11px]">sk-ant-…</code>). Without credit, Claude returns errors.</p>
+              <p>Go to <Link href="https://console.anthropic.com/settings/keys">console.anthropic.com</Link>, create an account, add a little credit (about $5 minimum), then create a key (starts with <code className="bg-black/30 px-1 rounded text-[12px]">sk-ant-…</code>). Without credit, Claude returns errors.</p>
             </div>
             <div className="p-3 rounded-xl border border-border bg-bg/50 space-y-1">
               <p className="text-text-main font-bold">Mistral AI (free tier)</p>
-              <p>Go to <Link href="https://console.mistral.ai/api-keys">console.mistral.ai/api-keys</Link>, create an account, and on the free <span className="text-text-main">Experiment</span> plan (you may need to verify a phone number) click <span className="text-text-main">Create new key</span>. Copy it (a plain random string, no special prefix) into Settings → Mistral. The default <code className="bg-black/30 px-1 rounded text-[11px]">mistral-medium-latest</code> works well here; the free tier is rate-limited but costs nothing.</p>
+              <p>Go to <Link href="https://console.mistral.ai/api-keys">console.mistral.ai/api-keys</Link>, create an account, and on the free <span className="text-text-main">Experiment</span> plan (you may need to verify a phone number) click <span className="text-text-main">Create new key</span>. Copy it (a plain random string, no special prefix) into Settings → Mistral. The default <code className="bg-black/30 px-1 rounded text-[12px]">mistral-medium-latest</code> works well here; the free tier is rate-limited but costs nothing.</p>
             </div>
             <div className="p-3 rounded-xl border border-border bg-bg/50 space-y-1">
               <p className="text-text-main font-bold">OpenRouter (one key, many models)</p>
-              <p>Go to <Link href="https://openrouter.ai/keys">openrouter.ai/keys</Link>, sign in, create a key (starts with <code className="bg-black/30 px-1 rounded text-[11px]">sk-or-v1-…</code>). Models tagged <span className="text-[#10b981] font-bold">:free</span> cost nothing (they're rate-limited); paid models work too if you add credit. Tip: use the ⭐ to favourite the models you like so you don't scroll the 300+ list.</p>
+              <p>Go to <Link href="https://openrouter.ai/keys">openrouter.ai/keys</Link>, sign in, create a key (starts with <code className="bg-black/30 px-1 rounded text-[12px]">sk-or-v1-…</code>). Models tagged <span className="text-[#10b981] font-bold">:free</span> cost nothing (they're rate-limited); paid models work too if you add credit. Tip: use the ⭐ to favourite the models you like so you don't scroll the 300+ list.</p>
               <p className="mt-1.5 p-2 rounded-lg bg-[#10b981]/10 border border-[#10b981]/25 text-[#a7f3d0]">💡 <span className="font-bold">Hidden perk:</span> a <span className="font-bold">one-time</span> $10 of credit raises your <span className="font-bold">free</span> daily allowance from ~50 to ~1,000 requests/day — and it stays raised <span className="italic">permanently</span>, even if your balance later runs down to $0. You still pay nothing for <span className="text-[#10b981] font-bold">:free</span> models; the credit just unlocks the bigger free quota and makes them far less likely to bounce you with a rate-limit. Great if you keep hitting "out of free allocation."</p>
             </div>
-            <p className="text-[11px] text-text-dim">A key is like a password to your own account — don't share it. If one leaks, delete it on the provider's site and make a new one.</p>
+            <p className="text-[12px] text-text-dim">A key is like a password to your own account — don't share it. If one leaks, delete it on the provider's site and make a new one.</p>
           </section>
 
           <section className="space-y-2">
@@ -3177,33 +3220,33 @@ function HelpModal({ onClose }: { onClose: () => void }) {
               <p className="text-text-main font-bold">A. On this website, using your own machine (easiest)</p>
               <p>Keep using the hosted site, but let it talk to the Ollama on <span className="text-text-main">your</span> computer — your hardware does the work, your story text never passes through the server, and no API key is needed.</p>
               <ol className="space-y-1.5 pl-1 list-decimal list-inside marker:text-accent">
-                <li>Install <Link href="https://ollama.com">Ollama</Link> and pull <span className="italic">any</span> model you like — e.g. <code className="bg-black/30 px-1 rounded text-[11px]">ollama pull llama3.1</code> (or qwen2.5, mistral, gemma…). Anything you install shows up in the app; this is just an example.</li>
-                <li>Let this site reach Ollama by setting <code className="bg-black/30 px-1 rounded text-[11px]">OLLAMA_ORIGINS</code> to this site's address — otherwise the browser blocks the connection:
+                <li>Install <Link href="https://ollama.com">Ollama</Link> and pull <span className="italic">any</span> model you like — e.g. <code className="bg-black/30 px-1 rounded text-[12px]">ollama pull llama3.1</code> (or qwen2.5, mistral, gemma…). Anything you install shows up in the app; this is just an example.</li>
+                <li>Let this site reach Ollama by setting <code className="bg-black/30 px-1 rounded text-[12px]">OLLAMA_ORIGINS</code> to this site's address — otherwise the browser blocks the connection:
                   <div className="mt-1 space-y-1">
                     <p className="text-text-dim">macOS / Linux:</p>
-                    <code className="block bg-black/30 px-2 py-1 rounded text-[10px] break-all">OLLAMA_ORIGINS="{window.location.origin}" ollama serve</code>
+                    <code className="block bg-black/30 px-2 py-1 rounded text-[11px] break-all">OLLAMA_ORIGINS="{window.location.origin}" ollama serve</code>
                     <p className="text-text-dim">Windows (Ollama lives in the system tray) — set it, then quit &amp; reopen Ollama:</p>
-                    <code className="block bg-black/30 px-2 py-1 rounded text-[10px] break-all">setx OLLAMA_ORIGINS "{window.location.origin}"</code>
+                    <code className="block bg-black/30 px-2 py-1 rounded text-[11px] break-all">setx OLLAMA_ORIGINS "{window.location.origin}"</code>
                   </div>
                 </li>
                 <li>In <span className="text-text-main">Settings → Ollama</span>, turn on <span className="text-text-main">"Use my own machine"</span>. Your installed models appear — then chat as normal.</li>
               </ol>
-              <p className="text-text-dim">Allowing several sites/apps at once? Make <code className="bg-black/30 px-1 rounded text-[11px]">OLLAMA_ORIGINS</code> a comma-separated list — e.g. <code className="bg-black/30 px-1 rounded text-[11px] break-all">{window.location.origin},http://localhost:3010</code> — or use <code className="bg-black/30 px-1 rounded text-[11px]">*</code> to allow any site (handy, but less safe).</p>
+              <p className="text-text-dim">Allowing several sites/apps at once? Make <code className="bg-black/30 px-1 rounded text-[12px]">OLLAMA_ORIGINS</code> a comma-separated list — e.g. <code className="bg-black/30 px-1 rounded text-[12px] break-all">{window.location.origin},http://localhost:3010</code> — or use <code className="bg-black/30 px-1 rounded text-[12px]">*</code> to allow any site (handy, but less safe).</p>
             </div>
 
             <div className="p-3 rounded-xl border border-border bg-bg/50 space-y-1.5">
               <p className="text-text-main font-bold">B. Self-host the whole app (server-side Ollama)</p>
               <p>Run your own copy of Aether with Ollama beside it — the app's server makes the call. A bit more setup, but everything stays on one machine.</p>
               <ol className="space-y-1.5 pl-1 list-decimal list-inside marker:text-accent">
-                <li>Get the code from <Link href="https://github.com/wlkosonen/ISK02">GitHub</Link> (green <span className="text-text-main">Code</span> → <span className="text-text-main">Download ZIP</span>, or <code className="bg-black/30 px-1 rounded text-[11px]">git clone</code>).</li>
-                <li>Install <Link href="https://www.docker.com/products/docker-desktop/">Docker Desktop</Link>, run <code className="bg-black/30 px-1 rounded text-[11px]">docker compose up --build</code>, and open <code className="bg-black/30 px-1 rounded text-[11px]">http://localhost:3010</code>.</li>
-                <li>Install <Link href="https://ollama.com">Ollama</Link>, pull a model (e.g. <code className="bg-black/30 px-1 rounded text-[11px]">ollama pull llama3.1</code>), and start it so the container can reach it: <code className="bg-black/30 px-1 rounded text-[11px]">OLLAMA_HOST=0.0.0.0 ollama serve</code>.</li>
-                <li>Put <code className="bg-black/30 px-1 rounded text-[11px]">OLLAMA_BASE_URL=http://host.docker.internal:11434</code> in a local <code className="bg-black/30 px-1 rounded text-[11px]">.env</code> (empty by default), then pick <span className="text-text-main">Local Ollama</span> in Settings — it auto-detects installed models.</li>
+                <li>Get the code from <Link href="https://github.com/wlkosonen/ISK02">GitHub</Link> (green <span className="text-text-main">Code</span> → <span className="text-text-main">Download ZIP</span>, or <code className="bg-black/30 px-1 rounded text-[12px]">git clone</code>).</li>
+                <li>Install <Link href="https://www.docker.com/products/docker-desktop/">Docker Desktop</Link>, run <code className="bg-black/30 px-1 rounded text-[12px]">docker compose up --build</code>, and open <code className="bg-black/30 px-1 rounded text-[12px]">http://localhost:3010</code>.</li>
+                <li>Install <Link href="https://ollama.com">Ollama</Link>, pull a model (e.g. <code className="bg-black/30 px-1 rounded text-[12px]">ollama pull llama3.1</code>), and start it so the container can reach it: <code className="bg-black/30 px-1 rounded text-[12px]">OLLAMA_HOST=0.0.0.0 ollama serve</code>.</li>
+                <li>Put <code className="bg-black/30 px-1 rounded text-[12px]">OLLAMA_BASE_URL=http://host.docker.internal:11434</code> in a local <code className="bg-black/30 px-1 rounded text-[12px]">.env</code> (empty by default), then pick <span className="text-text-main">Local Ollama</span> in Settings — it auto-detects installed models.</li>
               </ol>
             </div>
 
-            <p className="text-[11px] text-text-dim">Full self-host notes are in the GitHub <Link href="https://github.com/wlkosonen/ISK02#run-with-docker-self-hosting">README</Link>. Local models are smaller than the big cloud ones, so quality varies — but it's free and stays on your machine.</p>
-            <p className="p-2.5 rounded-lg bg-[#fbbf24]/10 border border-[#fbbf24]/25 text-[#fde68a] text-[11px]">💡 <span className="font-bold">Tip for local models:</span> lower the <span className="text-text-main">Temperature</span> to around <span className="font-bold">0.6</span> (in Settings). Smaller models can ramble or break the <span className="text-text-main">capture formatting</span> at the default 1.0, which stops finished blocks from saving. Reasoning models (qwen3, deepseek-r1…) are handled automatically — the app tells them to answer directly.</p>
+            <p className="text-[12px] text-text-dim">Full self-host notes are in the GitHub <Link href="https://github.com/wlkosonen/ISK02#run-with-docker-self-hosting">README</Link>. Local models are smaller than the big cloud ones, so quality varies — but it's free and stays on your machine.</p>
+            <p className="p-2.5 rounded-lg bg-[#fbbf24]/10 border border-[#fbbf24]/25 text-[#fde68a] text-[12px]">💡 <span className="font-bold">Tip for local models:</span> lower the <span className="text-text-main">Temperature</span> to around <span className="font-bold">0.6</span> (in Settings). Smaller models can ramble or break the <span className="text-text-main">capture formatting</span> at the default 1.0, which stops finished blocks from saving. Reasoning models (qwen3, deepseek-r1…) are handled automatically — the app tells them to answer directly.</p>
           </section>
 
           <section className="space-y-2">
@@ -3213,7 +3256,7 @@ function HelpModal({ onClose }: { onClose: () => void }) {
               <li>• <span className="text-text-main">Token Budget</span> (Concept step) — tell the AI how big the final package should be; the gauge in the left panel tracks it.</li>
               <li>• <span className="text-text-main">LOCK IN</span> — when the AI marks a step complete, the top-right button pulses; click it (or the chat banner) to advance when you're ready.</li>
               <li>• <span className="text-text-main">Snapshot</span> saves a readable .txt backup (chat included); <span className="text-text-main">Export_Core</span> saves just the clean deliverables.</li>
-              <li>• <span className="text-text-main">Save / Load Workspace</span> — a portable <code className="bg-black/30 px-1 rounded text-[11px]">.aether.json</code> file of your <em>entire</em> project (settings, deliverables &amp; chat). Reload it later or on another machine to pick up exactly where you left off. Your API keys are never written into the file — you supply them wherever you load it.</li>
+              <li>• <span className="text-text-main">Save / Load Workspace</span> — a portable <code className="bg-black/30 px-1 rounded text-[12px]">.aether.json</code> file of your <em>entire</em> project (settings, deliverables &amp; chat). Reload it later or on another machine to pick up exactly where you left off. Your API keys are never written into the file — you supply them wherever you load it.</li>
             </ul>
           </section>
 
@@ -3262,7 +3305,7 @@ function CopyButton({ text, label = "Copy", title, variant = "icon" }: { text: s
       <button
         onClick={doCopy}
         title={title || "Copy to clipboard"}
-        className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-border bg-bg hover:border-accent text-[10px] font-black uppercase tracking-widest text-text-muted hover:text-accent transition-all active:scale-95"
+        className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-border bg-bg hover:border-accent text-[11px] font-black uppercase tracking-widest text-text-muted hover:text-accent transition-all active:scale-95"
       >
         {copied ? <Check className="w-3 h-3 text-[#10b981]" /> : <Copy className="w-3 h-3" />}
         {copied ? "Copied" : label}
@@ -3305,6 +3348,13 @@ function StatusMonitor({ state, onTighten }: { state: StoryState; onTighten?: (p
   const tokRow = (key: string, label: string, content: string, cap: number | null, opts?: { sub?: string; type?: string; name?: string }) => {
     const t = content ? estimateTokens(content) : 0;
     const over = !!(cap && t > cap);
+    // Creator's custom compacting rule for this block (if any) — appended to the
+    // Tighten action so a tighten follows their shaping intent, not just the cap.
+    const crMap: Record<string, string> = {
+      PROMPT_PLOT: state.compactRules.promptPlot, GUIDELINES: state.compactRules.guidelines,
+      REMINDERS: state.compactRules.reminders, CHAR_DESC: state.compactRules.characters,
+    };
+    const crule = (opts?.type ? crMap[opts.type] || "" : "").trim();
     return (
       <div key={key}>
         <div className="flex items-center justify-between py-1">
@@ -3323,7 +3373,7 @@ function StatusMonitor({ state, onTighten }: { state: StoryState; onTighten?: (p
         </div>
         {over && onTighten && opts?.type && (
           <button
-            onClick={() => onTighten(`[WORKSHOP ACTION — TIGHTEN TO CAP] "${label}" is over its §21 cap (~${fmtN(t)} tokens vs the ${fmtN(cap!)} limit). Compress it to AT OR UNDER ${fmtN(cap!)} tokens without losing essential meaning — cut redundancy and filler, tighten the prose, drop the lowest-value detail, but keep every required section. Re-emit the FULL tightened block wrapped in <<<USCS_BLOCK ${opts.name ? `${opts.type}: ${opts.name}` : opts.type}>>> … <<<END USCS_BLOCK>>>; keep only a one-line note in chat.`)}
+            onClick={() => onTighten(`[WORKSHOP ACTION — TIGHTEN TO CAP] "${label}" is over its §21 cap (~${fmtN(t)} tokens vs the ${fmtN(cap!)} limit). Compress it to AT OR UNDER ${fmtN(cap!)} tokens without losing essential meaning — cut redundancy and filler, tighten the prose, drop the lowest-value detail, but keep every required section.${crule ? ` Follow my custom compacting rules for this block: ${crule}` : ""} Re-emit the FULL tightened block wrapped in <<<USCS_BLOCK ${opts.name ? `${opts.type}: ${opts.name}` : opts.type}>>> … <<<END USCS_BLOCK>>>; keep only a one-line note in chat.`)}
             className="w-full mb-1.5 py-1 rounded bg-[#fbbf24]/10 border border-[#fbbf24]/30 text-[#fbbf24] text-[9px] font-black uppercase tracking-widest hover:bg-[#fbbf24]/20 transition-colors animate-pulse"
           >
             ⚠ Tighten to {fmtN(cap!)} →
@@ -3358,11 +3408,11 @@ function StatusMonitor({ state, onTighten }: { state: StoryState; onTighten?: (p
   const dm = state.deliverables.dmConfig;
 
   return (
-    <div className="space-y-3 text-[11px]">
+    <div className="space-y-3 text-[12px]">
       {/* Header */}
       <div className="flex items-center gap-2">
         <Zap className="w-3.5 h-3.5 text-accent" />
-        <span className="text-[11px] font-black uppercase tracking-wider text-accent">{showStory ? "Token Summary" : "Dungeon Mind Config"}</span>
+        <span className="text-[12px] font-black uppercase tracking-wider text-accent">{showStory ? "Token Summary" : "Dungeon Mind Config"}</span>
       </div>
 
       {/* Budget gauge — story package only (the DM config isn't part of the 20k ceiling) */}
@@ -3386,24 +3436,24 @@ function StatusMonitor({ state, onTighten }: { state: StoryState; onTighten?: (p
           <p className="text-[9px] font-black uppercase tracking-widest text-accent/70 mb-0.5">Characters</p>
           {tokRow("persona", "Player Persona", state.deliverables.playerPersona, 500, { type: "PLAYER_PERSONA" })}
           {state.deliverables.characters.map((c) => tokRow(`c-${c.name}`, c.name, c.desc, state.customLimits.characters ?? SECTION_CAPS.characters, { sub: c.card ? "+card" : undefined, type: "CHAR_DESC", name: c.name }))}
-          {state.deliverables.characters.length === 0 && <p className="text-[10px] text-text-dim italic py-0.5">No cast yet</p>}
+          {state.deliverables.characters.length === 0 && <p className="text-[11px] text-text-dim italic py-0.5">No cast yet</p>}
         </div>
 
         {/* First Messages — count toward the cap on ISK0 */}
         <div className="space-y-0.5">
           <p className="text-[9px] font-black uppercase tracking-widest text-accent/70 mb-0.5">First Messages <span className="text-text-dim font-medium normal-case tracking-normal">(Scenarios)</span></p>
           {state.deliverables.firstMessages.length === 0
-            ? <p className="text-[10px] text-text-dim italic py-0.5">None drafted yet</p>
+            ? <p className="text-[11px] text-text-dim italic py-0.5">None drafted yet</p>
             : state.deliverables.firstMessages.map((f) => tokRow(`fm-${f.label}`, `First Message ${f.label}`, f.content, null))}
         </div>
 
         {/* Estimated total */}
         <div className="flex items-center justify-between pt-2 border-t border-border/60">
           <span className="text-xs font-black uppercase tracking-wide text-text-main">Estimated Total</span>
-          <span className="font-mono text-xs font-black" style={{ color: barColor }}>{fmtN(estTokens)} <span className="text-text-muted font-normal text-[10px]">/ {fmtK(state.tokenBudgetMax)}</span></span>
+          <span className="font-mono text-xs font-black" style={{ color: barColor }}>{fmtN(estTokens)} <span className="text-text-muted font-normal text-[11px]">/ {fmtK(state.tokenBudgetMax)}</span></span>
         </div>
         {overBudget && (
-          <div className="text-[10px] text-[#fbbf24] bg-[#fbbf24]/10 border border-[#fbbf24]/25 rounded-lg px-2.5 py-1.5 leading-snug">
+          <div className="text-[11px] text-[#fbbf24] bg-[#fbbf24]/10 border border-[#fbbf24]/25 rounded-lg px-2.5 py-1.5 leading-snug">
             Over your {fmtK(state.tokenBudgetMax)} target. Hard platform ceiling is 20k — trim over-cap blocks.
           </div>
         )}
@@ -3428,7 +3478,7 @@ function StatusMonitor({ state, onTighten }: { state: StoryState; onTighten?: (p
               <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dm.name ? "bg-[#10b981]" : "bg-text-dim/40"}`} />
               <span className={`truncate ${dm.name ? "text-text-main" : "text-text-muted"}`}>Name &amp; Model</span>
             </span>
-            <span className="font-mono shrink-0 text-text-dim text-[10px] truncate max-w-[55%] text-right">{dm.name ? `${dm.name}${dm.model ? ` · ${dm.model}` : ""}` : "—"}</span>
+            <span className="font-mono shrink-0 text-text-dim text-[11px] truncate max-w-[55%] text-right">{dm.name ? `${dm.name}${dm.model ? ` · ${dm.model}` : ""}` : "—"}</span>
           </div>
         </div>
        )}
@@ -3555,7 +3605,7 @@ function CardPreview({
       {complianceWarnings.length > 0 && (
         <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-[#fbbf24]/10 border border-[#fbbf24]/30 text-[#fbbf24]">
           <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-          <p className="text-[10px] leading-relaxed">
+          <p className="text-[11px] leading-relaxed">
             <span className="font-black uppercase tracking-wider">Won't render on ISK0:</span>{" "}
             this card uses {complianceWarnings.join(" and ")} — ISK0 strips these, so the section accents will vanish on the platform. Ask the collaborator to re-skin it using a full <span className="font-mono">border:2px solid #hex</span> instead.
           </p>
@@ -3615,7 +3665,7 @@ function LockedStepsSummary({ state }: { state: StoryState }) {
         <div className="flex items-center justify-between border-b border-border/40 pb-4">
           <div className="flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4 text-accent animate-pulse" />
-            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-accent">Aether_Integration_Matrix</span>
+            <span className="text-[11px] font-black uppercase tracking-[0.2em] text-accent">Aether_Integration_Matrix</span>
           </div>
           <span className="inline-flex items-center gap-1 text-[8px] font-mono font-bold uppercase text-[#10b981] bg-[#10b981]/10 px-2.5 py-1 rounded-full border border-[#10b981]/20">
             <span className="w-1.5 h-1.5 rounded-full bg-[#10b981] animate-pulse" />
@@ -3701,7 +3751,7 @@ function LockedStepsSummary({ state }: { state: StoryState }) {
             {state.concept && (
               <div className="p-4 rounded-xl bg-bg/20 border border-border/40 space-y-2">
                 <span className="text-[8px] font-mono font-black text-text-dim uppercase tracking-widest block">Ingested_Concept_Matrix</span>
-                <p className="text-[10px] leading-relaxed text-text-muted line-clamp-2 italic">
+                <p className="text-[11px] leading-relaxed text-text-muted line-clamp-2 italic">
                   "{state.concept}"
                 </p>
               </div>
@@ -3711,7 +3761,7 @@ function LockedStepsSummary({ state }: { state: StoryState }) {
                 <span className="text-[8px] font-mono font-black text-text-dim uppercase tracking-widest block">Active_Grounding_Rulesets</span>
                 <div className="space-y-1">
                   {parsedRules.slice(0, 2).map((rule, idx) => (
-                    <div key={idx} className="flex gap-1.5 items-center text-[10px]">
+                    <div key={idx} className="flex gap-1.5 items-center text-[11px]">
                       <span className={`text-[6px] font-black px-1 rounded uppercase shrink-0 ${
                         rule.type === 'DO_NOT' ? 'bg-red-400/10 text-red-400' : 'bg-emerald-400/10 text-emerald-400'
                       }`}>
@@ -3750,7 +3800,7 @@ function renderDMStep(
     <div className="space-y-8 py-12 max-w-3xl mx-auto">
       <div className="space-y-3">
         <div className="flex items-center gap-2 text-accent">
-          <span className="text-[10px] font-black uppercase tracking-[0.3em]">Dungeon Mind · §27</span>
+          <span className="text-[11px] font-black uppercase tracking-[0.3em]">Dungeon Mind · §27</span>
         </div>
         <h2 className="text-4xl font-black tracking-tighter uppercase flex items-center gap-3">{icon} {title}</h2>
         <p className="text-text-muted leading-relaxed text-sm">{blurb}</p>
@@ -3765,16 +3815,16 @@ function renderDMStep(
     value ? (
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[10px] font-black uppercase tracking-widest text-accent flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5" /> Captured</span>
+          <span className="text-[11px] font-black uppercase tracking-widest text-accent flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5" /> Captured</span>
           <div className="flex items-center gap-2.5">
             {cap && <span className={`text-[9px] font-mono uppercase tracking-widest ${cap.used > cap.max ? "text-[#f43f5e] font-bold" : "text-text-dim"}`}>{cap.used.toLocaleString()} / {cap.max.toLocaleString()} {cap.unit}{cap.used > cap.max ? " · over" : ""}</span>}
             <CopyButton variant="button" text={value} title="Copy this field to clipboard" />
           </div>
         </div>
-        <pre className="text-[11px] font-mono leading-relaxed text-text-muted bg-header/20 border border-border rounded-2xl p-5 whitespace-pre-wrap max-h-[420px] overflow-y-auto custom-scrollbar">{value}</pre>
+        <pre className="text-[12px] font-mono leading-relaxed text-text-muted bg-header/20 border border-border rounded-2xl p-5 whitespace-pre-wrap max-h-[420px] overflow-y-auto custom-scrollbar">{value}</pre>
       </div>
     ) : (
-      <div className="rounded-2xl border border-dashed border-border p-6 text-center text-[11px] font-mono uppercase tracking-widest text-text-dim">{empty}</div>
+      <div className="rounded-2xl border border-dashed border-border p-6 text-center text-[12px] font-mono uppercase tracking-widest text-text-dim">{empty}</div>
     )
   );
 
@@ -3782,7 +3832,7 @@ function renderDMStep(
     <button
       onClick={() => askAssistant(prompt)}
       disabled={loading}
-      className="w-full py-3 rounded-xl bg-accent/10 hover:bg-accent/20 border border-accent/30 text-accent text-[11px] font-black uppercase tracking-widest transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+      className="w-full py-3 rounded-xl bg-accent/10 hover:bg-accent/20 border border-accent/30 text-accent text-[12px] font-black uppercase tracking-widest transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
     >
       <Sparkles className="w-3.5 h-3.5" /> {label}
     </button>
@@ -3793,7 +3843,7 @@ function renderDMStep(
       return (
         <Shell icon={<Cpu className="w-9 h-9 text-accent" />} title="DM Concept & Scope" blurb={<>A Dungeon Mind is a game-mechanics agent — it handles dice, stats, inventory, skills and rule enforcement so the story AI can focus on narrative. First we lock the scope: genre, which mechanics matter, how death works, the dice system, and the complexity level.</>}>
           <div className="rounded-2xl border border-border bg-card/40 p-5 space-y-2 text-[12px] text-text-muted leading-relaxed">
-            <p className="text-[10px] font-black uppercase tracking-widest text-text-dim mb-1">We'll decide together:</p>
+            <p className="text-[11px] font-black uppercase tracking-widest text-text-dim mb-1">We'll decide together:</p>
             <ul className="space-y-1.5 list-disc pl-5">
               <li>Genre of the story (drives the recommended stat schema)</li>
               <li>Essential mechanics — combat? skills? inventory? survival?</li>
@@ -3862,7 +3912,7 @@ function renderDMStep(
               </div>
             </div>
           ) : (
-            <div className="rounded-2xl border border-dashed border-border p-6 text-center text-[11px] font-mono uppercase tracking-widest text-text-dim">No name/model captured yet — propose them above.</div>
+            <div className="rounded-2xl border border-dashed border-border p-6 text-center text-[12px] font-mono uppercase tracking-widest text-text-dim">No name/model captured yet — propose them above.</div>
           )}
         </Shell>
       );
@@ -3894,11 +3944,11 @@ function renderDMStep(
           <button
             onClick={onExportDM}
             disabled={done === 0}
-            className="w-full py-3.5 rounded-xl bg-accent/15 hover:bg-accent/25 border border-accent/30 text-accent text-[11px] font-black uppercase tracking-widest transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            className="w-full py-3.5 rounded-xl bg-accent/15 hover:bg-accent/25 border border-accent/30 text-accent text-[12px] font-black uppercase tracking-widest transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
           >
             <Download className="w-4 h-4" /> Export DM Config (.txt)
           </button>
-          <p className="text-[10px] text-text-dim leading-relaxed text-center">Paste each field into the matching slot in ISK0's Dungeon Mind editor (Creation tab → Dungeon Minds). The DM attaches to a storyline as Required or Optional.</p>
+          <p className="text-[11px] text-text-dim leading-relaxed text-center">Paste each field into the matching slot in ISK0's Dungeon Mind editor (Creation tab → Dungeon Minds). The DM attaches to a storyline as Required or Optional.</p>
         </Shell>
       );
     }
@@ -3931,7 +3981,7 @@ function renderCombinedReview(
   return (
     <div className="space-y-8 py-12 max-w-3xl mx-auto">
       <div className="space-y-3">
-        <span className="text-[10px] font-black uppercase tracking-[0.3em] text-accent">Final · Story + Dungeon Mind</span>
+        <span className="text-[11px] font-black uppercase tracking-[0.3em] text-accent">Final · Story + Dungeon Mind</span>
         <h2 className="text-4xl font-black tracking-tighter uppercase flex items-center gap-3"><CheckCircle2 className="w-9 h-9 text-accent" /> Story + DM Review</h2>
         <p className="text-text-muted leading-relaxed text-sm">A last coherence pass: confirm the story and the Dungeon Mind config line up (USCS §27.5) before you export them. They paste into two different ISK0 editors — the story into a storyline, the DM into the Dungeon Minds tab.</p>
       </div>
@@ -3964,7 +4014,7 @@ function renderCombinedReview(
           askAssistant(`[WORKSHOP ACTION — STORY + DM COHERENCE REVIEW] We've built both the story package and the Dungeon Mind config. The ACTUAL captured artifacts are below — review the real text, do NOT assume content or ask me to paste anything.\n\n${artifacts}\n\nDo a final coherence pass per USCS §27.5 AGAINST THE ARTIFACTS ABOVE: (1) confirm the Guidelines contain a DUNGEON MIND ACTIVE rule and don't duplicate stat-tracking the DM owns; (2) confirm the Prompt Plot doesn't restate game mechanics the DM handles; (3) confirm any module/scenario triggers reference stat names that ACTUALLY EXIST in the DM Stat Schema above; (4) confirm the Player Persona notes which stats the player assigns. Quote the specific lines you are judging. List anything misaligned, and for each fix re-emit the affected block in its capture sentinel (story blocks use their normal sentinels; DM fields use DM_* sentinels). If everything lines up, say so clearly.`);
         }}
         disabled={loading}
-        className="w-full py-3 rounded-xl bg-accent/10 hover:bg-accent/20 border border-accent/30 text-accent text-[11px] font-black uppercase tracking-widest transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+        className="w-full py-3 rounded-xl bg-accent/10 hover:bg-accent/20 border border-accent/30 text-accent text-[12px] font-black uppercase tracking-widest transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
       >
         <Sparkles className="w-3.5 h-3.5" /> Run the coherence review
       </button>
@@ -3972,18 +4022,297 @@ function renderCombinedReview(
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <button
           onClick={onExportStory}
-          className="py-3 rounded-xl bg-border/40 hover:bg-border/60 border border-border text-[11px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2"
+          className="py-3 rounded-xl bg-border/40 hover:bg-border/60 border border-border text-[12px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2"
         >
           <Download className="w-4 h-4" /> Export Story (.txt)
         </button>
         <button
           onClick={onExportDM}
-          className="py-3 rounded-xl bg-accent/15 hover:bg-accent/25 border border-accent/30 text-accent text-[11px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2"
+          className="py-3 rounded-xl bg-accent/15 hover:bg-accent/25 border border-accent/30 text-accent text-[12px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2"
         >
           <Download className="w-4 h-4" /> Export DM Config (.txt)
         </button>
       </div>
     </div>
+  );
+}
+
+// --- Colour maths (shared by the Aether colour picker) ---
+// All hues are degrees 0–360; s/v/l are 0–1. hex is "#rrggbb". (Object-returning
+// hex parse, distinct from the tuple-returning hexToRgb used by recolorHtml.)
+function cpHexToRgb(hex: string): { r: number; g: number; b: number } {
+  let h = hex.replace(/^#/, "").trim();
+  if (h.length === 3) h = h.split("").map(c => c + c).join("");
+  const n = parseInt(h, 16);
+  if (h.length !== 6 || Number.isNaN(n)) return { r: 0, g: 0, b: 0 };
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+function rgbToHex(r: number, g: number, b: number): string {
+  const c = (v: number) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0");
+  return `#${c(r)}${c(g)}${c(b)}`;
+}
+function rgbToHsv(r: number, g: number, b: number): { h: number; s: number; v: number } {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+  let h = 0;
+  if (d !== 0) {
+    if (max === r) h = ((g - b) / d) % 6;
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h = h * 60;
+    if (h < 0) h += 360;
+  }
+  return { h, s: max === 0 ? 0 : d / max, v: max };
+}
+function hsvToRgb(h: number, s: number, v: number): { r: number; g: number; b: number } {
+  const c = v * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = v - c;
+  let r = 0, g = 0, b = 0;
+  if (h < 60) { r = c; g = x; }
+  else if (h < 120) { r = x; g = c; }
+  else if (h < 180) { g = c; b = x; }
+  else if (h < 240) { g = x; b = c; }
+  else if (h < 300) { r = x; b = c; }
+  else { r = c; b = x; }
+  return { r: (r + m) * 255, g: (g + m) * 255, b: (b + m) * 255 };
+}
+function rgbToHsl(r: number, g: number, b: number): { h: number; s: number; l: number } {
+  const hsv = rgbToHsv(r, g, b);
+  const l = hsv.v * (1 - hsv.s / 2);
+  const s = (l === 0 || l === 1) ? 0 : (hsv.v - l) / Math.min(l, 1 - l);
+  return { h: hsv.h, s, l };
+}
+function hslToRgb(h: number, s: number, l: number): { r: number; g: number; b: number } {
+  const v = l + s * Math.min(l, 1 - l);
+  const sv = v === 0 ? 0 : 2 * (1 - l / v);
+  return hsvToRgb(h, sv, v);
+}
+const hexToHsv = (hex: string) => { const { r, g, b } = cpHexToRgb(hex); return rgbToHsv(r, g, b); };
+
+type ColorModel = "RGB" | "HSL";
+
+// One labelled channel row: gradient track slider + numeric box. Module-level so
+// React keeps the <input>s mounted (an inline component would remount each
+// keystroke and steal focus from the number field).
+function PickerSlider({ label, value, max, track, onChange }: {
+  label: string; value: number; max: number; track: string; onChange: (v: number) => void;
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <span className="w-3 text-[12px] font-mono font-black text-text-dim">{label}</span>
+      <input
+        type="range" min={0} max={max} value={value}
+        onChange={e => onChange(Number(e.target.value))}
+        className="aether-range flex-1" style={{ background: track }}
+      />
+      <input
+        type="number" min={0} max={max} value={Math.round(value)}
+        onChange={e => onChange(Math.max(0, Math.min(max, Number(e.target.value) || 0)))}
+        className="w-14 bg-bg border border-border rounded-md px-2 py-1 text-[12px] font-mono text-center text-text-main focus:border-accent focus:outline-none"
+      />
+    </div>
+  );
+}
+
+// Aether-styled colour picker. Renders `children` as the trigger swatch; clicking
+// opens a centred modal (hue ring + saturation/value field + RGB/HSL sliders +
+// hex + eyedropper). Live-apply: every change calls onChange(hex) immediately.
+function ColorPicker({ value, onChange, children, title = "Color Picker", className = "" }: {
+  value: string;
+  onChange: (hex: string) => void;
+  children: React.ReactNode;
+  title?: string;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [model, setModel] = useState<ColorModel>("RGB");
+  const [hsv, setHsv] = useState(() => hexToHsv(value));
+  const [hexDraft, setHexDraft] = useState(value);
+  const wheelRef = useRef<HTMLDivElement>(null);
+  const squareRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<null | "ring" | "square">(null);
+  const hasEyeDropper = typeof window !== "undefined" && "EyeDropper" in window;
+
+  // Seed internal HSV from the prop only when opening — live-apply also pushes
+  // `value` back as we drag, so re-seeding mid-edit would lose hue when passing
+  // through gray/black (where hex carries no hue).
+  useEffect(() => {
+    if (open) { setHsv(hexToHsv(value)); setHexDraft(value); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  const commit = (next: { h: number; s: number; v: number }) => {
+    setHsv(next);
+    const { r, g, b } = hsvToRgb(next.h, next.s, next.v);
+    const hex = rgbToHex(r, g, b);
+    setHexDraft(hex);
+    onChange(hex);
+  };
+
+  const handleRing = (clientX: number, clientY: number) => {
+    const el = wheelRef.current; if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const dx = clientX - (rect.left + rect.width / 2);
+    const dy = clientY - (rect.top + rect.height / 2);
+    const angle = (Math.atan2(dx, -dy) * 180 / Math.PI + 360) % 360; // 0°=top, clockwise
+    commit({ h: angle, s: hsv.s, v: hsv.v });
+  };
+  const handleSquare = (clientX: number, clientY: number) => {
+    const el = squareRef.current; if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const x = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    const y = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
+    commit({ h: hsv.h, s: x, v: 1 - y });
+  };
+
+  const ringDown = (e: React.PointerEvent) => { e.currentTarget.setPointerCapture(e.pointerId); dragRef.current = "ring"; handleRing(e.clientX, e.clientY); };
+  const ringMove = (e: React.PointerEvent) => { if (dragRef.current === "ring") handleRing(e.clientX, e.clientY); };
+  const squareDown = (e: React.PointerEvent) => { e.currentTarget.setPointerCapture(e.pointerId); dragRef.current = "square"; handleSquare(e.clientX, e.clientY); };
+  const squareMove = (e: React.PointerEvent) => { if (dragRef.current === "square") handleSquare(e.clientX, e.clientY); };
+  const dragEnd = () => { dragRef.current = null; };
+
+  const rgb = hsvToRgb(hsv.h, hsv.s, hsv.v);
+  const R = Math.round(rgb.r), G = Math.round(rgb.g), B = Math.round(rgb.b);
+  const hsl = rgbToHsl(R, G, B);
+  const Hh = Math.round(hsl.h), Ss = Math.round(hsl.s * 100), Ll = Math.round(hsl.l * 100);
+
+  const setFromRgb = (r: number, g: number, b: number) => {
+    const next = rgbToHsv(r, g, b);
+    if (r === g && g === b) next.h = hsv.h; // keep hue for grays so the ring doesn't snap to red
+    commit(next);
+  };
+  const setFromHsl = (h: number, s: number, l: number) => {
+    const c = hslToRgb(h, s / 100, l / 100);
+    const next = rgbToHsv(c.r, c.g, c.b);
+    next.h = h; // preserve exact hue through achromatic L
+    commit(next);
+  };
+
+  const onHexInput = (v: string) => {
+    setHexDraft(v);
+    const m = v.trim().replace(/^#/, "");
+    if (/^[0-9a-fA-F]{6}$/.test(m)) { setHsv(hexToHsv("#" + m)); onChange("#" + m.toLowerCase()); }
+  };
+
+  const pickEye = async () => {
+    try {
+      const ed = new (window as unknown as { EyeDropper: new () => { open: () => Promise<{ sRGBHex: string }> } }).EyeDropper();
+      const res = await ed.open();
+      if (res?.sRGBHex) commit(hexToHsv(res.sRGBHex));
+    } catch { /* user dismissed the eyedropper */ }
+  };
+
+  const RING_OFFSET = 44;   // % from centre to the ring-band midline (handle)
+  const rad = hsv.h * Math.PI / 180;
+  const ringHandle = { left: `${50 + Math.sin(rad) * RING_OFFSET}%`, top: `${50 - Math.cos(rad) * RING_OFFSET}%` };
+
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)} className={`appearance-none border-0 bg-transparent p-0 text-left ${className}`}>
+        {children}
+      </button>
+      {open && createPortal(
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" onClick={() => setOpen(false)}>
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.15 }}
+            className="w-[340px] max-w-full bg-header border border-border rounded-2xl shadow-2xl overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* header */}
+            <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-card">
+              {hasEyeDropper ? (
+                <button type="button" onClick={pickEye} title="Pick a colour from the screen"
+                  className="p-1.5 rounded-lg text-text-dim hover:text-accent hover:bg-accent/10 transition-colors">
+                  <Pipette className="w-4 h-4" />
+                </button>
+              ) : <span className="w-7" />}
+              <span className="text-xs font-black uppercase tracking-[0.2em] text-text-main">{title}</span>
+              <div className="flex items-center gap-1">
+                <button type="button" onClick={() => setOpen(false)} title="Close"
+                  className="p-1.5 rounded-lg text-text-dim hover:text-red-400 hover:bg-red-500/10 transition-colors">
+                  <X className="w-4 h-4" />
+                </button>
+                <button type="button" onClick={() => setOpen(false)} title="Done"
+                  className="p-1.5 rounded-lg text-text-dim hover:text-accent hover:bg-accent/10 transition-colors">
+                  <Check className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-5 space-y-5">
+              {/* hue ring + saturation/value field */}
+              <div ref={wheelRef} className="relative mx-auto" style={{ width: 220, height: 220 }}>
+                <div
+                  className="absolute inset-0 rounded-full cursor-pointer"
+                  style={{ background: "conic-gradient(from 0deg, hsl(0 100% 50%), hsl(60 100% 50%), hsl(120 100% 50%), hsl(180 100% 50%), hsl(240 100% 50%), hsl(300 100% 50%), hsl(360 100% 50%))" }}
+                  onPointerDown={ringDown} onPointerMove={ringMove} onPointerUp={dragEnd}
+                />
+                <div className="absolute rounded-full bg-header flex items-center justify-center" style={{ inset: 24 }}>
+                  <div
+                    ref={squareRef}
+                    className="relative rounded-xl cursor-crosshair overflow-hidden border border-white/10"
+                    style={{ width: 116, height: 116, background: `linear-gradient(to top, #000, rgba(0,0,0,0)), linear-gradient(to right, #fff, rgba(255,255,255,0)), hsl(${hsv.h} 100% 50%)` }}
+                    onPointerDown={squareDown} onPointerMove={squareMove} onPointerUp={dragEnd}
+                  >
+                    <div className="absolute w-3.5 h-3.5 rounded-full border-2 border-white -translate-x-1/2 -translate-y-1/2 pointer-events-none"
+                      style={{ left: `${hsv.s * 100}%`, top: `${(1 - hsv.v) * 100}%`, boxShadow: "0 0 0 1px rgba(0,0,0,0.55)" }} />
+                  </div>
+                </div>
+                <div className="absolute w-4 h-4 rounded-full border-2 border-white -translate-x-1/2 -translate-y-1/2 pointer-events-none"
+                  style={{ left: ringHandle.left, top: ringHandle.top, boxShadow: "0 0 0 1px rgba(0,0,0,0.6)" }} />
+              </div>
+
+              {/* model selector */}
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-black uppercase tracking-widest text-label">Model</span>
+                <select value={model} onChange={e => setModel(e.target.value as ColorModel)}
+                  className="bg-card border border-border rounded-lg px-3 py-1.5 text-[12px] font-mono font-bold text-text-main focus:border-accent focus:outline-none cursor-pointer">
+                  <option value="RGB">RGB</option>
+                  <option value="HSL">HSL</option>
+                </select>
+              </div>
+
+              {/* channel sliders */}
+              <div className="space-y-3">
+                {model === "RGB" ? (
+                  <>
+                    <PickerSlider label="R" value={R} max={255} track={`linear-gradient(to right, rgb(0,${G},${B}), rgb(255,${G},${B}))`} onChange={v => setFromRgb(v, G, B)} />
+                    <PickerSlider label="G" value={G} max={255} track={`linear-gradient(to right, rgb(${R},0,${B}), rgb(${R},255,${B}))`} onChange={v => setFromRgb(R, v, B)} />
+                    <PickerSlider label="B" value={B} max={255} track={`linear-gradient(to right, rgb(${R},${G},0), rgb(${R},${G},255))`} onChange={v => setFromRgb(R, G, v)} />
+                  </>
+                ) : (
+                  <>
+                    <PickerSlider label="H" value={Hh} max={360} track="linear-gradient(to right, hsl(0 100% 50%), hsl(60 100% 50%), hsl(120 100% 50%), hsl(180 100% 50%), hsl(240 100% 50%), hsl(300 100% 50%), hsl(360 100% 50%))" onChange={v => setFromHsl(v, Ss, Ll)} />
+                    <PickerSlider label="S" value={Ss} max={100} track={`linear-gradient(to right, hsl(${Hh} 0% ${Ll}%), hsl(${Hh} 100% ${Ll}%))`} onChange={v => setFromHsl(Hh, v, Ll)} />
+                    <PickerSlider label="L" value={Ll} max={100} track={`linear-gradient(to right, #000, hsl(${Hh} ${Ss}% 50%), #fff)`} onChange={v => setFromHsl(Hh, Ss, v)} />
+                  </>
+                )}
+              </div>
+
+              {/* hex + live preview */}
+              <div className="flex items-center gap-3 pt-1">
+                <div className="w-10 h-10 rounded-lg border border-white/10 shadow-inner" style={{ backgroundColor: value }} />
+                <div className="flex-1">
+                  <label className="text-[8px] font-black uppercase tracking-widest text-label block mb-1">Hex</label>
+                  <input value={hexDraft} onChange={e => onHexInput(e.target.value)} spellCheck={false}
+                    className="w-full bg-bg border border-border rounded-md px-3 py-1.5 text-[12px] font-mono uppercase text-text-main focus:border-accent focus:outline-none" />
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        </div>,
+        document.body
+      )}
+    </>
   );
 }
 
@@ -4019,7 +4348,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                 <div className="p-4 bg-accent/10 rounded-xl group-hover:bg-accent/20 transition-colors">
                   <Shield className="w-8 h-8 text-accent" />
                 </div>
-                <div className="text-[10px] font-bold text-accent bg-accent/10 px-3 py-1 rounded border border-accent/20 uppercase tracking-[0.2em]">Safe for Work</div>
+                <div className="text-[11px] font-bold text-accent bg-accent/10 px-3 py-1 rounded border border-accent/20 uppercase tracking-[0.2em]">Safe for Work</div>
               </div>
               <h3 className="text-2xl font-bold mb-3 tracking-tight">MODE A — SFW</h3>
               <p className="text-text-muted text-sm leading-relaxed font-medium">No sexual content authored. Intimacy remains narrative. The story is a grounded human narrative suitable for general audiences.</p>
@@ -4035,7 +4364,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                 <div className="p-4 bg-red-500/10 rounded-xl group-hover:bg-red-500/20 transition-colors">
                   <Heart className="w-8 h-8 text-red-400" />
                 </div>
-                <div className="text-[10px] font-bold text-red-400 bg-red-400/10 px-3 py-1 rounded border border-red-400/20 uppercase tracking-[0.2em]">18+ Creator Content</div>
+                <div className="text-[11px] font-bold text-red-400 bg-red-400/10 px-3 py-1 rounded border border-red-400/20 uppercase tracking-[0.2em]">18+ Creator Content</div>
               </div>
               <h3 className="text-2xl font-bold mb-3 tracking-tight">MODE B — NSFW</h3>
               <p className="text-text-muted text-sm leading-relaxed font-medium">Designed to accommodate explicit content at player direction. Requires assignment of a Heat Level and strict adherence to guidelines.</p>
@@ -4096,7 +4425,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
           )}
 
           <div className="pt-12">
-            <p className="text-center text-[10px] uppercase tracking-[0.3em] font-black text-label mb-1">Output Track</p>
+            <p className="text-center text-[11px] uppercase tracking-[0.3em] font-black text-label mb-1">Output Track</p>
             <p className="text-center text-xs text-text-muted mb-4">What is this workshop producing? (This is communicated to the collaborator.)</p>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 max-w-3xl mx-auto">
               {([
@@ -4113,12 +4442,12 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                       : "bg-card border-border text-text-muted hover:border-text-muted"
                   }`}
                 >
-                  <div className="font-mono text-[11px] font-bold tracking-[0.15em] uppercase mb-1.5">{title}</div>
-                  <div className="text-[11px] leading-relaxed text-text-muted">{desc}</div>
+                  <div className="font-mono text-[12px] font-bold tracking-[0.15em] uppercase mb-1.5">{title}</div>
+                  <div className="text-[12px] leading-relaxed text-text-muted">{desc}</div>
                 </button>
               ))}
             </div>
-            <p className="text-center text-[10px] text-text-dim mt-3 max-w-xl mx-auto leading-relaxed">A Dungeon Mind is a separate game-mechanics agent on ISK0 — it handles dice, stat tracking, inventory and rule enforcement so the story AI focuses on narrative.</p>
+            <p className="text-center text-[11px] text-text-dim mt-3 max-w-xl mx-auto leading-relaxed">A Dungeon Mind is a separate game-mechanics agent on ISK0 — it handles dice, stat tracking, inventory and rule enforcement so the story AI focuses on narrative.</p>
           </div>
         </div>
       );
@@ -4134,7 +4463,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
           <div className="space-y-6">
             <div className="relative group">
               <div className="absolute -top-3 left-6 px-3 bg-bg border-x border-border">
-                <label className="text-[10px] uppercase tracking-[0.3em] font-black text-accent flex items-center gap-2">
+                <label className="text-[11px] uppercase tracking-[0.3em] font-black text-accent flex items-center gap-2">
                   <Terminal className="w-3 h-3" /> NARRATIVE_SEED
                 </label>
               </div>
@@ -4155,7 +4484,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
               </div>
               <div className="space-y-4 text-left flex-1">
                 <div>
-                  <p className="text-[10px] font-black text-accent uppercase tracking-[0.3em]">Architectural Note</p>
+                  <p className="text-[11px] font-black text-accent uppercase tracking-[0.3em]">Architectural Note</p>
                   <p className="text-sm text-text-muted italic leading-relaxed">
                     "Focus on what the player feels when they set the phone down. Is it a quiet ache? Primal power? A sense of dread? This becomes the emotional mandate."
                   </p>
@@ -4163,13 +4492,13 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                 <div className="flex gap-2">
                   <button 
                     onClick={() => askAssistant("Can you help me refine this concept and suggest some emotional hooks?")}
-                    className="px-4 py-2 bg-accent/10 border border-accent/20 text-accent rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-accent/20 transition-all"
+                    className="px-4 py-2 bg-accent/10 border border-accent/20 text-accent rounded-lg text-[11px] font-black uppercase tracking-widest hover:bg-accent/20 transition-all"
                   >
                     Help me Refine
                   </button>
                   <button
                     onClick={() => askAssistant("Suggest 3 distinctive isekai twists for this concept.")}
-                    className="px-4 py-2 bg-header border border-border text-text-muted rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-white/5 transition-all"
+                    className="px-4 py-2 bg-header border border-border text-text-muted rounded-lg text-[11px] font-black uppercase tracking-widest hover:bg-white/5 transition-all"
                   >
                     Suggest Twists
                   </button>
@@ -4181,10 +4510,10 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
             <div className="p-6 border border-border bg-card rounded-2xl space-y-5">
               <div className="flex items-center justify-between flex-wrap gap-2">
                 <div>
-                  <p className="text-[10px] font-black text-accent uppercase tracking-[0.3em] flex items-center gap-2">
+                  <p className="text-[11px] font-black text-accent uppercase tracking-[0.3em] flex items-center gap-2">
                     <Cpu className="w-3.5 h-3.5" /> Token Budget — Target Package Size
                   </p>
-                  <p className="text-[11px] text-text-dim mt-1 leading-relaxed">
+                  <p className="text-[12px] text-text-dim mt-1 leading-relaxed">
                     Aim for the finished <span className="text-text-muted">AI instruction package</span> (Prompt Plot + Guidelines + Reminders + Character AI descriptions). HTML cards & image prompts don't count toward this. Platform ceiling: 20k.
                   </p>
                 </div>
@@ -4224,7 +4553,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
               <div className="space-y-3 pt-1">
                 <div className="flex items-center justify-between">
                   <label className="text-[9px] uppercase tracking-[0.2em] font-black text-label">Fine-tune (min)</label>
-                  <span className="text-[10px] font-mono text-text-muted">{state.tokenBudgetMin / 1000}k</span>
+                  <span className="text-[11px] font-mono text-text-muted">{state.tokenBudgetMin / 1000}k</span>
                 </div>
                 <input
                   type="range" min={2000} max={19500} step={500}
@@ -4237,7 +4566,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                 />
                 <div className="flex items-center justify-between">
                   <label className="text-[9px] uppercase tracking-[0.2em] font-black text-label">Fine-tune (max)</label>
-                  <span className="text-[10px] font-mono text-text-muted">{state.tokenBudgetMax / 1000}k</span>
+                  <span className="text-[11px] font-mono text-text-muted">{state.tokenBudgetMax / 1000}k</span>
                 </div>
                 <input
                   type="range" min={2500} max={20000} step={500}
@@ -4260,10 +4589,10 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                 }`}
               >
                 <div className="min-w-0">
-                  <span className={`block text-[11px] font-black uppercase tracking-wider ${state.budgetTierMode ? "text-[#fbbf24]" : "text-text-muted"}`}>
+                  <span className={`block text-[12px] font-black uppercase tracking-wider ${state.budgetTierMode ? "text-[#fbbf24]" : "text-text-muted"}`}>
                     Budget-Tier Mode {state.budgetTierMode ? "· ON" : "· OFF"}
                   </span>
-                  <span className="block text-[11px] text-text-dim mt-0.5 leading-snug">
+                  <span className="block text-[12px] text-text-dim mt-0.5 leading-snug">
                     USCS §21 optimizations for free models (DeepSeek/Ministral/GLM): state-based triggers, mandatory status block, worked examples, strict document separation.
                   </span>
                 </div>
@@ -4275,42 +4604,54 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
               {/* Advanced — per-section custom limits (collapsed by default) */}
               <details className="pt-3 border-t border-border/40 group/cl">
                 <summary className="cursor-pointer list-none flex items-center gap-1.5 text-[9px] uppercase tracking-[0.2em] font-black text-label hover:text-text-muted transition-colors">
-                  <ChevronRight className="w-3 h-3 shrink-0 transition-transform group-open/cl:rotate-90" /> Advanced · custom section limits
+                  <ChevronRight className="w-3 h-3 shrink-0 transition-transform group-open/cl:rotate-90" /> Advanced · per-block limits & compacting rules
                 </summary>
                 <div className="space-y-2 pt-2.5">
-                  <p className="text-[11px] text-text-dim leading-snug">
-                    Set your own token target per block (blank = the §21 default). The <span className="text-text-muted">Token Summary</span> tracks &amp; warns against these, and <span className="text-text-muted">Tighten</span> compresses to them. The 20k platform total still applies. For leaner guidelines, also flip <span className="text-text-muted">Compact mode</span> on the Guidelines step — that tells the AI <span className="italic">how</span> to trim, not just the target.
+                  <p className="text-[12px] text-text-dim leading-snug">
+                    Per block, set a <span className="text-text-muted">token target</span> (blank = the §21 default) and/or write <span className="text-text-muted">compacting rules</span> telling the AI <span className="italic">how</span> to shape &amp; trim that block — the qualitative companion to the number. The <span className="text-text-muted">Token Summary</span> warns past the target and <span className="text-text-muted">Tighten</span> compresses to it, following your rules. The 20k platform total still applies. (The Guidelines step also has a quick <span className="text-text-muted">Compact mode</span> toggle.)
                   </p>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <div className="space-y-2">
                     {([
-                      ["promptPlot", "Prompt Plot", 2500],
-                      ["guidelines", "Guidelines", 3000],
-                      ["reminders", "Reminders", 800],
-                      ["characters", "Per character", 1500],
-                    ] as [keyof StoryState["customLimits"], string, number][]).map(([key, label, dflt]) => (
-                      <div key={key} className="p-2 rounded-lg border border-border bg-bg space-y-1">
-                        <label className="block text-[9px] font-black uppercase tracking-tight text-text-muted">{label}</label>
-                        <input
-                          type="number" min={200} max={20000} step={100}
-                          value={state.customLimits[key] ?? ""}
-                          onChange={(e) => {
-                            const raw = e.target.value;
-                            if (raw === "") { setState(s => ({ ...s, customLimits: { ...s.customLimits, [key]: null } })); return; }
-                            const n = parseInt(raw, 10);
-                            if (Number.isNaN(n)) return;
-                            // Only clamp the ceiling while typing — applying the 200 floor here
-                            // would snap partial entries (e.g. "5") up to 200 and block free typing.
-                            setState(s => ({ ...s, customLimits: { ...s.customLimits, [key]: Math.min(20000, n) } }));
-                          }}
-                          onBlur={(e) => {
-                            const raw = e.target.value;
-                            if (raw === "") return;
-                            const n = parseInt(raw, 10);
-                            const v = Number.isNaN(n) ? null : Math.min(20000, Math.max(200, n));
-                            setState(s => ({ ...s, customLimits: { ...s.customLimits, [key]: v } }));
-                          }}
-                          placeholder={`${dflt}`}
-                          className="w-full bg-card border border-border rounded px-2 py-1 text-[11px] font-mono text-text-main focus:border-accent focus:outline-none"
+                      ["promptPlot", "Prompt Plot", 2500, "How to compact — e.g. Keep the act spine & turning points; cut scene-by-scene detail and worked examples."],
+                      ["guidelines", "Guidelines", 3000, "How to compact — e.g. ~15 terse rules, no worked examples; condense the NPC social web to a short relationship map."],
+                      ["reminders", "Reminders", 800, "How to compact — e.g. Non-negotiables only, one line each; drop the quick-reference table."],
+                      ["characters", "Per character", 1500, "How to compact — e.g. Voice, motivation & 2–3 defining traits each; cut backstory prose."],
+                    ] as [keyof StoryState["customLimits"] & keyof StoryState["compactRules"], string, number, string][]).map(([key, label, dflt, ph]) => (
+                      <div key={key} className="p-2.5 rounded-lg border border-border bg-bg space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <label className="text-[11px] font-black uppercase tracking-tight text-text-muted">{label}</label>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span className="text-[8px] uppercase tracking-widest text-text-dim font-black">Token target</span>
+                            <input
+                              type="number" min={200} max={20000} step={100}
+                              value={state.customLimits[key] ?? ""}
+                              onChange={(e) => {
+                                const raw = e.target.value;
+                                if (raw === "") { setState(s => ({ ...s, customLimits: { ...s.customLimits, [key]: null } })); return; }
+                                const n = parseInt(raw, 10);
+                                if (Number.isNaN(n)) return;
+                                // Only clamp the ceiling while typing — applying the 200 floor here
+                                // would snap partial entries (e.g. "5") up to 200 and block free typing.
+                                setState(s => ({ ...s, customLimits: { ...s.customLimits, [key]: Math.min(20000, n) } }));
+                              }}
+                              onBlur={(e) => {
+                                const raw = e.target.value;
+                                if (raw === "") return;
+                                const n = parseInt(raw, 10);
+                                const v = Number.isNaN(n) ? null : Math.min(20000, Math.max(200, n));
+                                setState(s => ({ ...s, customLimits: { ...s.customLimits, [key]: v } }));
+                              }}
+                              placeholder={`${dflt}`}
+                              className="w-20 bg-card border border-border rounded px-2 py-1 text-[12px] font-mono text-text-main focus:border-accent focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                        <textarea
+                          value={state.compactRules[key]}
+                          onChange={(e) => setState(s => ({ ...s, compactRules: { ...s.compactRules, [key]: e.target.value } }))}
+                          rows={2}
+                          placeholder={ph}
+                          className="w-full bg-card border border-border rounded px-2 py-1.5 text-[12px] text-text-main placeholder:text-text-dim/55 focus:border-accent focus:outline-none resize-y leading-snug"
                         />
                       </div>
                     ))}
@@ -4348,13 +4689,13 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
             <button
               onClick={() => askAssistant(`[WORKSHOP ACTION — CUSTOM SETTING] I want a custom setting, not one of the presets: "${state.settingType}". Let's develop it together — help me sharpen it into a coherent, evocative setting (genre feel, what exists and what doesn't, the atmosphere); ask whatever you need, and when it's solid emit [SET_SETTING: <short setting name/phrase>] so it locks into my UI.`)}
               disabled={state.isAssistantLoading || !(isCustomSetting && state.settingType.trim())}
-              className="w-full py-2.5 rounded-lg bg-accent text-black text-[10px] font-black uppercase tracking-widest hover:bg-white transition-all disabled:opacity-40"
+              className="w-full py-2.5 rounded-lg bg-accent text-black text-[11px] font-black uppercase tracking-widest hover:bg-white transition-all disabled:opacity-40"
             >
               Develop with collaborator →
             </button>
           </div>
 
-          <h3 className="text-[10px] uppercase tracking-[0.3em] font-black text-label text-center">Or pick a setting type</h3>
+          <h3 className="text-[11px] uppercase tracking-[0.3em] font-black text-label text-center">Or pick a setting type</h3>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {SETTING_TYPES.map((type) => (
@@ -4376,7 +4717,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
           <div className="space-y-4 pt-10 border-t border-border/50">
             <div className="flex items-center gap-3">
               <Palette className="w-4 h-4 text-accent" />
-              <label className="text-[10px] uppercase tracking-[0.3em] font-black text-label block">Emotional_Archetype</label>
+              <label className="text-[11px] uppercase tracking-[0.3em] font-black text-label block">Emotional_Archetype</label>
             </div>
             <input 
               type="text"
@@ -4415,7 +4756,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
             <button
               onClick={() => askAssistant(`[WORKSHOP ACTION — CUSTOM ART STYLE] I want a custom art style, not a template: "${state.artStyle}". Let's refine it into a precise Art Style Statement (medium, rendering quality, line/colour/lighting approach, mood, any influences); ask what you need, and when it's solid emit [SET_ART_STYLE: <short style name/phrase>] so it locks into my UI.`)}
               disabled={state.isAssistantLoading || !(isCustomStyle && state.artStyle.trim())}
-              className="w-full py-2.5 rounded-lg bg-accent text-black text-[10px] font-black uppercase tracking-widest hover:bg-white transition-all disabled:opacity-40"
+              className="w-full py-2.5 rounded-lg bg-accent text-black text-[11px] font-black uppercase tracking-widest hover:bg-white transition-all disabled:opacity-40"
             >
               Develop with collaborator →
             </button>
@@ -4423,7 +4764,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
             <div className="space-y-6">
-              <h3 className="text-[10px] uppercase tracking-[0.3em] font-black text-label flex items-center gap-2">
+              <h3 className="text-[11px] uppercase tracking-[0.3em] font-black text-label flex items-center gap-2">
                 <div className="w-2 h-[1px] bg-accent" /> Visual_Templates
               </h3>
               <div className="grid grid-cols-1 gap-3">
@@ -4445,7 +4786,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
 
             <div className="space-y-8">
               <div>
-                <label className="text-[10px] uppercase tracking-[0.3em] font-black text-label mb-3 block">Neural_Engine</label>
+                <label className="text-[11px] uppercase tracking-[0.3em] font-black text-label mb-3 block">Neural_Engine</label>
                 <div className="relative">
                   <select 
                     value={state.imageService}
@@ -4464,7 +4805,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                 <div className="absolute top-0 left-0 w-1 h-full bg-accent" />
                 <div className="flex items-center gap-3 text-accent">
                   <Layout className="w-5 h-5" />
-                  <span className="text-[10px] uppercase font-black tracking-[0.3em]">Aesthetic_Core</span>
+                  <span className="text-[11px] uppercase font-black tracking-[0.3em]">Aesthetic_Core</span>
                 </div>
                 <p className="text-xs text-text-muted leading-relaxed font-medium italic">
                   "Choosing a mode locks the structure rules for your Plot and Character cards. This dictates CSS constraints."
@@ -4523,18 +4864,16 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
             {state.palette.map((color, idx) => (
               <div key={idx} className="group flex flex-col items-center gap-6">
                 <div className="relative">
-                  <label className="cursor-pointer">
-                    <input 
-                      type="color"
-                      value={color}
-                      onChange={(e) => {
-                        const newPalette = [...state.palette];
-                        newPalette[idx] = e.target.value;
-                        setState(s => ({ ...s, palette: newPalette }));
-                      }}
-                      className="sr-only"
-                    />
-                    <div 
+                  <ColorPicker
+                    value={color}
+                    onChange={(hex) => {
+                      const newPalette = [...state.palette];
+                      newPalette[idx] = hex;
+                      setState(s => ({ ...s, palette: newPalette }));
+                    }}
+                    className="cursor-pointer block"
+                  >
+                    <div
                       className="w-20 h-32 rounded-2xl border border-white/5 shadow-2xl transition-all duration-500 group-hover:scale-110 group-hover:-translate-y-2 group-hover:rotate-3 flex items-end p-3 overflow-hidden"
                       style={{ backgroundColor: color }}
                     >
@@ -4543,7 +4882,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                         C_{idx + 1}
                       </div>
                     </div>
-                  </label>
+                  </ColorPicker>
                 </div>
                 <div className="space-y-1">
                   <input 
@@ -4554,9 +4893,9 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                       newPalette[idx] = e.target.value;
                       setState(s => ({ ...s, palette: newPalette }));
                     }}
-                    className="w-24 bg-card border border-border rounded px-2 py-1 text-[10px] font-mono text-center text-text-muted uppercase focus:border-accent focus:outline-none transition-colors" 
+                    className="w-24 bg-card border border-border rounded px-2 py-1 text-[11px] font-mono text-center text-text-muted uppercase focus:border-accent focus:outline-none transition-colors" 
                   />
-                  <div className="text-[10px] text-label uppercase font-black tracking-widest opacity-80">
+                  <div className="text-[11px] text-label uppercase font-black tracking-widest opacity-80">
                     {idx === 0 ? "Background" : idx === 1 ? "Main Text" : idx === 2 ? "Accent 1" : idx === 3 ? "Accent 2" : "Contrast"}
                   </div>
                 </div>
@@ -4568,7 +4907,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
           <div className="space-y-6">
             <div className="flex items-center justify-center gap-3">
               <div className="h-px w-10 bg-border" />
-              <h3 className="text-[11px] text-label font-black uppercase tracking-[0.3em]">Or select a curated palette</h3>
+              <h3 className="text-[12px] text-label font-black uppercase tracking-[0.3em]">Or select a curated palette</h3>
               <div className="h-px w-10 bg-border" />
             </div>
 
@@ -4586,7 +4925,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                     <div className="flex items-center justify-between gap-2 mb-3">
                       <div className="min-w-0">
                         <div className="text-xs font-black uppercase tracking-wide text-text-main truncate">{preset.name}</div>
-                        <div className="text-[10px] text-text-dim font-medium truncate">{preset.vibe}</div>
+                        <div className="text-[11px] text-text-dim font-medium truncate">{preset.vibe}</div>
                       </div>
                       {active && <Check className="w-4 h-4 text-accent shrink-0" />}
                     </div>
@@ -4602,7 +4941,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
           </div>
 
           <div className="p-6 bg-header/20 rounded-xl border border-border inline-block mx-auto mb-10">
-            <p className="text-[10px] text-label font-bold uppercase tracking-[0.3em]">
+            <p className="text-[11px] text-label font-bold uppercase tracking-[0.3em]">
               * Click a swatch above to fine-tune any color
             </p>
           </div>
@@ -4799,7 +5138,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                     </summary>
                     <div className="px-4 pb-4 pt-3 space-y-3 border-t border-border">
                       <p className="text-xs text-text-dim leading-relaxed">{tpl.description}</p>
-                      <pre className="text-[11px] font-mono leading-relaxed text-text-muted bg-black/20 p-3 rounded-lg whitespace-pre-wrap max-h-48 overflow-y-auto custom-scrollbar">{tpl.rules}</pre>
+                      <pre className="text-[12px] font-mono leading-relaxed text-text-muted bg-black/20 p-3 rounded-lg whitespace-pre-wrap max-h-48 overflow-y-auto custom-scrollbar">{tpl.rules}</pre>
                       <button
                         onClick={() => setState(s => ({ ...s, groundingRules: tpl.rules }))}
                         className={`w-full py-2.5 rounded-lg border text-[9px] font-black uppercase tracking-widest transition-all ${active ? "bg-accent text-bg border-accent shadow-[0_4px_12px_rgba(20,184,166,0.3)]" : "bg-header/20 border-border text-text-muted hover:border-accent hover:text-accent hover:bg-accent/10"}`}
@@ -4818,7 +5157,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
             <div className="flex justify-between items-center px-1">
               <div className="flex items-center gap-2">
                 <Terminal className="w-3.5 h-3.5 text-accent" />
-                <span className="text-[10px] font-black uppercase tracking-widest text-text-main">Active Reality Protocols</span>
+                <span className="text-[11px] font-black uppercase tracking-widest text-text-main">Active Reality Protocols</span>
               </div>
               <div className="flex items-center gap-4">
                 {state.groundingRules && isSyncNeeded && syncDeskstateToAI && (
@@ -4854,7 +5193,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                 {state.groundingRules ? `BUFFER_SIZE::${state.groundingRules.length}_CHARS` : "BUFFER::EMPTY"}
               </div>
             </div>
-            <p className="text-[10px] text-text-dim px-1">This is your live ruleset — the collaborator fills it when you co-design, templates load into it, and you can edit directly. Hit <span className="text-text-muted font-bold">Sync</span> when you're happy so the collaborator gets the final version.</p>
+            <p className="text-[11px] text-text-dim px-1">This is your live ruleset — the collaborator fills it when you co-design, templates load into it, and you can edit directly. Hit <span className="text-text-muted font-bold">Sync</span> when you're happy so the collaborator gets the final version.</p>
           </div>
 
           {/* Logical Contrast Examples (reference) */}
@@ -4895,7 +5234,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
           
           <div className="space-y-12 bg-card/30 border border-border p-8 rounded-3xl">
             <div className="space-y-3">
-              <label className="text-[10px] uppercase tracking-[0.2em] font-black text-accent ml-2">Story_Title</label>
+              <label className="text-[11px] uppercase tracking-[0.2em] font-black text-accent ml-2">Story_Title</label>
               <input 
                 type="text"
                 value={state.title}
@@ -4905,7 +5244,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
               />
             </div>
             <div className="space-y-3">
-              <label className="text-[10px] uppercase tracking-[0.2em] font-black text-accent ml-2">Narrative_Summary <span className="text-text-dim normal-case tracking-normal font-medium">— the ~20-word discovery hook, not the full premise</span></label>
+              <label className="text-[11px] uppercase tracking-[0.2em] font-black text-accent ml-2">Narrative_Summary <span className="text-text-dim normal-case tracking-normal font-medium">— the ~20-word discovery hook, not the full premise</span></label>
               <textarea
                 className="w-full h-48 bg-card border border-border rounded-xl p-6 font-serif text-lg leading-relaxed focus:border-accent transition-all resize-none shadow-inner"
                 value={state.summary}
@@ -4929,7 +5268,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
               <button
                 onClick={() => askAssistant(`[WORKSHOP ACTION — DRAFT PLOT CARD] Draft the COMPLETE user-facing Plot Card for "${state.title || 'this story'}" as self-contained HTML, following the injected USCS Plot Card spec. Use my locked visual identity — background ${state.palette[0]}, text ${state.palette[1]}, primary ${state.palette[2]}, secondary ${state.palette[3]}, accent ${state.palette[4]} — and the ${state.aestheticMode} aesthetic. Include every required field; do not abbreviate. ACCENT BORDERS: to set apart or colour-code a section, use a FULL border (border:2px solid #hex) in the accent colour — NEVER a single-side left/right accent bar (border-left:Npx solid …), nor an inset box-shadow or gradient strip faking one; ISK0 strips all of those, so the accent silently vanishes on the platform. Emit the finished card wrapped in <<<USCS_BLOCK PLOT_CARD>>> … <<<END USCS_BLOCK>>> so it loads into my live preview; keep only a brief note in chat.`)}
                 disabled={state.isAssistantLoading}
-                className="px-6 py-2 bg-accent text-black rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-white transition-all flex items-center gap-2 disabled:opacity-50"
+                className="px-6 py-2 bg-accent text-black rounded-lg text-[11px] font-black uppercase tracking-widest hover:bg-white transition-all flex items-center gap-2 disabled:opacity-50"
               >
                 <Sparkles className="w-3 h-3" /> {state.deliverables.plotCard ? "Regenerate Card" : "Draft Plot Card"}
               </button>
@@ -4941,7 +5280,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
               {state.deliverables.plotCard ? (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between px-1">
-                    <span className="text-[10px] font-black uppercase tracking-widest text-accent flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5" /> Live Plot Card — captured HTML</span>
+                    <span className="text-[11px] font-black uppercase tracking-widest text-accent flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5" /> Live Plot Card — captured HTML</span>
                     <div className="flex items-center gap-2.5">
                       <span className="text-[8px] font-mono text-text-dim uppercase tracking-widest">sandboxed · scripts off</span>
                       <CopyButton variant="button" label="Copy HTML" text={state.deliverables.plotCard} title="Copy the raw Plot Card HTML (paste into a playroom or test render)" />
@@ -4953,7 +5292,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                     bg={state.palette[0] || "#18181b"}
                     height={520}
                   />
-                  <p className="text-[10px] text-text-dim px-1">This is the real HTML the player will see. Tinker the palette on the right and hit <span className="text-text-muted font-bold">Apply Palette &amp; Iterate</span>, or ask for changes in chat — the AI re-emits the card and this preview refreshes.</p>
+                  <p className="text-[11px] text-text-dim px-1">This is the real HTML the player will see. Tinker the palette on the right and hit <span className="text-text-muted font-bold">Apply Palette &amp; Iterate</span>, or ask for changes in chat — the AI re-emits the card and this preview refreshes.</p>
                 </div>
               ) : (
               <div
@@ -5021,33 +5360,33 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                 {state.palette.map((color, idx) => (
                   <div key={idx} className="space-y-3">
                     <div className="flex justify-between items-center px-1">
-                      <span className="text-[10px] font-black uppercase text-label tracking-widest">
+                      <span className="text-[11px] font-black uppercase text-label tracking-widest">
                         {idx === 0 ? "Background" : idx === 1 ? "Typography" : idx === 2 ? "Primary" : idx === 3 ? "Secondary" : "Accent"}
                       </span>
                     </div>
                     <div className="flex gap-4 items-center group">
                        <div className="relative">
-                         <input 
-                           type="color"
+                         <ColorPicker
                            value={color}
-                           onChange={(e) => {
+                           onChange={(hex) => {
                              const newPalette = [...state.palette];
-                             newPalette[idx] = e.target.value;
+                             newPalette[idx] = hex;
                              setState(s => ({ ...s, palette: newPalette }));
                            }}
-                           className="absolute inset-0 opacity-0 w-full h-full cursor-pointer z-10"
-                         />
-                         <div 
-                           className="w-16 h-16 rounded-2xl border-2 border-white/10 shadow-lg group-hover:border-accent/40 transition-all flex items-center justify-center overflow-hidden"
-                           style={{ backgroundColor: color }}
+                           className="cursor-pointer block"
                          >
-                           <div className="w-full h-full opacity-0 group-hover:opacity-100 bg-black/20 flex items-center justify-center transition-opacity">
-                              <Palette className="w-4 h-4 text-white" />
+                           <div
+                             className="w-16 h-16 rounded-2xl border-2 border-white/10 shadow-lg group-hover:border-accent/40 transition-all flex items-center justify-center overflow-hidden"
+                             style={{ backgroundColor: color }}
+                           >
+                             <div className="w-full h-full opacity-0 group-hover:opacity-100 bg-black/20 flex items-center justify-center transition-opacity">
+                                <Palette className="w-4 h-4 text-white" />
+                             </div>
                            </div>
-                         </div>
+                         </ColorPicker>
                        </div>
                        <div className="flex-1 space-y-1">
-                          <div className="text-[11px] font-mono font-bold uppercase tracking-widest text-text-main">{color}</div>
+                          <div className="text-[12px] font-mono font-bold uppercase tracking-widest text-text-main">{color}</div>
                           <div className="text-[8px] font-mono text-text-dim uppercase tracking-tighter">HEX_CODE::LOCKED</div>
                        </div>
                     </div>
@@ -5072,7 +5411,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                         triggerToast?.("Card recoloured to the current palette ⚡ (instant, no AI call)", "ai-to-ui");
                       }}
                       disabled={state.isAssistantLoading}
-                      className="w-full py-4 bg-accent/10 border border-accent/20 text-accent rounded-xl text-[10px] font-black uppercase tracking-[0.2em] hover:bg-accent hover:text-black transition-all disabled:opacity-50"
+                      className="w-full py-4 bg-accent/10 border border-accent/20 text-accent rounded-xl text-[11px] font-black uppercase tracking-[0.2em] hover:bg-accent hover:text-black transition-all disabled:opacity-50"
                     >
                       ⚡ Recolor to Palette · instant
                     </button>
@@ -5089,7 +5428,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                   <button
                     onClick={() => askAssistant(`I've set my palette to background ${state.palette[0]}, text ${state.palette[1]}, primary ${state.palette[2]}, secondary ${state.palette[3]}, accent ${state.palette[4]}. When you draft the Plot Card, use exactly these colors.`)}
                     disabled={state.isAssistantLoading}
-                    className="w-full py-4 bg-accent/10 border border-accent/20 text-accent rounded-xl text-[10px] font-black uppercase tracking-[0.2em] hover:bg-accent hover:text-black transition-all disabled:opacity-50"
+                    className="w-full py-4 bg-accent/10 border border-accent/20 text-accent rounded-xl text-[11px] font-black uppercase tracking-[0.2em] hover:bg-accent hover:text-black transition-all disabled:opacity-50"
                   >
                     Lock Palette for the Card
                   </button>
@@ -5120,7 +5459,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
             <button
               onClick={() => askAssistant(`[WORKSHOP ACTION — BUILD NEXT CHARACTER] Let's develop the next character's NARRATION GUIDANCE together — the substance the deployed AI needs to play them: personality, wants/goals, fears, speech & mannerisms, relationships to {{user}} and the cast, and the relevant lore — following the injected USCS Character Sheet "Part B" spec (respect §21 caps: ≤1500 tokens primary / ≤800 supporting). Propose the character (or continue from the cast we've discussed) and refine it WITH me; when it's solid, capture it as <<<USCS_BLOCK CHAR_DESC: [the character's actual name]>>> … <<<END USCS_BLOCK>>>. CRITICAL: put the character's REAL name in that sentinel (e.g. "CHAR_DESC: Aria Vance") — never the literal word "Name". Do NOT produce the HTML card yet — we generate that separately once the character is fully defined. Build and confirm ONE character before the next.`)}
               disabled={state.isAssistantLoading}
-              className="px-6 py-2 bg-accent/20 border border-accent/40 text-accent rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-accent/30 transition-all font-mono disabled:opacity-50"
+              className="px-6 py-2 bg-accent/20 border border-accent/40 text-accent rounded-lg text-[11px] font-black uppercase tracking-widest hover:bg-accent/30 transition-all font-mono disabled:opacity-50"
             >
               INIT_PERSONA_SYNC
             </button>
@@ -5129,7 +5468,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
           {/* Captured cast — real sheets built in the workshop */}
           {state.deliverables.characters.length === 0 ? (
             <div className="flex items-center justify-center gap-3 p-6 rounded-2xl border border-border/60 bg-white/[0.01] text-center">
-              <span className="text-[10px] font-mono uppercase tracking-widest text-text-dim">No characters captured yet — finished sheets from the collaborator will appear here.</span>
+              <span className="text-[11px] font-mono uppercase tracking-widest text-text-dim">No characters captured yet — finished sheets from the collaborator will appear here.</span>
             </div>
           ) : (
             <div className="grid grid-cols-[repeat(auto-fit,minmax(320px,1fr))] gap-6">
@@ -5152,16 +5491,16 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                           <span className="text-[9px] font-black uppercase tracking-widest text-accent">Narration Guidance <span className="text-text-dim font-medium normal-case tracking-normal">— personality · wants · speech · lore</span></span>
                           <CopyButton text={char.desc} title={`Copy ${char.name}'s narration guidance`} />
                         </div>
-                        <pre className="text-[11px] font-mono leading-relaxed text-text-muted bg-header/20 border border-border rounded-xl p-4 whitespace-pre-wrap max-h-[340px] overflow-y-auto custom-scrollbar">{char.desc}</pre>
+                        <pre className="text-[12px] font-mono leading-relaxed text-text-muted bg-header/20 border border-border rounded-xl p-4 whitespace-pre-wrap max-h-[340px] overflow-y-auto custom-scrollbar">{char.desc}</pre>
                       </div>
                     ) : (
-                      <div className="rounded-xl border border-dashed border-border p-4 text-[10px] font-mono uppercase tracking-widest text-text-dim text-center">No guidance captured yet — build this character's personality, wants, speech &amp; lore in chat.</div>
+                      <div className="rounded-xl border border-dashed border-border p-4 text-[11px] font-mono uppercase tracking-widest text-text-dim text-center">No guidance captured yet — build this character's personality, wants, speech &amp; lore in chat.</div>
                     )}
 
                     {/* The user-facing HTML card — the FINAL artifact, after the guidance */}
                     {char.card ? (
                       <details className="group/card rounded-xl border border-border bg-header/20">
-                        <summary className="cursor-pointer list-none flex items-center justify-between gap-2 p-3 text-[10px] font-black uppercase tracking-widest text-text-muted">
+                        <summary className="cursor-pointer list-none flex items-center justify-between gap-2 p-3 text-[11px] font-black uppercase tracking-widest text-text-muted">
                           <span className="flex items-center gap-2"><ChevronRight className="w-3.5 h-3.5 transition-transform group-open/card:rotate-90" /> Preview HTML card</span>
                           <span onClick={(e) => e.preventDefault()}>
                             <CopyButton variant="button" label="Copy HTML" text={char.card} title={`Copy ${char.name}'s card HTML`} />
@@ -5275,8 +5614,8 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
               <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${state.leanGuidelines ? "left-[18px]" : "left-0.5"}`} />
             </div>
             <div className="min-w-0">
-              <div className="text-[11px] font-black uppercase tracking-[0.15em] text-text-main">Compact mode {state.leanGuidelines ? <span className="text-accent">· ON</span> : <span className="text-text-dim">· OFF</span>}</div>
-              <p className="text-[11px] text-text-dim leading-snug mt-1">The Guidelines are the rulebook your story-AI re-reads on <span className="text-text-muted">every single message</span> — so a bigger rulebook costs more tokens on every turn of the finished story. <span className="text-text-muted">Compact mode</span> builds a leaner one: fewer, tighter rules and a condensed cast-relationship map, roughly half the size. Great with strong models (Claude / GPT-4-class) that fill in the gaps — leave it OFF for weaker / free models, which behave better with the fuller, more spelled-out version.</p>
+              <div className="text-[12px] font-black uppercase tracking-[0.15em] text-text-main">Compact mode {state.leanGuidelines ? <span className="text-accent">· ON</span> : <span className="text-text-dim">· OFF</span>}</div>
+              <p className="text-[12px] text-text-dim leading-snug mt-1">The Guidelines are the rulebook your story-AI re-reads on <span className="text-text-muted">every single message</span> — so a bigger rulebook costs more tokens on every turn of the finished story. <span className="text-text-muted">Compact mode</span> builds a leaner one: fewer, tighter rules and a condensed cast-relationship map, roughly half the size. Great with strong models (Claude / GPT-4-class) that fill in the gaps — leave it OFF for weaker / free models, which behave better with the fuller, more spelled-out version.</p>
             </div>
           </button>
 
@@ -5310,14 +5649,14 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
               </div>
 
               <div className="bg-card/40 border border-border p-6 rounded-3xl space-y-4 shadow-2xl">
-                <p className="text-[10px] text-text-muted leading-relaxed">
+                <p className="text-[11px] text-text-muted leading-relaxed">
                   The <span className="text-accent font-bold font-mono">DO_NOT / INSTEAD</span> rulesets defined in your World Grounding map are integrated directly below. These serve as narrative constraints for the generative pipeline.
                 </p>
 
                 {parsedRules.length === 0 ? (
                   <div className="p-8 border border-dashed border-white/5 rounded-2xl text-center space-y-2">
                     <AlertTriangle className="w-6 h-6 text-text-dim mx-auto opacity-30" />
-                    <p className="text-[10px] uppercase font-mono text-text-dim tracking-widest">No active grounding rulesets detected</p>
+                    <p className="text-[11px] uppercase font-mono text-text-dim tracking-widest">No active grounding rulesets detected</p>
                     <p className="text-[9px] text-text-muted">Return to World Grounding to initialize reality laws.</p>
                   </div>
                 ) : (
@@ -5349,7 +5688,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                             {rule.type === "DO_NOT" ? "DO_NOT" : rule.type === "INSTEAD" ? "INSTEAD" : "PROTOCOL"}
                           </span>
                         </div>
-                        <p className="text-text-main font-mono italic text-[11px] leading-relaxed">
+                        <p className="text-text-main font-mono italic text-[12px] leading-relaxed">
                           {rule.text}
                         </p>
                       </div>
@@ -5370,13 +5709,13 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
 
               <div className="bg-card hover:border-accent/30 transition-colors border border-border p-6 rounded-3xl space-y-6 shadow-2xl">
                 <div>
-                  <h4 className="text-[10px] font-black text-accent uppercase tracking-wider mb-2">Social Web & Social Map Protocols</h4>
+                  <h4 className="text-[11px] font-black text-accent uppercase tracking-wider mb-2">Social Web & Social Map Protocols</h4>
                   <p className="text-xs text-text-dim leading-relaxed">
                     Guidelines dictate how the AI should pace interactions, reveal secrets, and respect the social constraints of the characters.
                   </p>
                 </div>
 
-                <div className="space-y-3 text-[11px]">
+                <div className="space-y-3 text-[12px]">
                   <div className="p-3 bg-white/[0.02] border border-border/40 rounded-xl space-y-1">
                     <span className="text-[8px] font-black uppercase text-accent/60 font-mono">PACING CONTRACT</span>
                     <p className="text-text-main leading-relaxed">
@@ -5404,10 +5743,10 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
           {state.deliverables.guidelines && (
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-2">
-                <span className="text-[10px] font-black uppercase tracking-widest text-accent flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5" /> Captured Guidelines — your assembled output</span>
+                <span className="text-[11px] font-black uppercase tracking-widest text-accent flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5" /> Captured Guidelines — your assembled output</span>
                 <CopyButton variant="button" text={state.deliverables.guidelines} title="Copy the Guidelines block to clipboard" />
               </div>
-              <pre className="text-[11px] font-mono leading-relaxed text-text-muted bg-header/20 border border-border rounded-2xl p-5 whitespace-pre-wrap max-h-[420px] overflow-y-auto custom-scrollbar">{state.deliverables.guidelines}</pre>
+              <pre className="text-[12px] font-mono leading-relaxed text-text-muted bg-header/20 border border-border rounded-2xl p-5 whitespace-pre-wrap max-h-[420px] overflow-y-auto custom-scrollbar">{state.deliverables.guidelines}</pre>
             </div>
           )}
         </div>
@@ -5450,7 +5789,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
                   <Compass className="w-4 h-4 text-accent" />
-                  <span className="text-[10px] font-black uppercase tracking-widest text-[#fbbf24]">
+                  <span className="text-[11px] font-black uppercase tracking-widest text-[#fbbf24]">
                     North_Star_Target
                   </span>
                 </div>
@@ -5502,10 +5841,10 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
           {state.deliverables.reminders && (
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-2">
-                <span className="text-[10px] font-black uppercase tracking-widest text-accent flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5" /> Captured Reminders — your assembled output</span>
+                <span className="text-[11px] font-black uppercase tracking-widest text-accent flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5" /> Captured Reminders — your assembled output</span>
                 <CopyButton variant="button" text={state.deliverables.reminders} title="Copy the Reminders block to clipboard" />
               </div>
-              <pre className="text-[11px] font-mono leading-relaxed text-text-muted bg-header/20 border border-border rounded-2xl p-5 whitespace-pre-wrap max-h-[360px] overflow-y-auto custom-scrollbar">{state.deliverables.reminders}</pre>
+              <pre className="text-[12px] font-mono leading-relaxed text-text-muted bg-header/20 border border-border rounded-2xl p-5 whitespace-pre-wrap max-h-[360px] overflow-y-auto custom-scrollbar">{state.deliverables.reminders}</pre>
             </div>
           )}
         </div>
@@ -5536,7 +5875,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
               <h3 className="text-sm font-black uppercase tracking-[0.2em] text-accent flex items-center gap-2"><HelpCircle className="w-4 h-4" /> What this step makes — and where it lands on ISK0</h3>
               <p className="text-xs text-text-muted leading-relaxed">This is a <span className="text-text-main font-bold">planning</span> step — nothing here is pasted into ISK0 as one block. Each output feeds a later step:</p>
               <ul className="text-xs text-text-muted space-y-1.5 leading-relaxed">
-                <li>• <span className="text-text-main font-bold">Scenario variants</span> (2–3 alternate openings) → become your <span className="text-text-main">First Messages</span> (next step), which fill ISK0's <span className="text-accent font-mono text-[11px]">"First Messages (Scenarios)"</span> field.</li>
+                <li>• <span className="text-text-main font-bold">Scenario variants</span> (2–3 alternate openings) → become your <span className="text-text-main">First Messages</span> (next step), which fill ISK0's <span className="text-accent font-mono text-[12px]">"First Messages (Scenarios)"</span> field.</li>
                 <li>• <span className="text-text-main font-bold">Three-act structure &amp; hooks</span> → become the <span className="text-text-main">phase / pacing structure of your Prompt Plot</span> (used directly, or expanded into modules).</li>
                 <li>• <span className="text-text-main font-bold">Optional modules / timekeeping / status dashboard</span> → folded into your <span className="text-text-main">Prompt Plot &amp; Guidelines</span> (ISK0's main prompt).</li>
               </ul>
@@ -5579,7 +5918,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                               "Build detailed stable diffusion image prompts for our main cast.";
                 askAssistant(query);
               }}
-              className="px-6 py-3 bg-accent border border-accent text-black font-black text-[10px] uppercase tracking-widest rounded-xl hover:bg-transparent hover:text-accent transition-all shrink-0 active:scale-95"
+              className="px-6 py-3 bg-accent border border-accent text-black font-black text-[11px] uppercase tracking-widest rounded-xl hover:bg-transparent hover:text-accent transition-all shrink-0 active:scale-95"
             >
               TRIGGER_COHESION
             </button>
@@ -5716,7 +6055,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
               <div className="space-y-3 flex-1">
                 <div className="flex items-center gap-2">
                   <Cpu className="text-accent w-4 h-4 animate-spin-slow" />
-                  <span className="text-[10px] font-mono font-black text-accent uppercase tracking-[0.2em]">INTEGRITY_CHECKPOINT_V6.1</span>
+                  <span className="text-[11px] font-mono font-black text-accent uppercase tracking-[0.2em]">INTEGRITY_CHECKPOINT_V6.1</span>
                 </div>
                 
                 <h3 className="text-2xl font-black uppercase tracking-tight">
@@ -5870,7 +6209,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
               onClick={() => {
                 askAssistant("Assemble and print the finalized prompt payload for copying.");
               }}
-              className="px-6 py-3 bg-accent border border-accent text-black font-black text-[10px] uppercase tracking-widest rounded-xl hover:bg-transparent hover:text-accent transition-all shrink-0 active:scale-95"
+              className="px-6 py-3 bg-accent border border-accent text-black font-black text-[11px] uppercase tracking-widest rounded-xl hover:bg-transparent hover:text-accent transition-all shrink-0 active:scale-95"
             >
               COMPILE_MASTER_BUILD
             </button>
