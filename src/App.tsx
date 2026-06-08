@@ -40,7 +40,8 @@ import {
   Star,
   Copy,
   Check,
-  Pipette
+  Pipette,
+  Trash2
 } from "lucide-react";
 
 // --- Types ---
@@ -325,7 +326,7 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 
 // Version of THIS app (the Aether_Core tool), distinct from the USCS framework
 // version it implements. Bump this when you ship changes.
-const APP_VERSION = "0.12.4";
+const APP_VERSION = "0.12.5";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
 const USCS_VERSION = "6.1.1";
 
@@ -2903,6 +2904,14 @@ function CollaboratorChat({ state, setState, compact, askAssistant, setIsChatOpe
 function VersionHistoryModal({ onClose }: { onClose: () => void }) {
   const releases: { v: string; title: string; items: string[] }[] = [
     {
+      v: "0.12.5", title: "Delete cast members · accurate token counts · mobile history",
+      items: [
+        "You can now remove a character from the cast. Each captured character card has a delete (trash) button — use it when the collaborator dropped or duplicated someone. Previously there was no way to delete a captured character, so a stray or duplicate sheet stayed in your package and the workspace kept re-feeding it to the collaborator on every sync, which is how asking the AI to \"delete\" a character could spawn a duplicate instead. Deleting it here takes it out of the package and the sync for good.",
+        "Token counts are now measured with a real tokenizer (cl100k_base via gpt-tokenizer) instead of the old rough \"characters ÷ 4\" estimate, which overcounted typical English prompts by ~20%. The budget gauge, per-block counts, and section caps all reflect the more accurate number — runs in your browser, no extra API calls.",
+        "The version-history button is reachable on mobile: tapping the \"A\" logo in the header now opens this changelog. The old text \"History\" link is hidden on small screens, so on a phone there was no way to reach it.",
+      ],
+    },
+    {
       v: "0.12.4", title: "More legible explanatory text",
       items: [
         "Bumped the contrast and size of the small grey helper/explanatory text across the app. The three muted text tokens (dim, label, muted) are brighter for better readability against the dark background, and the two smallest explanatory text tiers were each enlarged by 1px.",
@@ -5479,9 +5488,20 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                   <div className="p-6 space-y-4">
                     <div className="flex justify-between items-start gap-3">
                       <h4 className="text-2xl font-black tracking-tighter uppercase min-w-0 truncate">{char.name}</h4>
-                      <div className="flex gap-1.5 shrink-0">
+                      <div className="flex gap-1.5 shrink-0 items-center">
                         <span className={`text-[8px] font-mono font-bold uppercase tracking-widest px-2 py-1 rounded border ${char.desc ? "bg-accent/15 text-accent border-accent/30" : "bg-header text-text-dim border-border"}`}>Guidance {char.desc ? "✓" : "—"}</span>
                         <span className={`text-[8px] font-mono font-bold uppercase tracking-widest px-2 py-1 rounded border ${char.card ? "bg-accent/15 text-accent border-accent/30" : "bg-header text-text-dim border-border"}`}>Card {char.card ? "✓" : "—"}</span>
+                        <button
+                          onClick={() => {
+                            if (!window.confirm(`Remove "${char.name}" from the cast? This deletes their captured guidance and card from your package. Do this when a character was dropped or duplicated — otherwise the next sync keeps re-feeding the old sheet to the collaborator. This can't be undone.`)) return;
+                            setState(s => ({ ...s, deliverables: { ...s.deliverables, characters: s.deliverables.characters.filter((_, idx) => idx !== i) } }));
+                            triggerToast?.(`Removed ${char.name} from the cast.`, "info");
+                          }}
+                          title={`Remove ${char.name} from the cast`}
+                          className="p-1.5 rounded border border-border text-text-dim hover:text-[#f43f5e] hover:border-[#f43f5e]/60 hover:bg-[#f43f5e]/10 transition-all"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     </div>
 
