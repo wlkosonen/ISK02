@@ -49,7 +49,7 @@ Open http://localhost:3010.
 **A. Server-side (you self-host the app).** The app's *server* calls Ollama, so this works
 when Ollama runs on the same machine as the app:
 
-1. Install [Ollama](https://ollama.com) and pull a model: `ollama pull llama3`
+1. Install [Ollama](https://ollama.com) and pull any model you want — e.g. `ollama pull llama3.1` (qwen2.5, mistral, gemma… — any installed model works; this is just an example)
 2. Start Ollama so the container can reach it: `OLLAMA_HOST=0.0.0.0 ollama serve`
 3. Enable it by setting `OLLAMA_BASE_URL` in a local `.env` (it's **empty by default**):
    `OLLAMA_BASE_URL=http://host.docker.internal:11434`
@@ -65,8 +65,19 @@ machine"**, then start Ollama allowing the site's origin (browsers block cross-o
 otherwise):
 
 ```bash
+# macOS / Linux
 OLLAMA_ORIGINS="https://your-aether-site.example" ollama serve
 ```
+
+On **Windows** (Ollama runs in the system tray), set it persistently, then quit & reopen Ollama:
+
+```powershell
+setx OLLAMA_ORIGINS "https://your-aether-site.example"
+```
+
+To allow several sites/apps at once, use a comma-separated list (e.g.
+`"https://your-aether-site.example,http://localhost:3010"`), or `*` to allow any origin
+(convenient, less safe).
 
 The prompt is still assembled on the server (it injects the USCS spec), but the model runs
 locally and your generated text never passes through the server. No API key needed.

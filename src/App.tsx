@@ -318,7 +318,7 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 
 // Version of THIS app (the Aether_Core tool), distinct from the USCS framework
 // version it implements. Bump this when you ship changes.
-const APP_VERSION = "0.12.0";
+const APP_VERSION = "0.12.1";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
 const USCS_VERSION = "6.1.1";
 
@@ -2212,12 +2212,16 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                       </button>
 
                       {state.modelSettings.ollamaDirect ? (
-                        <div className="text-[10px] text-text-dim leading-relaxed bg-black/20 border border-border rounded-lg p-2.5 space-y-1.5">
+                        <div className="text-[10px] text-text-dim leading-relaxed bg-black/20 border border-border rounded-lg p-2.5 space-y-2">
                           <p className="text-text-main font-bold">Run models on YOUR hardware through this site:</p>
-                          <p>1. Install <a className="text-accent underline" href="https://ollama.com" target="_blank" rel="noreferrer">Ollama</a> and pull a model — <code className="bg-black/40 px-1 rounded font-mono">ollama pull llama3</code>.</p>
-                          <p>2. Start it allowing this site (browsers block cross-origin calls otherwise):</p>
-                          <code className="block bg-black/40 px-2 py-1 rounded font-mono text-[9px] break-all">OLLAMA_ORIGINS="{typeof window !== "undefined" ? window.location.origin : "https://this-site"}" ollama serve</code>
-                          <p>3. Leave the Base URL as <code className="bg-black/40 px-1 rounded font-mono">http://localhost:11434</code>. Your models appear in the list below once connected.</p>
+                          <p><span className="text-text-main font-semibold">1.</span> Install <a className="text-accent underline" href="https://ollama.com" target="_blank" rel="noreferrer">Ollama</a> and pull <span className="italic">any</span> model you want — e.g. <code className="bg-black/40 px-1 rounded font-mono">ollama pull llama3.1</code> (or qwen2.5, mistral, gemma…). Any model you've installed shows up below; this is just an example.</p>
+                          <p><span className="text-text-main font-semibold">2.</span> Let this site reach your Ollama by setting <code className="bg-black/40 px-1 rounded font-mono">OLLAMA_ORIGINS</code> to its address (browsers block cross-origin calls otherwise):</p>
+                          <p className="pl-3 text-text-dim">macOS / Linux — one-off:</p>
+                          <code className="block bg-black/40 px-2 py-1 rounded font-mono text-[9px] break-all">OLLAMA_ORIGINS="{window.location.origin}" ollama serve</code>
+                          <p className="pl-3 text-text-dim">Windows (Ollama runs in the tray) — set it, then quit &amp; reopen Ollama:</p>
+                          <code className="block bg-black/40 px-2 py-1 rounded font-mono text-[9px] break-all">setx OLLAMA_ORIGINS "{window.location.origin}"</code>
+                          <p><span className="text-text-main font-semibold">3.</span> Leave the Base URL as <code className="bg-black/40 px-1 rounded font-mono">http://localhost:11434</code>. Your installed models populate the list below once connected.</p>
+                          <p className="text-text-dim">Allowing more than one site/app? Make <code className="bg-black/40 px-1 rounded font-mono">OLLAMA_ORIGINS</code> a comma-separated list — e.g. <code className="bg-black/40 px-1 rounded font-mono break-all">{window.location.origin},http://localhost:3010</code> — or <code className="bg-black/40 px-1 rounded font-mono">*</code> to allow any origin (convenient, less safe).</p>
                           <p className="text-[#fbbf24]/90">Privacy: the prompt is assembled on this server, but the model runs on your machine — no API key, and your generated text never passes through the server.</p>
                         </div>
                       ) : (
@@ -2876,6 +2880,14 @@ function CollaboratorChat({ state, setState, compact, askAssistant, setIsChatOpe
 function VersionHistoryModal({ onClose }: { onClose: () => void }) {
   const releases: { v: string; title: string; items: string[] }[] = [
     {
+      v: "0.12.1", title: "Clearer Ollama setup guidance",
+      items: [
+        "Rewrote the Ollama help (Settings and the Help panel) to cover both ways to run local models — your own machine via the hosted site, and full self-hosting — with the exact OLLAMA_ORIGINS steps for macOS/Linux and Windows, and how to allow multiple sites at once (comma-separated origins).",
+        "Model names in the instructions are now shown as examples (e.g. llama3.1, qwen2.5, mistral) rather than implying llama3 is required — any installed model works.",
+        "Removed the obsolete `version` key from docker-compose.yml (silences the Compose warning).",
+      ],
+    },
+    {
       v: "0.12.0", title: "Use your own local models on a hosted instance",
       items: [
         "New \"Use my own machine\" mode for Ollama (Settings → Ollama): on a hosted/shared copy of Aether, your browser connects straight to your OWN local Ollama, so generation runs on your hardware with your downloaded models — no API key, and your text never passes through the server. The workshop still assembles the USCS prompt server-side; only the model call is local. Includes step-by-step setup notes (including the OLLAMA_ORIGINS line you need).",
@@ -3159,15 +3171,38 @@ function HelpModal({ onClose }: { onClose: () => void }) {
 
           <section className="space-y-2">
             <H>Running local models (Ollama)</H>
-            <p className="p-2.5 rounded-lg bg-[#f87171]/10 border border-[#f87171]/30 text-[#fecaca]">⚠️ <span className="font-bold">Important — this does NOT work on the website.</span> If you're reading this on the hosted site (a public web address), the <span className="text-text-main">Local Ollama</span> option can't reach a model on your computer — the website's server lives somewhere else entirely. Local models only work when you <span className="font-bold">run Aether_Core on your own machine</span> (self-hosting). If you just want to start now with no setup, pick <span className="text-text-main">Google Gemini</span> or a <span className="text-[#10b981] font-bold">:free</span> OpenRouter model instead — those work right here in the browser.</p>
-            <p>To use local models you self-host the app, then run Ollama next to it. It's free, private, and offline — but it's a developer-ish setup. Roughly:</p>
-            <ol className="space-y-1.5 pl-1 list-decimal list-inside marker:text-accent">
-              <li>Get the code: download or clone it from <Link href="https://github.com/wlkosonen/ISK02">GitHub</Link> (the green <span className="text-text-main">Code</span> button → <span className="text-text-main">Download ZIP</span>, or <code className="bg-black/30 px-1 rounded text-[11px]">git clone</code>).</li>
-              <li>Install <Link href="https://www.docker.com/products/docker-desktop/">Docker Desktop</Link>, then in the project folder run <code className="bg-black/30 px-1 rounded text-[11px]">docker compose up --build</code>. Open <code className="bg-black/30 px-1 rounded text-[11px]">http://localhost:3010</code> — that's your own copy.</li>
-              <li>Install <Link href="https://ollama.com">Ollama</Link> and pull a model: <code className="bg-black/30 px-1 rounded text-[11px]">ollama pull llama3</code>. Start it so the container can reach it: <code className="bg-black/30 px-1 rounded text-[11px]">OLLAMA_HOST=0.0.0.0 ollama serve</code>.</li>
-              <li>In <span className="text-text-main">your local copy's</span> Settings, choose <span className="text-text-main">Local Ollama</span> (base URL preset to <code className="bg-black/30 px-1 rounded text-[11px]">http://host.docker.internal:11434</code>) — it auto-detects installed models.</li>
-            </ol>
-            <p className="text-[11px] text-text-dim">Full self-host notes are in the GitHub <Link href="https://github.com/wlkosonen/ISK02#run-with-docker-recommended-for-self-hosting--local-models">README</Link>. Local models are smaller than the big cloud ones, so output quality varies — but it's free and stays on your machine.</p>
+            <p>Ollama runs AI models on your <span className="text-text-main">own computer</span> — free, private, offline. Two ways to use it here:</p>
+
+            <div className="p-3 rounded-xl border border-border bg-bg/50 space-y-1.5">
+              <p className="text-text-main font-bold">A. On this website, using your own machine (easiest)</p>
+              <p>Keep using the hosted site, but let it talk to the Ollama on <span className="text-text-main">your</span> computer — your hardware does the work, your story text never passes through the server, and no API key is needed.</p>
+              <ol className="space-y-1.5 pl-1 list-decimal list-inside marker:text-accent">
+                <li>Install <Link href="https://ollama.com">Ollama</Link> and pull <span className="italic">any</span> model you like — e.g. <code className="bg-black/30 px-1 rounded text-[11px]">ollama pull llama3.1</code> (or qwen2.5, mistral, gemma…). Anything you install shows up in the app; this is just an example.</li>
+                <li>Let this site reach Ollama by setting <code className="bg-black/30 px-1 rounded text-[11px]">OLLAMA_ORIGINS</code> to this site's address — otherwise the browser blocks the connection:
+                  <div className="mt-1 space-y-1">
+                    <p className="text-text-dim">macOS / Linux:</p>
+                    <code className="block bg-black/30 px-2 py-1 rounded text-[10px] break-all">OLLAMA_ORIGINS="{window.location.origin}" ollama serve</code>
+                    <p className="text-text-dim">Windows (Ollama lives in the system tray) — set it, then quit &amp; reopen Ollama:</p>
+                    <code className="block bg-black/30 px-2 py-1 rounded text-[10px] break-all">setx OLLAMA_ORIGINS "{window.location.origin}"</code>
+                  </div>
+                </li>
+                <li>In <span className="text-text-main">Settings → Ollama</span>, turn on <span className="text-text-main">"Use my own machine"</span>. Your installed models appear — then chat as normal.</li>
+              </ol>
+              <p className="text-text-dim">Allowing several sites/apps at once? Make <code className="bg-black/30 px-1 rounded text-[11px]">OLLAMA_ORIGINS</code> a comma-separated list — e.g. <code className="bg-black/30 px-1 rounded text-[11px] break-all">{window.location.origin},http://localhost:3010</code> — or use <code className="bg-black/30 px-1 rounded text-[11px]">*</code> to allow any site (handy, but less safe).</p>
+            </div>
+
+            <div className="p-3 rounded-xl border border-border bg-bg/50 space-y-1.5">
+              <p className="text-text-main font-bold">B. Self-host the whole app (server-side Ollama)</p>
+              <p>Run your own copy of Aether with Ollama beside it — the app's server makes the call. A bit more setup, but everything stays on one machine.</p>
+              <ol className="space-y-1.5 pl-1 list-decimal list-inside marker:text-accent">
+                <li>Get the code from <Link href="https://github.com/wlkosonen/ISK02">GitHub</Link> (green <span className="text-text-main">Code</span> → <span className="text-text-main">Download ZIP</span>, or <code className="bg-black/30 px-1 rounded text-[11px]">git clone</code>).</li>
+                <li>Install <Link href="https://www.docker.com/products/docker-desktop/">Docker Desktop</Link>, run <code className="bg-black/30 px-1 rounded text-[11px]">docker compose up --build</code>, and open <code className="bg-black/30 px-1 rounded text-[11px]">http://localhost:3010</code>.</li>
+                <li>Install <Link href="https://ollama.com">Ollama</Link>, pull a model (e.g. <code className="bg-black/30 px-1 rounded text-[11px]">ollama pull llama3.1</code>), and start it so the container can reach it: <code className="bg-black/30 px-1 rounded text-[11px]">OLLAMA_HOST=0.0.0.0 ollama serve</code>.</li>
+                <li>Put <code className="bg-black/30 px-1 rounded text-[11px]">OLLAMA_BASE_URL=http://host.docker.internal:11434</code> in a local <code className="bg-black/30 px-1 rounded text-[11px]">.env</code> (empty by default), then pick <span className="text-text-main">Local Ollama</span> in Settings — it auto-detects installed models.</li>
+              </ol>
+            </div>
+
+            <p className="text-[11px] text-text-dim">Full self-host notes are in the GitHub <Link href="https://github.com/wlkosonen/ISK02#run-with-docker-self-hosting">README</Link>. Local models are smaller than the big cloud ones, so quality varies — but it's free and stays on your machine.</p>
             <p className="p-2.5 rounded-lg bg-[#fbbf24]/10 border border-[#fbbf24]/25 text-[#fde68a] text-[11px]">💡 <span className="font-bold">Tip for local models:</span> lower the <span className="text-text-main">Temperature</span> to around <span className="font-bold">0.6</span> (in Settings). Smaller models can ramble or break the <span className="text-text-main">capture formatting</span> at the default 1.0, which stops finished blocks from saving. Reasoning models (qwen3, deepseek-r1…) are handled automatically — the app tells them to answer directly.</p>
           </section>
 
