@@ -1744,7 +1744,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
       <header className="border-b border-border bg-header/80 backdrop-blur-md px-4 py-3 lg:px-6 lg:py-4 flex justify-between items-center z-50">
         <div className="flex items-center gap-4 lg:gap-6">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-accent rounded flex items-center justify-center text-black font-black shrink-0 shadow-[0_0_15px_rgba(20,184,166,0.2)]">A</div>
+            <button onClick={() => setShowVersionHistory(true)} title="Version history" className="w-8 h-8 bg-accent rounded flex items-center justify-center text-black font-black shrink-0 shadow-[0_0_15px_rgba(20,184,166,0.2)] hover:brightness-110 transition-all">A</button>
             <div className="hidden sm:block">
               <h1 className="text-base lg:text-lg font-bold tracking-tight uppercase leading-none">Aether_Core</h1>
               <span className="text-[8px] lg:text-[11px] font-mono opacity-50 uppercase tracking-[0.2em]">USCS v{USCS_VERSION}</span>
