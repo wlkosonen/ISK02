@@ -10,7 +10,8 @@ export interface CharacterDeliverable {
   name: string;
   desc: string;   // Part B — AI prompt description (COUNTS toward budget)
   card: string;   // Part A — HTML card (does NOT count)
-  cardPalette?: string[];  // palette the card was generated/recolored with (for instant local recolor)
+  cardPalette?: string[];  // baseline palette baked into `card` right now (the "from" for recolorHtml)
+  editPalette?: string[];  // per-card WORKING palette the user tweaks before hitting Recolor (the "to")
 }
 
 // Dungeon Mind (DM) config — a SEPARATE deliverable set (USCS §27). The DM is a

@@ -326,7 +326,7 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 
 // Version of THIS app (the Aether_Core tool), distinct from the USCS framework
 // version it implements. Bump this when you ship changes.
-const APP_VERSION = "0.12.5";
+const APP_VERSION = "0.12.6";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
 const USCS_VERSION = "6.1.1";
 
@@ -2903,6 +2903,12 @@ function CollaboratorChat({ state, setState, compact, askAssistant, setIsChatOpe
 
 function VersionHistoryModal({ onClose }: { onClose: () => void }) {
   const releases: { v: string; title: string; items: string[] }[] = [
+    {
+      v: "0.12.6", title: "Per-character card recolouring",
+      items: [
+        "Each character card now has its own 🎨 Recolour panel (collapsed by default to keep the cast tidy). Open it to tweak that card's colours with the Aether colour picker and hit \"Recolor this card\" to instantly rewrite its HTML — exactly like the Plot Card, but scoped to a single character. Editing one card never touches the global palette or any other character, so you can give each character their own look. \"Reset to global\" snaps a card's swatches back to the shared palette.",
+      ],
+    },
     {
       v: "0.12.5", title: "Delete cast members · accurate token counts · mobile history",
       items: [
@@ -5520,6 +5526,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
 
                     {/* The user-facing HTML card — the FINAL artifact, after the guidance */}
                     {char.card ? (
+                      <>
                       <details className="group/card rounded-xl border border-border bg-header/20">
                         <summary className="cursor-pointer list-none flex items-center justify-between gap-2 p-3 text-[11px] font-black uppercase tracking-widest text-text-muted">
                           <span className="flex items-center gap-2"><ChevronRight className="w-3.5 h-3.5 transition-transform group-open/card:rotate-90" /> Preview HTML card</span>
@@ -5531,31 +5538,68 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                           <CardPreview
                             title={`Character Card — ${char.name}`}
                             html={char.card}
-                            bg={state.palette[0] || "#18181b"}
+                            bg={(char.cardPalette ?? state.palette)[0] || "#18181b"}
                             height={360}
                             rounded="rounded-xl"
                             shadow={false}
                           />
-                          <button
-                            onClick={() => {
-                              const from = char.cardPalette;
-                              if (!from) {
-                                setState(s => ({ ...s, deliverables: { ...s.deliverables, characters: s.deliverables.characters.map(c => c.name === char.name ? { ...c, cardPalette: [...s.palette] } : c) } }));
-                                triggerToast?.(`Captured ${char.name}'s card palette as the baseline — change a swatch, then Recolor.`, "info");
-                                return;
-                              }
-                              const recolored = recolorHtml(char.card, from, state.palette);
-                              if (recolored === char.card) { triggerToast?.("No palette-derived colours to change — adjust a swatch first.", "info"); return; }
-                              setState(s => ({ ...s, deliverables: { ...s.deliverables, characters: s.deliverables.characters.map(c => c.name === char.name ? { ...c, card: recolored, cardPalette: [...s.palette] } : c) } }));
-                              triggerToast?.(`${char.name}'s card recoloured to the current palette ⚡`, "ai-to-ui");
-                            }}
-                            disabled={state.isAssistantLoading}
-                            className="w-full py-2 rounded-lg border border-accent/40 bg-accent/10 text-accent text-[9px] font-black uppercase tracking-widest hover:bg-accent/20 transition-all disabled:opacity-50"
-                          >
-                            ⚡ Recolor to current palette
-                          </button>
                         </div>
                       </details>
+
+                      {/* Per-card colour editor — independent of the global palette and every other card */}
+                      <details className="group/recolor rounded-xl border border-border bg-header/20">
+                        <summary className="cursor-pointer list-none flex items-center gap-2 p-3 text-[11px] font-black uppercase tracking-widest text-text-muted">
+                          <ChevronRight className="w-3.5 h-3.5 transition-transform group-open/recolor:rotate-90" /> 🎨 Recolour card
+                        </summary>
+                        <div className="p-3 pt-0 space-y-3">
+                          <p className="text-[11px] text-text-dim leading-snug">Tweak this card's own colours, then Recolor. Only this card changes — the global palette and other characters stay put. Swatch 1 is the background, swatch 3 the accent.</p>
+                          <div className="flex flex-wrap gap-2">
+                            {(char.editPalette ?? char.cardPalette ?? state.palette).map((color, ci) => (
+                              <div key={ci}>
+                              <ColorPicker
+                                value={color}
+                                onChange={(hex) => setState(s => ({ ...s, deliverables: { ...s.deliverables, characters: s.deliverables.characters.map((c, idx) => {
+                                  if (idx !== i) return c;
+                                  const base = c.editPalette ?? c.cardPalette ?? s.palette;
+                                  const np = [...base]; np[ci] = hex;
+                                  return { ...c, editPalette: np };
+                                }) } }))}
+                                className="cursor-pointer block group/sw"
+                              >
+                                <div className="w-10 h-10 rounded-lg border-2 border-white/10 shadow group-hover/sw:border-accent/40 transition-all flex items-center justify-center overflow-hidden" style={{ backgroundColor: color }} title={color}>
+                                  <div className="w-full h-full opacity-0 group-hover/sw:opacity-100 bg-black/20 flex items-center justify-center transition-opacity"><Palette className="w-3.5 h-3.5 text-white" /></div>
+                                </div>
+                              </ColorPicker>
+                              </div>
+                            ))}
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => {
+                                const from = char.cardPalette ?? state.palette;
+                                const to = char.editPalette ?? from;
+                                const recolored = recolorHtml(char.card, from, to);
+                                if (recolored === char.card) { triggerToast?.("No palette-derived colours to change — adjust a swatch first.", "info"); return; }
+                                setState(s => ({ ...s, deliverables: { ...s.deliverables, characters: s.deliverables.characters.map((c, idx) => idx === i ? { ...c, card: recolored, cardPalette: to, editPalette: to } : c) } }));
+                                triggerToast?.(`${char.name}'s card recoloured ⚡`, "ai-to-ui");
+                              }}
+                              disabled={state.isAssistantLoading}
+                              className="flex-1 py-2 rounded-lg border border-accent/40 bg-accent/10 text-accent text-[9px] font-black uppercase tracking-widest hover:bg-accent/20 transition-all disabled:opacity-50"
+                            >
+                              ⚡ Recolor this card
+                            </button>
+                            <button
+                              onClick={() => setState(s => ({ ...s, deliverables: { ...s.deliverables, characters: s.deliverables.characters.map((c, idx) => idx === i ? { ...c, editPalette: [...s.palette] } : c) } }))}
+                              disabled={state.isAssistantLoading}
+                              title="Reset this card's swatches to the global palette (then Recolor to apply)"
+                              className="py-2 px-3 rounded-lg border border-border text-text-muted text-[9px] font-black uppercase tracking-widest hover:border-accent hover:text-accent transition-all disabled:opacity-50"
+                            >
+                              Reset to global
+                            </button>
+                          </div>
+                        </div>
+                      </details>
+                      </>
                     ) : char.desc ? (
                       <button
                         onClick={() => askAssistant(`[WORKSHOP ACTION — CHARACTER HTML CARD] The narration guidance for "${char.name}" is defined — now produce their user-facing Part A HTML card based on it, using my locked palette and ${state.aestheticMode} aesthetic, per the injected USCS HTML spec. HARD CONSTRAINTS: the card is FLUID, never a narrow fixed width — width:100%; max-width:600px; margin:0 auto (fills a phone, caps and centers on desktop). Any multi-column section uses PERCENTAGE-width cells (width:50%/33%/100% + padding + box-sizing:border-box) inside display:flex; flex-wrap:wrap, so it reflows from ~300px to 600px; any fixed-px decorative element stays ≤300px. The OUTER CARD BACKGROUND must be EXACTLY ${state.palette[0]} (the locked palette background — not an off-palette near-black). Use ${state.palette[2]} as the SOLID hex for accent TEXT (title, accent words, pill text) — rgba is fine for borders and faint background tints, never for text. ACCENT BORDERS: to set apart a section, use a FULL border (border:2px solid #hex) — NEVER a single-side border-left/right bar, inset box-shadow, or gradient strip; ISK0 strips those so the accent vanishes on the platform. Emit it wrapped in <<<USCS_BLOCK CHAR_CARD: ${char.name}>>> … <<<END USCS_BLOCK>>> so it loads into the preview here. Keep only a brief note in chat.`)}
