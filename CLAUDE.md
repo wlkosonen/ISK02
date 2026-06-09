@@ -98,7 +98,10 @@ need a version entry.
 - Dev/preview server listens on **port 3010**.
 
 ## Branching & deploy
-- Push directly to `main`. No feature branches, no PRs unless explicitly asked.
+- **Push ONLY when the user explicitly says to.** A push is a deploy (Render +
+  Kiracy), so the user controls timing. Commit locally as work is verified, but
+  never `git push` right after an iteration — wait to be told, then push the batch.
+- When you do push, push directly to `main`. No feature branches, no PRs unless explicitly asked.
 - The deploy server (Lazarus/Kiracy) pulls `main` and rebuilds Docker at the top
   of every hour via `scripts/aether-update.sh` (systemd timer). So merging to
   `main` is the deploy. To deploy immediately, SSH in and run

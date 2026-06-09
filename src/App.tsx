@@ -328,7 +328,7 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 
 // Version of THIS app (the Aether_Core tool), distinct from the USCS framework
 // version it implements. Bump this when you ship changes.
-const APP_VERSION = "0.12.11";
+const APP_VERSION = "0.12.12";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
 const USCS_VERSION = "6.1.1";
 
@@ -2979,6 +2979,12 @@ function CollaboratorChat({ state, setState, compact, askAssistant, setIsChatOpe
 function VersionHistoryModal({ onClose }: { onClose: () => void }) {
   const releases: { v: string; title: string; items: string[] }[] = [
     {
+      v: "0.12.12", title: "Re-draft a character's HTML card any time",
+      items: [
+        "Character cards now have a persistent \"Re-draft HTML card\" button that stays available even after a card has been captured. Before, once anything landed in the card slot — including a placeholder or a card the model returned without real HTML — the generate button disappeared and you had to nudge the collaborator by hand. Now one click re-requests the card from the guidance with the normal step instructions, replacing the current one when it returns. (The Plot Card already worked this way.)",
+      ],
+    },
+    {
       v: "0.12.11", title: "Refine keeps the character-sheet structure",
       items: [
         "\"Refine [character] in chat\" now explicitly preserves the full USCS character-sheet field structure on re-emit — the labelled fields (Character Name, Role in Story, Physical Description, Core Identity, Defining History, Speech & Mannerisms, Relationship to {{user}}, wants / needs / flaw, etc.). The previous wording (\"no headings\") could be read by smaller models as \"drop the field labels,\" flattening the sheet into a prose blob; it now only strips meta-titles and out-of-sheet commentary.",
@@ -4463,6 +4469,13 @@ function ColorPicker({ value, onChange, children, title = "Color Picker", classN
 // Renders a STORY step. `storyStep` is the index into STEPS (NOT state.step — on
 // the story-dm track the two diverge because DM steps are interleaved), so the
 // switch and all story-index logic key off storyStep.
+// The prompt that asks the collaborator to (re)generate a character's Part A HTML
+// card. Shared by the first-time "Generate" button and the persistent "Re-draft"
+// button, so a creator can always re-request the card even after one is captured.
+function characterCardPrompt(name: string, palette: string[], aestheticMode: string): string {
+  return `[WORKSHOP ACTION — CHARACTER HTML CARD] The narration guidance for "${name}" is defined — now produce their user-facing Part A HTML card based on it, using my locked palette and ${aestheticMode} aesthetic, per the injected USCS HTML spec. HARD CONSTRAINTS: the card is FLUID, never a narrow fixed width — width:100%; max-width:600px; margin:0 auto (fills a phone, caps and centers on desktop). Any multi-column section uses PERCENTAGE-width cells (width:50%/33%/100% + padding + box-sizing:border-box) inside display:flex; flex-wrap:wrap, so it reflows from ~300px to 600px; any fixed-px decorative element stays ≤300px. The OUTER CARD BACKGROUND must be EXACTLY ${palette[0]} (the locked palette background — not an off-palette near-black). Use ${palette[2]} as the SOLID hex for accent TEXT (title, accent words, pill text) — rgba is fine for borders and faint background tints, never for text. ACCENT BORDERS: to set apart a section, use a FULL border (border:2px solid #hex) — NEVER a single-side border-left/right bar, inset box-shadow, or gradient strip; ISK0 strips those so the accent vanishes on the platform. Emit it wrapped in <<<USCS_BLOCK CHAR_CARD: ${name}>>> … <<<END USCS_BLOCK>>> so it loads into the preview here. Keep only a brief note in chat.`;
+}
+
 function renderStep(storyStep: number, state: StoryState, setState: React.Dispatch<React.SetStateAction<StoryState>>, next: () => void, askAssistant: (p: string) => Promise<void>, setHoverHeatLevel?: (lvl: HeatLevel | null) => void, hoverHeatLevel?: HeatLevel | null, isSyncNeeded?: boolean, syncDeskstateToAI?: () => void, onExportDM?: () => void, triggerToast?: (m: string, t: "ai-to-ui" | "ui-to-ai" | "info") => void) {
   const HEAT_DESCRIPTIONS = {
     1: "Slow Burn / Tension Only",
@@ -5749,10 +5762,21 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                           </div>
                         </div>
                       </details>
+
+                      {/* Persistent re-draft — available even after a card is captured, so a
+                          junk/empty/disliked card can be regenerated without nudging chat by hand. */}
+                      <button
+                        onClick={() => askAssistant(characterCardPrompt(char.name, state.palette, state.aestheticMode))}
+                        disabled={state.isAssistantLoading}
+                        title="Ask the collaborator to regenerate this character's HTML card from the guidance (replaces the current one when it returns)"
+                        className="w-full py-2 rounded-lg border border-border text-text-muted text-[9px] font-black uppercase tracking-widest hover:border-accent hover:text-accent hover:bg-accent/10 transition-all disabled:opacity-50"
+                      >
+                        ✦ Re-draft HTML card →
+                      </button>
                       </>
                     ) : char.desc ? (
                       <button
-                        onClick={() => askAssistant(`[WORKSHOP ACTION — CHARACTER HTML CARD] The narration guidance for "${char.name}" is defined — now produce their user-facing Part A HTML card based on it, using my locked palette and ${state.aestheticMode} aesthetic, per the injected USCS HTML spec. HARD CONSTRAINTS: the card is FLUID, never a narrow fixed width — width:100%; max-width:600px; margin:0 auto (fills a phone, caps and centers on desktop). Any multi-column section uses PERCENTAGE-width cells (width:50%/33%/100% + padding + box-sizing:border-box) inside display:flex; flex-wrap:wrap, so it reflows from ~300px to 600px; any fixed-px decorative element stays ≤300px. The OUTER CARD BACKGROUND must be EXACTLY ${state.palette[0]} (the locked palette background — not an off-palette near-black). Use ${state.palette[2]} as the SOLID hex for accent TEXT (title, accent words, pill text) — rgba is fine for borders and faint background tints, never for text. ACCENT BORDERS: to set apart a section, use a FULL border (border:2px solid #hex) — NEVER a single-side border-left/right bar, inset box-shadow, or gradient strip; ISK0 strips those so the accent vanishes on the platform. Emit it wrapped in <<<USCS_BLOCK CHAR_CARD: ${char.name}>>> … <<<END USCS_BLOCK>>> so it loads into the preview here. Keep only a brief note in chat.`)}
+                        onClick={() => askAssistant(characterCardPrompt(char.name, state.palette, state.aestheticMode))}
                         disabled={state.isAssistantLoading}
                         className="w-full py-2.5 rounded-lg border border-accent/40 bg-accent/10 text-accent text-[9px] font-black uppercase tracking-widest hover:bg-accent/20 transition-all disabled:opacity-50"
                       >
