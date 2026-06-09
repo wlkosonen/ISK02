@@ -7,7 +7,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { encode } from "gpt-tokenizer";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
-import { captureDeliverables, type Deliverables, type DMConfig } from "./lib/capture";
+import { captureDeliverables, withRestorePoints, type Deliverables, type DMConfig, type RestorableScalar } from "./lib/capture";
 import { 
   Settings, 
   BookOpen, 
@@ -60,6 +60,8 @@ interface Message {
   content: string;
   usage?: MessageUsage; // present on assistant turns when the provider reports it (Anthropic)
   streaming?: boolean;  // transient: true while tokens are still arriving for this turn
+  rawUncaptured?: string; // set when this turn contained a block that FAILED to capture
+                          // — holds the raw text so the user can re-capture from history
 }
 
 // Cleans the live-streaming buffer for display: hides capture sentinels and
@@ -326,12 +328,17 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 
 // Version of THIS app (the Aether_Core tool), distinct from the USCS framework
 // version it implements. Bump this when you ship changes.
-const APP_VERSION = "0.12.6";
+const APP_VERSION = "0.12.9";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
 const USCS_VERSION = "6.1.1";
 
 // --- Session persistence ---
-// Story state, chat history and typed API keys survive a page reload (per tab).
+// Story state, chat history and typed API keys persist in localStorage, so they
+// survive a full browser restart (not just a reload) — the workshop is long-form
+// and losing an hour's work to a closed tab was the biggest footgun. Keys are
+// included by deliberate choice (max convenience; a shared machine is the user's
+// own responsibility). State is shared across tabs of the same origin — last
+// write wins, which is fine for a single-user workshop.
 const STORAGE_KEY = "aether_core_state_v1";
 
 // Favourite models persist across sessions (localStorage), keyed by provider,
@@ -477,7 +484,9 @@ function migrateTrack(parsed: any): WorkshopTrack {
 function loadInitialState(): StoryState {
   if (typeof window === "undefined") return DEFAULT_STATE;
   try {
-    const raw = window.sessionStorage.getItem(STORAGE_KEY);
+    // Read localStorage; fall back to the legacy sessionStorage copy once, so a
+    // session that was in-flight when this change shipped still restores cleanly.
+    const raw = window.localStorage.getItem(STORAGE_KEY) || window.sessionStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
       // Did the prior session actually contain creative work?
@@ -673,13 +682,16 @@ export default function App() {
   const cur = stepPlan[Math.min(state.step, stepPlan.length - 1)] || stepPlan[0];
   const activeSteps = stepPlan.map(p => p.label);
 
-  // Persist the workshop to sessionStorage on every change (minus the transient
-  // loading flag) so a reload doesn't wipe story progress, chat, or typed keys.
+  // Persist the workshop to localStorage on every change (minus the transient
+  // loading flag) so a browser restart — not just a reload — doesn't wipe story
+  // progress, chat, or typed keys.
   useEffect(() => {
     try {
       const { isAssistantLoading, ...persistable } = state;
-      window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(persistable));
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(persistable));
     } catch (err) {
+      // Most likely the ~5 MB quota (very long chat). Don't crash; the worst case
+      // is this one change isn't autosaved.
       console.warn("Could not persist workshop state:", err);
     }
   }, [state]);
@@ -702,6 +714,10 @@ export default function App() {
   const [readyToAdvance, setReadyToAdvance] = useState(false);
   // Set when the last response hit the Max_Tokens wall (finish reason = length).
   const [responseTruncated, setResponseTruncated] = useState(false);
+  // Holds a block that was cut off mid-stream (its raw text, opener onward) so the
+  // NEXT Continue turn can stitch the rest onto it and capture as one. Only consumed
+  // on an explicit Continue — a normal next turn discards it.
+  const pendingBlockRef = useRef<string | null>(null);
 
   // Disarm the gate whenever the step changes (advance / revert / sidebar jump).
   useEffect(() => { setReadyToAdvance(false); }, [state.step]);
@@ -1017,7 +1033,7 @@ Acknowledge the established parameters, leave everything under NOT YET DECIDED u
   const nextStep = () => setState(prev => ({ ...prev, step: Math.min(prev.step + 1, getActiveSteps(prev.workshopTrack).length - 1) }));
   const prevStep = () => setState(prev => ({ ...prev, step: Math.max(prev.step - 1, 0) }));
 
-  const askAssistant = async (prompt: string, requestHistoryOverride?: Message[]) => {
+  const askAssistant = async (prompt: string, requestHistoryOverride?: Message[], isContinue: boolean = false) => {
     // A new turn supersedes any prior "step complete" signal until the AI re-confirms.
     setReadyToAdvance(false);
     setResponseTruncated(false);
@@ -1238,13 +1254,23 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
           throw new Error("Empty response from matrix");
         }
 
-        const { next: capturedDeliverables, captured, cleaned, warnings } = captureDeliverables(fullText, state.deliverables, state.palette);
+        // STITCH only across an explicit Continue — otherwise an unrelated next turn
+        // could wrongly merge with a stale half-block. A non-Continue turn discards
+        // any pending block by passing null here.
+        const priorBlock = isContinue ? pendingBlockRef.current : null;
+        const { next: capturedDeliverables, captured, cleaned, warnings, pendingBlock } = captureDeliverables(fullText, state.deliverables, state.palette, priorBlock || undefined);
+        pendingBlockRef.current = pendingBlock; // carry a fresh truncation forward, or clear
         const displayText = (cleaned || fullText).replace(/\[SYNC_PROCEED\]/gi, "").trim();
         const assistantMessage: Message = { role: "assistant", content: displayText, usage };
+        // A block was present (a warning means "recognised but couldn't place it",
+        // e.g. a placeholder card with no character yet) — keep the raw so the user
+        // can re-capture from this message once the situation is fixed.
+        if (warnings.length > 0) assistantMessage.rawUncaptured = fullText;
 
         const updates: any = {};
         const toastMsgs: string[] = [];
-        if (captured.length > 0) updates.deliverables = capturedDeliverables;
+        // Stash the prior value of any overwritten block so it can be restored.
+        if (captured.length > 0) updates.deliverables = withRestorePoints(state.deliverables, capturedDeliverables);
 
         const modeMatch = fullText.match(/\[SET_MODE:\s*(SFW|NSFW)\]/i);
         if (modeMatch) { updates.mode = modeMatch[1].toUpperCase() as Mode; toastMsgs.push(`Mode: ${updates.mode}`); }
@@ -1454,7 +1480,43 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
   // Resume a response that was cut off at the Max_Tokens wall.
   const continueResponse = () => {
     if (state.isAssistantLoading) return;
-    askAssistant("[CONTINUE] Your previous message was cut off at the token limit. Resume EXACTLY where you stopped — do not repeat anything already sent, just continue the text from the exact cut-off point. If you were mid-way through a <<<USCS_BLOCK>>>, finish that block and include its closing <<<END USCS_BLOCK>>> sentinel so it captures correctly.");
+    askAssistant("[CONTINUE] Your previous message was cut off at the token limit. Resume EXACTLY where you stopped — do not repeat anything already sent, just continue the text from the exact cut-off point. If you were mid-way through a <<<USCS_BLOCK>>>, finish that block and include its closing <<<END USCS_BLOCK>>> sentinel so it captures correctly.", undefined, true);
+  };
+
+  // Re-run capture from a past message whose block failed to save (e.g. a
+  // placeholder-named card that now has a character to attach to). The raw text was
+  // stashed on the message at the time; capture it against the CURRENT package.
+  const recaptureFromMessage = (raw: string, msgIndex: number) => {
+    if (state.isAssistantLoading) return;
+    const { next, captured, warnings } = captureDeliverables(raw, state.deliverables, state.palette);
+    if (captured.length > 0) {
+      const withPrev = withRestorePoints(state.deliverables, next);
+      setState(s => ({ ...s, deliverables: withPrev, assistantHistory: s.assistantHistory.map((m, i) => i === msgIndex ? { ...m, rawUncaptured: undefined } : m) }));
+      triggerToast(`✓ Re-captured to package: ${captured.join(", ")}`, "ai-to-ui");
+    } else {
+      triggerToast(warnings[0] || "Still couldn't capture that block from here — re-run it in chat.", "info");
+    }
+  };
+
+  // One-level restore: swap a block back to its pre-capture value (and keep the
+  // swapped-out value as the new restore point, so it's also a redo).
+  const restoreDeliverable = (t: RestoreTarget) => {
+    setState(s => {
+      const d = s.deliverables;
+      if (t.kind === "scalar") {
+        const pv = d.prev?.[t.key];
+        if (pv == null) return s;
+        triggerToast(`↺ Restored the previous ${t.key.replace(/([A-Z])/g, " $1").toLowerCase().trim()}.`, "ai-to-ui");
+        return { ...s, deliverables: { ...d, [t.key]: pv, prev: { ...d.prev, [t.key]: d[t.key] as string } } };
+      }
+      const characters = d.characters.map(c => {
+        if (c.name.toLowerCase() !== t.name.toLowerCase()) return c;
+        if (t.kind === "charDesc") { if (c.prevDesc == null) return c; return { ...c, desc: c.prevDesc, prevDesc: c.desc }; }
+        if (c.prevCard == null) return c; return { ...c, card: c.prevCard, prevCard: c.card };
+      });
+      triggerToast(`↺ Restored ${t.name}'s previous ${t.kind === "charDesc" ? "description" : "card"}.`, "ai-to-ui");
+      return { ...s, deliverables: { ...d, characters } };
+    });
   };
 
   // Re-send the last user turn after a failed request (e.g. an OpenRouter free
@@ -1617,7 +1679,8 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
     setReadyToAdvance(false);
     setShowSettings(false);
     setShowRestoreNotice(false);
-    try { window.sessionStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+    pendingBlockRef.current = null;
+    try { window.localStorage.removeItem(STORAGE_KEY); window.sessionStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
     triggerToast("New project started — your provider, keys & favourites were kept.", "info");
   };
 
@@ -1899,7 +1962,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
 
               {state.step >= 1 && (
                 <div className="border-t-2 border-accent/30 pt-4 mt-auto shrink-0">
-                  <StatusMonitor state={state} onTighten={askAssistant} />
+                  <StatusMonitor state={state} onTighten={askAssistant} onRestore={restoreDeliverable} />
                 </div>
               )}
             </motion.nav>
@@ -2025,6 +2088,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
                 responseTruncated={responseTruncated}
                 onContinue={continueResponse}
                 onRetry={retryLast}
+                onRecapture={recaptureFromMessage}
               />
               {isChatDetached && (
                 <div 
@@ -2591,7 +2655,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
   );
 }
 
-function CollaboratorChat({ state, setState, compact, askAssistant, setIsChatOpen, isDetached, setIsDetached, isSyncNeeded, syncDeskstateToAI, onExport, onExportDM, onSnapshot, onSaveWorkspace, onLoadWorkspace, isExporting, exportProgress, readyToAdvance, onAdvance, responseTruncated, onContinue, onRetry }: {
+function CollaboratorChat({ state, setState, compact, askAssistant, setIsChatOpen, isDetached, setIsDetached, isSyncNeeded, syncDeskstateToAI, onExport, onExportDM, onSnapshot, onSaveWorkspace, onLoadWorkspace, isExporting, exportProgress, readyToAdvance, onAdvance, responseTruncated, onContinue, onRetry, onRecapture }: {
   state: StoryState,
   setState: React.Dispatch<React.SetStateAction<StoryState>>,
   compact?: boolean,
@@ -2612,7 +2676,8 @@ function CollaboratorChat({ state, setState, compact, askAssistant, setIsChatOpe
   onAdvance?: () => void,
   responseTruncated?: boolean,
   onContinue?: () => void,
-  onRetry?: () => void
+  onRetry?: () => void,
+  onRecapture?: (raw: string, msgIndex: number) => void
 }) {
   const workspaceFileRef = useRef<HTMLInputElement>(null);
   const activeSteps = getActiveSteps(state.workshopTrack);
@@ -2737,6 +2802,16 @@ function CollaboratorChat({ state, setState, compact, askAssistant, setIsChatOpe
                   </div>
                 );
               })()}
+              {m.role === "assistant" && !isError && m.rawUncaptured && onRecapture && (
+                <button
+                  onClick={() => onRecapture(m.rawUncaptured!, i)}
+                  disabled={state.isAssistantLoading}
+                  title="A finished block in this message didn't save to your package. Re-capture it (useful once the matching character or section exists)."
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-[#fbbf24]/10 hover:bg-[#fbbf24]/20 border border-[#fbbf24]/30 rounded-lg text-[11px] font-black uppercase tracking-wider text-[#fbbf24] transition-all active:scale-95 disabled:opacity-50"
+                >
+                  <AlertTriangle className="w-3 h-3" /> A block didn't save — Re-capture
+                </button>
+              )}
               {isError && isLast && onRetry && (
                 <button
                   onClick={onRetry}
@@ -2903,6 +2978,25 @@ function CollaboratorChat({ state, setState, compact, askAssistant, setIsChatOpe
 
 function VersionHistoryModal({ onClose }: { onClose: () => void }) {
   const releases: { v: string; title: string; items: string[] }[] = [
+    {
+      v: "0.12.9", title: "Restore a deliverable's previous version",
+      items: [
+        "If the collaborator re-emits a block and the new version is worse, you can now undo it. Whenever a capture overwrites an existing block, the previous version is kept — a small ↺ button appears (in the Token Summary for Prompt Plot, Guidelines, Reminders, Player Persona and each character; and next to the Plot Card and character cards) to swap it back. Click again to redo. It's one level deep, per block, and your previous good version is no longer lost the moment the AI rewrites it.",
+      ],
+    },
+    {
+      v: "0.12.8", title: "Cut-off deliverables now capture after Continue",
+      items: [
+        "When a long deliverable (a Prompt Plot, full character sheet, etc.) hits the response token limit and gets cut off mid-block, clicking \"Continue\" now stitches the two halves together and saves the finished block to your package automatically. Previously the opening marker was in one message and the closing marker in the next, so neither half captured and the work was silently lost — you'd have to regenerate the whole thing.",
+        "If a block is ever detected but can't be saved (for example a character card that came back before its character existed), the message now shows a \"Re-capture\" button instead of dropping it silently — fix the situation and click to save it from history.",
+      ],
+    },
+    {
+      v: "0.12.7", title: "Your work now survives a browser restart",
+      items: [
+        "The workshop now autosaves to your browser's local storage instead of per-tab session storage. Previously, closing the tab or quitting the browser wiped your story, chat, and typed API keys — now they persist on your own machine and are restored next time you open the app. Nothing is sent to a server; it all stays in your browser. (On a shared/public computer, remember your API keys persist too — use \"New Project\" to clear everything.)",
+      ],
+    },
     {
       v: "0.12.6", title: "Per-character card recolouring",
       items: [
@@ -3339,7 +3433,8 @@ function CopyButton({ text, label = "Copy", title, variant = "icon" }: { text: s
   );
 }
 
-function StatusMonitor({ state, onTighten }: { state: StoryState; onTighten?: (p: string) => void }) {
+type RestoreTarget = { kind: "scalar"; key: RestorableScalar } | { kind: "charDesc" | "charCard"; name: string };
+function StatusMonitor({ state, onTighten, onRestore }: { state: StoryState; onTighten?: (p: string) => void; onRestore?: (t: RestoreTarget) => void }) {
   // Counts ONLY the captured §21.1 package blocks (Prompt Plot + Guidelines +
   // Reminders + Player Persona + each character's AI description) — not workshop
   // chatter or non-counting HTML/image blocks. ~4 chars/token estimate.
@@ -3371,6 +3466,17 @@ function StatusMonitor({ state, onTighten }: { state: StoryState; onTighten?: (p
       REMINDERS: state.compactRules.reminders, CHAR_DESC: state.compactRules.characters,
     };
     const crule = (opts?.type ? crMap[opts.type] || "" : "").trim();
+    // One-level restore: show a ↺ when this block has a stashed previous value.
+    const typeToScalar: Record<string, RestorableScalar> = {
+      PROMPT_PLOT: "promptPlot", GUIDELINES: "guidelines", REMINDERS: "reminders", PLAYER_PERSONA: "playerPersona",
+    };
+    let restoreTarget: RestoreTarget | null = null;
+    if (opts?.type === "CHAR_DESC" && opts.name) {
+      const c = state.deliverables.characters.find(x => x.name === opts.name);
+      if (c?.prevDesc != null) restoreTarget = { kind: "charDesc", name: opts.name };
+    } else if (opts?.type && typeToScalar[opts.type] && state.deliverables.prev?.[typeToScalar[opts.type]] != null) {
+      restoreTarget = { kind: "scalar", key: typeToScalar[opts.type] };
+    }
     return (
       <div key={key}>
         <div className="flex items-center justify-between py-1">
@@ -3384,6 +3490,15 @@ function StatusMonitor({ state, onTighten }: { state: StoryState; onTighten?: (p
             <span className={`font-mono ${over ? "text-[#f43f5e] font-bold" : content ? "text-text-main" : "text-text-dim"}`}>
               {content ? `${fmtN(t)}${cap ? ` / ${fmtN(cap)}` : ""}` : "—"}
             </span>
+            {restoreTarget && onRestore && (
+              <button
+                onClick={() => onRestore(restoreTarget!)}
+                title={`Restore the previous version of ${label} — undo the last AI overwrite (click again to redo)`}
+                className="text-[#fbbf24]/80 hover:text-[#fbbf24] transition-colors leading-none text-[13px]"
+              >
+                ↺
+              </button>
+            )}
             {content && <CopyButton text={content} title={`Copy ${label} to clipboard`} />}
           </span>
         </div>
@@ -5299,6 +5414,18 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                     <span className="text-[11px] font-black uppercase tracking-widest text-accent flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5" /> Live Plot Card — captured HTML</span>
                     <div className="flex items-center gap-2.5">
                       <span className="text-[8px] font-mono text-text-dim uppercase tracking-widest">sandboxed · scripts off</span>
+                      {state.deliverables.prev?.plotCard != null && (
+                        <button
+                          onClick={() => setState(s => {
+                            const pv = s.deliverables.prev?.plotCard;
+                            if (pv == null) return s;
+                            triggerToast?.("↺ Restored the previous Plot Card.", "ai-to-ui");
+                            return { ...s, deliverables: { ...s.deliverables, plotCard: pv, prev: { ...s.deliverables.prev, plotCard: s.deliverables.plotCard } } };
+                          })}
+                          title="Restore the previous Plot Card — undo the last AI overwrite (click again to redo)"
+                          className="text-[#fbbf24]/80 hover:text-[#fbbf24] transition-colors text-[14px] leading-none"
+                        >↺</button>
+                      )}
                       <CopyButton variant="button" label="Copy HTML" text={state.deliverables.plotCard} title="Copy the raw Plot Card HTML (paste into a playroom or test render)" />
                     </div>
                   </div>
@@ -5530,7 +5657,17 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                       <details className="group/card rounded-xl border border-border bg-header/20">
                         <summary className="cursor-pointer list-none flex items-center justify-between gap-2 p-3 text-[11px] font-black uppercase tracking-widest text-text-muted">
                           <span className="flex items-center gap-2"><ChevronRight className="w-3.5 h-3.5 transition-transform group-open/card:rotate-90" /> Preview HTML card</span>
-                          <span onClick={(e) => e.preventDefault()}>
+                          <span onClick={(e) => e.preventDefault()} className="flex items-center gap-2">
+                            {char.prevCard != null && (
+                              <button
+                                onClick={(e) => { e.preventDefault();
+                                  setState(s => ({ ...s, deliverables: { ...s.deliverables, characters: s.deliverables.characters.map((c, idx) => idx === i ? (c.prevCard == null ? c : { ...c, card: c.prevCard, prevCard: c.card }) : c) } }));
+                                  triggerToast?.(`↺ Restored ${char.name}'s previous card.`, "ai-to-ui");
+                                }}
+                                title={`Restore ${char.name}'s previous card — undo the last AI overwrite (click again to redo)`}
+                                className="text-[#fbbf24]/80 hover:text-[#fbbf24] transition-colors text-[14px] leading-none"
+                              >↺</button>
+                            )}
                             <CopyButton variant="button" label="Copy HTML" text={char.card} title={`Copy ${char.name}'s card HTML`} />
                           </span>
                         </summary>

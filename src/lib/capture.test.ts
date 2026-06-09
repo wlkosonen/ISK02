@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { captureDeliverables, isPlaceholderCharName, type Deliverables } from "./capture";
+import { captureDeliverables, withRestorePoints, isPlaceholderCharName, type Deliverables } from "./capture";
 
 // Fresh empty package per test so captures don't bleed across cases.
 function empty(): Deliverables {
@@ -196,6 +196,100 @@ describe("captureDeliverables — first messages & DM fields", () => {
     const { next } = captureDeliverables(text, empty());
     expect(next.dmConfig.statSchema).toBe("HP, Max HP, Alive");
     expect(next.dmConfig.gameRules).toBe("Roll d20 + modifier.");
+  });
+});
+
+// Truncation stitching — a block cut off at the token limit, then finished on the
+// next Continue turn, must capture as ONE block. Capture runs per-message, so the
+// opener (turn 1) and the closing END (turn 2) only pair up via `priorBlock`.
+describe("captureDeliverables — Continue stitching", () => {
+  it("returns the truncated trailing block as pendingBlock (nothing captured yet)", () => {
+    const text = "<<<USCS_BLOCK GUIDELINES>>>\nRule one and then it was cut off mid";
+    const { captured, pendingBlock, next } = captureDeliverables(text, empty());
+    expect(captured).toHaveLength(0);
+    expect(next.guidelines).toBe("");
+    expect(pendingBlock).toContain("<<<USCS_BLOCK GUIDELINES>>>");
+    expect(pendingBlock).toContain("Rule one and then it was cut off mid");
+  });
+
+  it("stitches a split block: prior opener + this turn's END captures as one", () => {
+    const prior = "<<<USCS_BLOCK PROMPT_PLOT>>>\nThe story begins in a ruined";
+    const cont = "citadel where the last light flickers.\n<<<END USCS_BLOCK>>>";
+    const { next, captured, pendingBlock } = captureDeliverables(cont, empty(), undefined, prior);
+    expect(captured).toContain("Prompt Plot");
+    expect(next.promptPlot).toContain("The story begins in a ruined");
+    expect(next.promptPlot).toContain("citadel where the last light flickers.");
+    expect(pendingBlock).toBeNull();
+  });
+
+  it("carries a still-unfinished block forward (doubly-truncated continuation)", () => {
+    const prior = "<<<USCS_BLOCK GUIDELINES>>>\nRule one";
+    const cont = "and rule two but STILL cut off";
+    const { captured, pendingBlock } = captureDeliverables(cont, empty(), undefined, prior);
+    expect(captured).toHaveLength(0);
+    expect(pendingBlock).toContain("Rule one");
+    expect(pendingBlock).toContain("STILL cut off");
+  });
+
+  it("a continuation that re-emits the FULL block still captures the complete version", () => {
+    const prior = "<<<USCS_BLOCK REMINDERS>>>\nPartial half";
+    const cont = "<<<USCS_BLOCK REMINDERS>>>\nThe complete reminders.\n<<<END USCS_BLOCK>>>";
+    const { next, pendingBlock } = captureDeliverables(cont, empty(), undefined, prior);
+    expect(next.reminders).toBe("The complete reminders."); // last write wins
+    expect(pendingBlock).toBeNull();
+  });
+
+  it("never re-displays the prior half — cleaned reflects only this turn", () => {
+    const prior = "<<<USCS_BLOCK PROMPT_PLOT>>>\nFIRST_HALF_TEXT";
+    const cont = "SECOND_HALF_TEXT\n<<<END USCS_BLOCK>>>";
+    const { cleaned } = captureDeliverables(cont, empty(), undefined, prior);
+    expect(cleaned).toContain("SECOND_HALF_TEXT");
+    expect(cleaned).not.toContain("FIRST_HALF_TEXT");
+    expect(cleaned).not.toMatch(/<<<END/);
+  });
+
+  it("an orphan END with no prior block captures nothing (no false stitch)", () => {
+    const text = "...just trailing prose.\n<<<END USCS_BLOCK>>>";
+    const { captured, pendingBlock } = captureDeliverables(text, empty());
+    expect(captured).toHaveLength(0);
+    expect(pendingBlock).toBeNull();
+  });
+});
+
+// One-level restore — when a capture overwrites a block, the prior value is
+// stashed so a bad AI re-skin can be undone.
+describe("withRestorePoints", () => {
+  it("records the prior value when a non-empty scalar block is overwritten", () => {
+    const old = empty(); old.guidelines = "Good v1.";
+    const neu = { ...empty(), guidelines: "Worse v2." };
+    const out = withRestorePoints(old, neu);
+    expect(out.guidelines).toBe("Worse v2.");
+    expect(out.prev?.guidelines).toBe("Good v1.");
+  });
+
+  it("does NOT create a restore point on the first write (old was empty)", () => {
+    const old = empty();
+    const neu = { ...empty(), guidelines: "First version." };
+    const out = withRestorePoints(old, neu);
+    expect(out.prev?.guidelines).toBeUndefined();
+  });
+
+  it("carries an existing restore point forward for an unchanged block", () => {
+    const old = empty(); old.reminders = "current"; old.prev = { reminders: "older" };
+    const neu = { ...empty(), reminders: "current", prev: { reminders: "older" } };
+    const out = withRestorePoints(old, neu);
+    expect(out.prev?.reminders).toBe("older"); // untouched, kept
+  });
+
+  it("stashes a character's prior desc when overwritten, none for a new character", () => {
+    const old = empty(); old.characters = [{ name: "Mara", desc: "old desc", card: "" }];
+    const neu = { ...empty(), characters: [
+      { name: "Mara", desc: "new desc", card: "" },
+      { name: "Toren", desc: "fresh", card: "" },
+    ] };
+    const out = withRestorePoints(old, neu);
+    expect(out.characters[0].prevDesc).toBe("old desc");
+    expect(out.characters[1].prevDesc).toBeUndefined(); // brand-new
   });
 });
 

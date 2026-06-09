@@ -12,6 +12,8 @@ export interface CharacterDeliverable {
   card: string;   // Part A — HTML card (does NOT count)
   cardPalette?: string[];  // baseline palette baked into `card` right now (the "from" for recolorHtml)
   editPalette?: string[];  // per-card WORKING palette the user tweaks before hitting Recolor (the "to")
+  prevDesc?: string;       // one-level restore: the description before it was last overwritten
+  prevCard?: string;       // one-level restore: the card HTML before it was last overwritten
 }
 
 // Dungeon Mind (DM) config — a SEPARATE deliverable set (USCS §27). The DM is a
@@ -41,7 +43,17 @@ export interface Deliverables {
   characters: CharacterDeliverable[];
   firstMessages: { label: string; content: string }[];   // one per scenario variant — COUNTS
   dmConfig: DMConfig;     // Dungeon Mind config (USCS §27) — only built on DM tracks
+  // One-level restore: each scalar block's value BEFORE it was last overwritten by a
+  // capture. Populated by withRestorePoints; not counted, not exported.
+  prev?: Partial<Record<RestorableScalar, string>>;
 }
+
+// The scalar story-package blocks that support one-level "restore previous".
+export const RESTORABLE_SCALARS = [
+  "titleSummary", "plotCard", "promptPlot", "guidelines",
+  "reminders", "playerPersona", "scenarios", "imagePrompts",
+] as const;
+export type RestorableScalar = typeof RESTORABLE_SCALARS[number];
 
 export const DELIVERABLE_LABELS: Record<string, string> = {
   TITLE_SUMMARY: "Title & Summary", PLOT_CARD: "Plot Card", PROMPT_PLOT: "Prompt Plot",
@@ -101,17 +113,28 @@ export function isPlaceholderCharName(name: string): boolean {
   ].includes(n);
 }
 
-export function captureDeliverables(text: string, current: Deliverables, palette?: string[]): { next: Deliverables; captured: string[]; cleaned: string; warnings: string[] } {
+export function captureDeliverables(text: string, current: Deliverables, palette?: string[], priorBlock?: string): { next: Deliverables; captured: string[]; cleaned: string; warnings: string[]; pendingBlock: string | null } {
   const next: Deliverables = { ...current, characters: current.characters.map(c => ({ ...c })), firstMessages: current.firstMessages.map(f => ({ ...f })), dmConfig: { ...current.dmConfig } };
   const captured: string[] = [];
   const warnings: string[] = [];
+  // The trailing block that ran to EOF with no close — handed back so the caller
+  // can stitch the NEXT (Continue) turn onto it instead of losing the half. Null
+  // unless a real truncation happened.
+  let pendingBlock: string | null = null;
+
+  // STITCHING: when the previous turn was cut off mid-block, `priorBlock` is that
+  // unterminated block's raw text (opener marker onward). We SCAN over priorBlock +
+  // this turn so the earlier opener pairs with this turn's closing <<<END>>> and
+  // captures as one block. The visible `cleaned` text is computed from THIS turn
+  // only (below) — the earlier half is never re-displayed.
+  const scanText = priorBlock ? priorBlock + "\n" + text : text;
 
   // Pass 1: locate every opening marker (tolerant). Pass 2: for each, take its
   // content up to the earliest of — a closing END marker, the next opener, or EOF.
   const openers: { type: string; name: string; markerStart: number; contentStart: number }[] = [];
   OPEN_RE.lastIndex = 0;
   let om: RegExpExecArray | null;
-  while ((om = OPEN_RE.exec(text)) !== null) {
+  while ((om = OPEN_RE.exec(scanText)) !== null) {
     openers.push({ type: om[1].toUpperCase(), name: (om[2] || "").trim(), markerStart: om.index, contentStart: OPEN_RE.lastIndex });
   }
 
@@ -119,18 +142,20 @@ export function captureDeliverables(text: string, current: Deliverables, palette
     const op = openers[oi];
     const type = op.type;
     const name = op.name;
-    const nextStart = oi + 1 < openers.length ? openers[oi + 1].markerStart : text.length;
+    const nextStart = oi + 1 < openers.length ? openers[oi + 1].markerStart : scanText.length;
     END_RE.lastIndex = op.contentStart;
-    const endM = END_RE.exec(text);
+    const endM = END_RE.exec(scanText);
     const hasEnd = !!endM && endM.index < nextStart;
     let regionEnd: number;
     let eofBounded = false;
     if (hasEnd) regionEnd = endM!.index;
     else if (oi + 1 < openers.length) regionEnd = nextStart;
-    else { regionEnd = text.length; eofBounded = true; }
-    const raw = text.slice(op.contentStart, regionEnd);
-    // No end marker AND last block AND not fence-closed → truncated mid-stream, skip.
-    if (eofBounded && !endsWithFence(raw)) continue;
+    else { regionEnd = scanText.length; eofBounded = true; }
+    const raw = scanText.slice(op.contentStart, regionEnd);
+    // No end marker AND last block AND not fence-closed → truncated mid-stream. Hand
+    // the whole block (opener onward) back as pendingBlock so the next Continue turn
+    // can stitch the rest onto it, instead of silently dropping the half.
+    if (eofBounded && !endsWithFence(raw)) { pendingBlock = scanText.slice(op.markerStart); continue; }
     const content = stripWrappingFences(raw);
     if (!content) continue;
 
@@ -197,10 +222,32 @@ export function captureDeliverables(text: string, current: Deliverables, palette
   }
 
   // Remove only the sentinel marker lines for display; keep the block content.
+  // Computed from THIS turn's `text` only (never the stitched scanText), so a prior
+  // truncated half is never re-shown in the chat.
   const cleaned = text
     .replace(/^[ \t]*<{2,}\s*USCS_BLOCK[^\n>]*>{2,}[ \t]*\r?\n?/gm, "")
     .replace(/^[ \t]*<{2,}\s*END\s+USCS_BLOCK[^\n>]*>{2,}[ \t]*\r?\n?/gm, "")
     .trim();
 
-  return { next, captured, cleaned, warnings };
+  return { next, captured, cleaned, warnings, pendingBlock };
+}
+
+// After a capture, stash the PRIOR value of every block that was just overwritten
+// with a different, non-empty old value — so a bad AI re-skin can be undone one
+// level. `old` is the package before this capture, `neu` the one after. Unchanged
+// blocks keep whatever restore point they already had. Returns `neu` augmented.
+export function withRestorePoints(old: Deliverables, neu: Deliverables): Deliverables {
+  const prev: Partial<Record<RestorableScalar, string>> = { ...(neu.prev || {}) };
+  for (const k of RESTORABLE_SCALARS) {
+    if (neu[k] !== old[k] && (old[k] || "").trim()) prev[k] = old[k] as string;
+  }
+  const characters = neu.characters.map(c => {
+    const o = old.characters.find(x => x.name.toLowerCase() === c.name.toLowerCase());
+    if (!o) return c; // brand-new character — nothing to restore to
+    const patch: Partial<CharacterDeliverable> = {};
+    if (c.desc !== o.desc && (o.desc || "").trim()) patch.prevDesc = o.desc;
+    if (c.card !== o.card && (o.card || "").trim()) patch.prevCard = o.card;
+    return Object.keys(patch).length ? { ...c, ...patch } : c;
+  });
+  return { ...neu, prev, characters };
 }
