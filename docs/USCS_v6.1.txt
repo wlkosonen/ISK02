@@ -3922,7 +3922,7 @@ Fields in order — all required for every character:
     is telling you something different. Document what it says.
 
 ✦ CORE IDENTITY
-  — 4 anchor traits using the G1itzh framework: 3 similar, 1 different
+  — 4 anchor traits: 3 similar, 1 different
     (3 traits that cluster in one direction + 1 that disrupts the pattern)
     This asymmetry is what makes the character feel real rather than
     archetypal. A character who is cold, controlled, and calculating —
@@ -6769,6 +6769,12 @@ v6.1.1 — June 2026
   MAINTAINED BY: @Shegs (with Claude), alongside the Aether_Core workshop tool.
   A point release over the v6.1 base: platform-fit corrections driven by live
   ISK0 rendering tests. No content removed; the changes below are now current.
+
+    — Section 10 (Character Sheet — Core Identity): removed a stray contributor
+      credit ("…using the G1itzh framework") from the 4-anchor-traits FIELD
+      instruction. Weaker models were echoing the attribution into the finished
+      character sheet. The 3-similar/1-different technique is unchanged, and the
+      credit remains in the Credits & Attributions section where it belongs.
 
     — Section 5 (Card HTML Rules): FULL ACCENT BORDERS. Live testing (2026-06)
       confirmed ISK0 strips single-side accent bars (border-left / border-right

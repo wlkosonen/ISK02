@@ -328,7 +328,7 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 
 // Version of THIS app (the Aether_Core tool), distinct from the USCS framework
 // version it implements. Bump this when you ship changes.
-const APP_VERSION = "0.12.9";
+const APP_VERSION = "0.12.10";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
 const USCS_VERSION = "6.1.1";
 
@@ -2978,6 +2978,13 @@ function CollaboratorChat({ state, setState, compact, askAssistant, setIsChatOpe
 
 function VersionHistoryModal({ onClose }: { onClose: () => void }) {
   const releases: { v: string; title: string; items: string[] }[] = [
+    {
+      v: "0.12.10", title: "Cleaner \"Refine character\"",
+      items: [
+        "\"Refine [character] in chat\" now hands the collaborator that character's actual captured sheet, instead of asking it to recall one it was never shown. Before, with nothing to go on, weaker models padded the reply with the raw USCS field template and internal authoring jargon, and the first re-emit was often unusable. It's now told to summarise the existing sheet in its own words and re-emit only the real character content.",
+        "Removed a stray contributor credit (\"…using the G1itzh framework\") from the character-sheet spec's Core Identity field — some models were copying that attribution straight into the finished sheet. The 3-similar/1-different trait technique is unchanged, and the credit stays in the framework's Credits section.",
+      ],
+    },
     {
       v: "0.12.9", title: "Restore a deliverable's previous version",
       items: [
@@ -5749,7 +5756,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
 
                     {/* Refine the guidance in chat (replaces the dead Edit_Profile) */}
                     <button
-                      onClick={() => askAssistant(`[WORKSHOP ACTION — REFINE CHARACTER] Let's refine "${char.name}"'s narration guidance. Briefly note what's already defined and ask what I'd like to change — personality, wants, fears, speech & mannerisms, relationships, or lore. When we update, re-emit <<<USCS_BLOCK CHAR_DESC: ${char.name}>>> … <<<END USCS_BLOCK>>>${char.card ? ` (and re-emit <<<USCS_BLOCK CHAR_CARD: ${char.name}>>> only if the visible card needs to reflect the change)` : ""} so the captured sheet here updates.`)}
+                      onClick={() => askAssistant(`[WORKSHOP ACTION — REFINE CHARACTER] Here is "${char.name}"'s CURRENT captured narration guidance — we are refining THIS existing sheet, not building from scratch:\n\n"""\n${char.desc || "(nothing captured yet — treat this as a fresh build)"}\n"""\n\nIn ONE short paragraph, summarise what's already established IN YOUR OWN WORDS — do NOT paste the USCS field list, the section spec or template, any instructional text, or any contributor/framework names. Then ask which aspect I'd like to change (personality, wants, fears, speech & mannerisms, relationships, or lore). When we update, re-emit the FULL revised sheet — ONLY the actual character content, with no headings like "Revised Character Sheet" and no commentary inside the block — wrapped in <<<USCS_BLOCK CHAR_DESC: ${char.name}>>> … <<<END USCS_BLOCK>>>${char.card ? ` (and re-emit <<<USCS_BLOCK CHAR_CARD: ${char.name}>>> only if the visible card needs to change)` : ""} so the captured sheet here updates.`)}
                       disabled={state.isAssistantLoading}
                       className="w-full py-2.5 rounded-lg border border-border text-[9px] font-black uppercase tracking-widest text-text-muted hover:border-accent hover:text-accent hover:bg-accent/10 transition-all disabled:opacity-50"
                     >
