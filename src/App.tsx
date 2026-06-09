@@ -5684,6 +5684,15 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                         <summary className="cursor-pointer list-none flex items-center justify-between gap-2 p-3 text-[11px] font-black uppercase tracking-widest text-text-muted">
                           <span className="flex items-center gap-2"><ChevronRight className="w-3.5 h-3.5 transition-transform group-open/card:rotate-90" /> Preview HTML card</span>
                           <span onClick={(e) => e.preventDefault()} className="flex items-center gap-2">
+                            <button
+                              onClick={(e) => { e.preventDefault(); askAssistant(characterCardPrompt(char.name, state.palette, state.aestheticMode)); }}
+                              disabled={state.isAssistantLoading}
+                              title={`Re-draft ${char.name}'s HTML card from the guidance — replaces the current one when it returns`}
+                              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-border bg-bg hover:border-accent text-[11px] font-black uppercase tracking-widest text-text-muted hover:text-accent transition-all active:scale-95 disabled:opacity-50"
+                            >
+                              <Sparkles className="w-3 h-3" /> Re-draft
+                            </button>
+                            <CopyButton variant="button" label="Copy HTML" text={char.card} title={`Copy ${char.name}'s card HTML`} />
                             {char.prevCard != null && (
                               <button
                                 onClick={(e) => { e.preventDefault();
@@ -5694,7 +5703,6 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                                 className="text-[#fbbf24]/80 hover:text-[#fbbf24] transition-colors text-[14px] leading-none"
                               >↺</button>
                             )}
-                            <CopyButton variant="button" label="Copy HTML" text={char.card} title={`Copy ${char.name}'s card HTML`} />
                           </span>
                         </summary>
                         <div className="p-3 pt-0 space-y-2">
@@ -5762,17 +5770,6 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                           </div>
                         </div>
                       </details>
-
-                      {/* Persistent re-draft — available even after a card is captured, so a
-                          junk/empty/disliked card can be regenerated without nudging chat by hand. */}
-                      <button
-                        onClick={() => askAssistant(characterCardPrompt(char.name, state.palette, state.aestheticMode))}
-                        disabled={state.isAssistantLoading}
-                        title="Ask the collaborator to regenerate this character's HTML card from the guidance (replaces the current one when it returns)"
-                        className="w-full py-2 rounded-lg border border-border text-text-muted text-[9px] font-black uppercase tracking-widest hover:border-accent hover:text-accent hover:bg-accent/10 transition-all disabled:opacity-50"
-                      >
-                        ✦ Re-draft HTML card →
-                      </button>
                       </>
                     ) : char.desc ? (
                       <button
