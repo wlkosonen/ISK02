@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { captureDeliverables, withRestorePoints, isPlaceholderCharName, type Deliverables } from "./capture";
+import { captureDeliverables, withRestorePoints, isPlaceholderCharName, isPlaceholderContent, stripDecorativeMarkdown, normalizeDeliverables, type Deliverables } from "./capture";
 
 // Fresh empty package per test so captures don't bleed across cases.
 function empty(): Deliverables {
@@ -303,5 +303,95 @@ describe("isPlaceholderCharName", () => {
     for (const n of ["Mara", "Toren", "Dr. Vey"]) {
       expect(isPlaceholderCharName(n)).toBe(false);
     }
+  });
+});
+
+describe("isPlaceholderContent", () => {
+  it("flags ellipsis placeholders, bracketed or not", () => {
+    for (const p of ["...", "…", "[...]", "[…]", "<...>", "( ... )", "  ...  "]) {
+      expect(isPlaceholderContent(p)).toBe(true);
+    }
+  });
+  it("flags TBD-style markers", () => {
+    for (const p of ["TBD", "todo", "Placeholder", "n/a", "content here", "to be added"]) {
+      expect(isPlaceholderContent(p)).toBe(true);
+    }
+  });
+  it("accepts real content (including content that merely ends with an ellipsis)", () => {
+    for (const p of ["Always stay in character.", "She trails off...", "A.", "[PROTOCOL_01] No magic."]) {
+      expect(isPlaceholderContent(p)).toBe(false);
+    }
+  });
+});
+
+describe("captureDeliverables — placeholder block guard", () => {
+  it("does NOT capture a block whose body is just a placeholder, and warns", () => {
+    const { next, captured, warnings } = captureDeliverables(block("GUIDELINES", "[...]"), empty());
+    expect(next.guidelines).toBe("");
+    expect(captured).toHaveLength(0);
+    expect(warnings.length).toBeGreaterThan(0);
+  });
+
+  it("does not let a placeholder re-emit clobber an already-captured value", () => {
+    const start = { ...empty(), reminders: "Never break the fourth wall." };
+    const { next, captured } = captureDeliverables(block("REMINDERS", "..."), start);
+    expect(next.reminders).toBe("Never break the fourth wall."); // preserved
+    expect(captured).toHaveLength(0);
+  });
+
+  it("skips a placeholder CHAR_DESC instead of creating a junk character", () => {
+    const { next, warnings } = captureDeliverables(block("CHAR_DESC: Aldric", "[...]"), empty());
+    expect(next.characters).toHaveLength(0);
+    expect(warnings.length).toBeGreaterThan(0);
+  });
+});
+
+describe("stripDecorativeMarkdown", () => {
+  it("removes paired **bold** and __bold__, keeping the inner text", () => {
+    expect(stripDecorativeMarkdown("She is **defiant** and __lonely__.")).toBe("She is defiant and lonely.");
+  });
+  it("leaves single * italics, list bullets, and unbalanced markers alone", () => {
+    expect(stripDecorativeMarkdown("*soft* and a list:\n* one\n* two\nstray ** here")).toBe("*soft* and a list:\n* one\n* two\nstray ** here");
+  });
+  it("does not span across newlines", () => {
+    expect(stripDecorativeMarkdown("**line one\nline two**")).toBe("**line one\nline two**");
+  });
+  it("is idempotent", () => {
+    const once = stripDecorativeMarkdown("**a** **b**");
+    expect(stripDecorativeMarkdown(once)).toBe(once);
+    expect(once).toBe("a b");
+  });
+});
+
+describe("captureDeliverables — decorative bold stripping", () => {
+  it("strips **bold** from a text block on capture", () => {
+    const { next } = captureDeliverables(block("REMINDERS", "**Never** break character."), empty());
+    expect(next.reminders).toBe("Never break character.");
+  });
+  it("strips **bold** from a character description but NOT from the HTML card", () => {
+    const desc = captureDeliverables(block("CHAR_DESC: Mara", "**Bold** trait."), empty());
+    expect(desc.next.characters[0].desc).toBe("Bold trait.");
+    const card = captureDeliverables(block("CHAR_CARD: Mara", "<b>**keep**</b>"), desc.next);
+    expect(card.next.characters[0].card).toBe("<b>**keep**</b>"); // HTML card untouched
+  });
+});
+
+describe("normalizeDeliverables", () => {
+  it("strips bold across text fields + char descs but leaves HTML cards", () => {
+    const d: Deliverables = {
+      ...empty(),
+      promptPlot: "**Act 1** begins.",
+      guidelines: "Rule **one**.",
+      plotCard: "<p>**markup stays**</p>",
+      characters: [{ name: "Mara", desc: "**brave**", card: "<b>**stays**</b>" }],
+      firstMessages: [{ label: "1", content: "**Hello**." }],
+    };
+    const n = normalizeDeliverables(d);
+    expect(n.promptPlot).toBe("Act 1 begins.");
+    expect(n.guidelines).toBe("Rule one.");
+    expect(n.plotCard).toBe("<p>**markup stays**</p>");          // HTML untouched
+    expect(n.characters[0].desc).toBe("brave");
+    expect(n.characters[0].card).toBe("<b>**stays**</b>");        // HTML card untouched
+    expect(n.firstMessages[0].content).toBe("Hello.");
   });
 });

@@ -4,10 +4,10 @@
  */
 
 import React, { useState, useEffect, useRef } from "react";
-import { encode } from "gpt-tokenizer";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
-import { captureDeliverables, withRestorePoints, type Deliverables, type DMConfig, type RestorableScalar } from "./lib/capture";
+import { captureDeliverables, withRestorePoints, isPlaceholderContent, normalizeDeliverables, type Deliverables, type DMConfig, type RestorableScalar } from "./lib/capture";
+import { estimateTokens, stripSyncTags, recolorHtml, parseSetTags } from "./lib/text";
 import { 
   Settings, 
   BookOpen, 
@@ -328,7 +328,7 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 
 // Version of THIS app (the Aether_Core tool), distinct from the USCS framework
 // version it implements. Bump this when you ship changes.
-const APP_VERSION = "0.12.12";
+const APP_VERSION = "0.13.0";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
 const USCS_VERSION = "6.1.1";
 
@@ -503,7 +503,9 @@ function loadInitialState(): StoryState {
         // package regardless, so map any prior session to the story track.
         workshopTrack: migrateTrack(parsed),
         modelSettings: { ...DEFAULT_STATE.modelSettings, ...(parsed.modelSettings || {}) },
-        deliverables: { ...EMPTY_DELIVERABLES, ...(parsed.deliverables || {}), dmConfig: { ...EMPTY_DM_CONFIG, ...(parsed.deliverables?.dmConfig || {}) } },
+        // Normalize on load: strip decorative **bold** from older captured packages
+        // (idempotent; HTML cards untouched) so existing work gets the lean treatment.
+        deliverables: normalizeDeliverables({ ...EMPTY_DELIVERABLES, ...(parsed.deliverables || {}), dmConfig: { ...EMPTY_DM_CONFIG, ...(parsed.deliverables?.dmConfig || {}) } }),
         customLimits: { ...DEFAULT_STATE.customLimits, ...(parsed.customLimits || {}) },
         compactRules: { ...DEFAULT_STATE.compactRules, ...(parsed.compactRules || {}) },
       };
@@ -523,65 +525,9 @@ function getModelTokenCeiling(_provider: string, model: string): number {
   return 8192;
 }
 
-// Strip the real-time UI-sync tags ([SET_*], [SYNC_PROCEED]) from exported text.
-function stripSyncTags(text: string): string {
-  return text.replace(/\[(?:SET_[A-Z_]+:[^\]]*|SYNC_PROCEED)\]/gi, "").trim();
-}
-
-// Token count via cl100k_base (gpt-tokenizer). Close enough to Claude's tokenizer
-// to replace the old chars/4 heuristic which overestimated by ~20%.
-function estimateTokens(text: string): number {
-  return encode(text || "").length;
-}
-
-// Parse a #rgb / #rrggbb hex string to an [r,g,b] triple, or null if not a hex.
-function hexToRgb(hex: string): [number, number, number] | null {
-  let h = (hex || "").trim().replace(/^#/, "");
-  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
-  if (h.length !== 6 || /[^0-9a-fA-F]/.test(h)) return null;
-  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
-}
-
-// Recolor card HTML by mapping each fromPalette[i] → toPalette[i]. Replaces BOTH
-// the hex form (case-insensitive, 3- and 6-digit) AND the matching r,g,b triple
-// inside any rgb()/rgba() (alpha preserved) — cards use solid hex for accent TEXT
-// and rgba() of the SAME palette colour for borders/fills, so a hex-only swap
-// would leave borders/tints stuck on the old colour. Off-palette colours (neutral
-// darks the model invented) are intentionally left untouched. Two-phase via
-// sentinels so a swap can't chain into a later slot (A→B then B→C rehitting B).
-function recolorHtml(html: string, from: string[] | undefined, to: string[]): string {
-  if (!html || !from || !to) return html;
-  const pairs: { i: number; fromHex: string; fr: [number, number, number]; toHex: string; tr: [number, number, number] }[] = [];
-  for (let i = 0; i < Math.min(from.length, to.length); i++) {
-    const fr = hexToRgb(from[i]), tr = hexToRgb(to[i]);
-    if (!fr || !tr) continue;
-    if (from[i].trim().toLowerCase() === to[i].trim().toLowerCase()) continue;
-    pairs.push({ i, fromHex: from[i].trim().replace(/^#/, ""), fr, toHex: to[i].trim(), tr });
-  }
-  if (!pairs.length) return html;
-  const S = (i: number, k: string) => `@!PAL${i}${k}!@`;
-  let out = html;
-  // Phase 1: from-colour forms → unique sentinels
-  for (const p of pairs) {
-    out = out.replace(new RegExp("#" + p.fromHex, "gi"), S(p.i, "H"));
-    if (p.fromHex[0] === p.fromHex[1] && p.fromHex[2] === p.fromHex[3] && p.fromHex[4] === p.fromHex[5])
-      out = out.replace(new RegExp("#" + p.fromHex[0] + p.fromHex[2] + p.fromHex[4] + "\\b", "gi"), S(p.i, "H"));
-    const [r, g, b] = p.fr;
-    out = out.replace(
-      new RegExp("(rgba?\\(\\s*)" + r + "(\\s*,\\s*)" + g + "(\\s*,\\s*)" + b + "(\\s*[,)])", "gi"),
-      `$1${S(p.i, "R")}$2${S(p.i, "G")}$3${S(p.i, "B")}$4`
-    );
-  }
-  // Phase 2: sentinels → to-colour
-  for (const p of pairs) {
-    out = out.split(S(p.i, "H")).join(p.toHex);
-    out = out.split(S(p.i, "R")).join(String(p.tr[0]));
-    out = out.split(S(p.i, "G")).join(String(p.tr[1]));
-    out = out.split(S(p.i, "B")).join(String(p.tr[2]));
-  }
-  return out;
-}
-
+// estimateTokens, stripSyncTags, hexToRgb and recolorHtml now live in ./lib/text
+// (pure + unit-tested in text.test.ts), alongside parseSetTags.
+//
 // DELIVERABLE_LABELS, BLOCK_RE, isPlaceholderCharName and captureDeliverables
 // now live in ./lib/capture (pure + unit-tested in capture.test.ts).
 
@@ -1033,7 +979,12 @@ Acknowledge the established parameters, leave everything under NOT YET DECIDED u
   const nextStep = () => setState(prev => ({ ...prev, step: Math.min(prev.step + 1, getActiveSteps(prev.workshopTrack).length - 1) }));
   const prevStep = () => setState(prev => ({ ...prev, step: Math.max(prev.step - 1, 0) }));
 
-  const askAssistant = async (prompt: string, requestHistoryOverride?: Message[], isContinue: boolean = false) => {
+  // `expectBlock` — set by actions that explicitly ask the model to (re-)emit ONE
+  // specific deliverable block (e.g. Tighten-to-cap). If the model returns the
+  // content but forgets the <<<USCS_BLOCK>>> markers (mistral-medium drops them on
+  // ~half of tighten re-emits), the finalize step captures the cleaned reply under
+  // this type so the tighten/redraft isn't silently lost.
+  const askAssistant = async (prompt: string, requestHistoryOverride?: Message[], isContinue: boolean = false, expectBlock?: { type: string; name?: string }) => {
     // A new turn supersedes any prior "step complete" signal until the AI re-confirms.
     setReadyToAdvance(false);
     setResponseTruncated(false);
@@ -1160,14 +1111,16 @@ Whenever you output a FINALIZED craft deliverable (not a draft you are still dis
 <<<END USCS_BLOCK>>>
 
 TYPE is one of: TITLE_SUMMARY, PLOT_CARD, PROMPT_PLOT, GUIDELINES, REMINDERS, PLAYER_PERSONA, SCENARIOS, IMAGE_PROMPTS.
-For per-character blocks use a name suffix: "CHAR_DESC: <Character Name>" for the Part B AI prompt description, and "CHAR_CARD: <Character Name>" for the Part A HTML card. ALWAYS replace <Character Name> with the character's REAL name (e.g. "CHAR_CARD: Aria Vance") — never emit the literal word "Name" or the placeholder text, or the workshop will save a junk character.
+For per-character blocks use a name suffix: "CHAR_DESC: <Character Name>" for the Part B AI prompt description, and "CHAR_CARD: <Character Name>" for the Part A HTML card. ALWAYS replace <Character Name> with the character's REAL name (e.g. "CHAR_CARD: Aria Vance") — never emit the literal word "Name" or the placeholder text, or the workshop will save a junk character. When you re-emit, revise, or later add the card for a character you have ALREADY introduced in this conversation, reuse that character's EXACT name string — identical spelling and wording, with NO added or dropped titles, honorifics, or nicknames (e.g. always "CHAR_DESC: Aldric", never "Aldric" one time and "Sir Aldric" the next). The workshop matches characters by this name, so any variation creates a DUPLICATE instead of updating the existing sheet.
 DUNGEON MIND (USCS §27) field blocks, when building a DM config: DM_STAT_SCHEMA, DM_GAME_RULES, DM_REMINDER, DM_INSTRUCTION, DM_PLAYER_GUIDE, and DM_NAME_MODEL (format the DM_NAME_MODEL body as "Name: <name> | Model: <model>"). Each loads into the matching field of the DM config in the workshop.
 
 Rules:
 - The FIRST line of every block MUST be exactly \`<<<USCS_BLOCK TYPE>>>\` (three '<', the literal word USCS_BLOCK, a space, the TYPE, three '>') and the LAST line exactly \`<<<END USCS_BLOCK>>>\`. Do NOT skip the opening marker, and do NOT replace it with a markdown heading, bold text, or a code fence — without that exact first line the workshop CANNOT save the deliverable.
 - Wrap ONLY finished blocks, never drafts under discussion. Keep your conversational explanation OUTSIDE the sentinels.
+- Produce a deliverable's content ONCE, INSIDE its block. Do NOT write the full content out as prose AND also capture it — that duplicates everything and wastes the token budget. When asked to generate/draft/design a deliverable, emit the finished block on your FIRST reply (then invite refinement in a sentence or two BELOW it), rather than describing it in prose and capturing on a later turn. NEVER place a placeholder ("...", "[...]", "<...>") inside a block intending to fill it after I confirm — emit the real content, or don't open the block yet.
 - When you revise a block, re-emit the FULL block wrapped again — the latest capture replaces the stored one.
 - One block per sentinel pair. Never nest.
+- FORMATTING — write deliverable blocks as PLAIN TEXT optimised for another AI to consume and for token economy. Do NOT decorate with markdown **bold** or __bold__ (it renders nowhere, the deployed AI ignores it, and it can waste 15%+ of the budget) — drop emphasis entirely, or rely on a bare word like NEVER for a genuine hard rule. Do NOT use tables (markdown \`| … |\` or ASCII art) — they bloat tokens and the deployed AI frequently MISREADS a table dropped into its prompt; use short labelled lines or plain prose instead (e.g. "Trust gate — shares food: she saves the bones."). Light structure (plain headings, "- " bullets) is fine.
 - The Prompt Plot, Guidelines, Reminders, Character descriptions (CHAR_DESC) and Player Persona count toward the token budget; keep them within the target.
 
 ================================================================================
@@ -1258,8 +1211,21 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
         // could wrongly merge with a stale half-block. A non-Continue turn discards
         // any pending block by passing null here.
         const priorBlock = isContinue ? pendingBlockRef.current : null;
-        const { next: capturedDeliverables, captured, cleaned, warnings, pendingBlock } = captureDeliverables(fullText, state.deliverables, state.palette, priorBlock || undefined);
+        const cap0 = captureDeliverables(fullText, state.deliverables, state.palette, priorBlock || undefined);
+        let capturedDeliverables = cap0.next;
+        let captured = cap0.captured;
+        const { cleaned, warnings, pendingBlock } = cap0;
         pendingBlockRef.current = pendingBlock; // carry a fresh truncation forward, or clear
+        // HARDENING: an action asked for a specific block TYPE but the model returned
+        // the content as bare prose (no <<<USCS_BLOCK>>>). Re-wrap the cleaned reply in
+        // the expected sentinels and capture it through the same (tested) path, so a
+        // Tighten/redraft isn't lost to a dropped marker. Skip if real content already
+        // captured, or the reply is empty / a placeholder.
+        if (expectBlock && captured.length === 0 && cleaned && !isPlaceholderContent(cleaned)) {
+          const synth = `<<<USCS_BLOCK ${expectBlock.type}${expectBlock.name ? `: ${expectBlock.name}` : ""}>>>\n${cleaned}\n<<<END USCS_BLOCK>>>`;
+          const r = captureDeliverables(synth, state.deliverables, state.palette);
+          if (r.captured.length > 0) { capturedDeliverables = r.next; captured = r.captured; }
+        }
         const displayText = (cleaned || fullText).replace(/\[SYNC_PROCEED\]/gi, "").trim();
         const assistantMessage: Message = { role: "assistant", content: displayText, usage };
         // A block was present (a warning means "recognised but couldn't place it",
@@ -1272,38 +1238,11 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
         // Stash the prior value of any overwritten block so it can be restored.
         if (captured.length > 0) updates.deliverables = withRestorePoints(state.deliverables, capturedDeliverables);
 
-        const modeMatch = fullText.match(/\[SET_MODE:\s*(SFW|NSFW)\]/i);
-        if (modeMatch) { updates.mode = modeMatch[1].toUpperCase() as Mode; toastMsgs.push(`Mode: ${updates.mode}`); }
-        const heatMatch = fullText.match(/\[SET_HEAT:\s*([1-5])\]/i);
-        if (heatMatch) { updates.heatLevel = parseInt(heatMatch[1], 10) as HeatLevel; toastMsgs.push(`Heat: ${updates.heatLevel}/5`); }
-        const titleMatch = fullText.match(/\[SET_TITLE:\s*([^\]\n]+)\]/i);
-        if (titleMatch) { updates.title = titleMatch[1].trim(); toastMsgs.push(`Title: "${updates.title}"`); }
-        const conceptMatch = fullText.match(/\[SET_CONCEPT:\s*([^\]]+)\]/i);
-        if (conceptMatch) { updates.concept = conceptMatch[1].trim(); toastMsgs.push("Premise Concept"); }
-        const summaryMatch = fullText.match(/\[SET_SUMMARY:\s*([^\]]+)\]/i);
-        if (summaryMatch) { updates.summary = summaryMatch[1].trim(); toastMsgs.push("Narrative Summary"); }
-        const settingMatch = fullText.match(/\[SET_SETTING:\s*([^\]\n]+)\]/i);
-        if (settingMatch) { updates.settingType = settingMatch[1].trim(); toastMsgs.push(`Setting: ${updates.settingType}`); }
-        const toneMatch = fullText.match(/\[SET_TONE:\s*([^\]\n]+)\]/i);
-        if (toneMatch) { updates.tone = toneMatch[1].trim(); toastMsgs.push(`Tone: ${updates.tone}`); }
-        // SET_RULES carries a large multiline payload that can itself contain "]"
-        // (e.g. "[PROTOCOL_01]"). The robust form captures up to the ']' that ends
-        // the tag — the one followed by end-of-message or another [TAG] — so inner
-        // brackets don't truncate it. Fall back to the simple form if needed.
-        let rulesContent: string | null = null;
-        const rulesRobust = fullText.match(/\[SET_RULES:\s*([\s\S]*?)\]\s*(?=\[|$)/i);
-        if (rulesRobust) rulesContent = rulesRobust[1];
-        else { const m = fullText.match(/\[SET_RULES:\s*([^\]]+)\]/i); if (m) rulesContent = m[1]; }
-        if (rulesContent !== null && rulesContent.trim()) { updates.groundingRules = rulesContent.trim(); toastMsgs.push("Reality Protocols"); }
-        const aestheticMatch = fullText.match(/\[SET_AESTHETIC:\s*(Literary|Structured|Chaos)\]/i);
-        if (aestheticMatch) { const modeVal = aestheticMatch[1].trim(); updates.aestheticMode = (modeVal.charAt(0).toUpperCase() + modeVal.slice(1).toLowerCase()) as any; toastMsgs.push(`Aesthetic: ${updates.aestheticMode}`); }
-        const artStyleMatch = fullText.match(/\[SET_ART_STYLE:\s*([^\]\n]+)\]/i);
-        if (artStyleMatch) { updates.artStyle = artStyleMatch[1].trim(); toastMsgs.push(`Art Style: ${updates.artStyle}`); }
-        const paletteMatch = fullText.match(/\[SET_PALETTE:\s*([^\]]+)\]/i);
-        if (paletteMatch) {
-          const colors = paletteMatch[1].split(",").map((c: string) => c.trim()).filter((c: string) => c.startsWith("#") && (c.length === 7 || c.length === 4));
-          if (colors.length >= 3) { updates.palette = colors; toastMsgs.push("Palette Config"); }
-        }
+        // Apply the [SET_*] real-time UI-sync tags. Parsing lives in ./lib/text
+        // (pure + unit-tested in text.test.ts); merge its state patch + toast lines.
+        const setTags = parseSetTags(fullText);
+        Object.assign(updates, setTags.updates);
+        toastMsgs.push(...setTags.toastMsgs);
 
         setState(s => {
           const h = [...s.assistantHistory];
@@ -1682,6 +1621,34 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
     pendingBlockRef.current = null;
     try { window.localStorage.removeItem(STORAGE_KEY); window.sessionStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
     triggerToast("New project started — your provider, keys & favourites were kept.", "info");
+  };
+
+  // Load the bundled example package ("The Veil of Thorns") so a new visitor can see a
+  // finished OUTPUT before investing an hour. Replaces the current story/chat/deliverables
+  // but KEEPS the user's provider & keys. The 124 KB seed is a lazy dynamic import so it
+  // never weighs down the main bundle. Lands on the Plot Card step to show a rendered card.
+  const loadExampleProject = async () => {
+    if ((state.title || state.assistantHistory.length > 1) &&
+        !window.confirm('Load the example project ("The Veil of Thorns")? This replaces your current story, chat and captured deliverables with the bundled demo. Your provider, API keys and favourites are kept.')) return;
+    let seed: any;
+    try { const mod = await import("./lib/exampleProject.json"); seed = (mod as any).default ?? mod; }
+    catch { triggerToast("Could not load the example project.", "info"); return; }
+    const loaded: StoryState = {
+      ...DEFAULT_STATE,
+      ...seed,
+      deliverables: { ...EMPTY_DELIVERABLES, ...seed.deliverables, dmConfig: { ...EMPTY_DM_CONFIG, ...(seed.deliverables?.dmConfig || {}) } },
+      aiProvider: state.aiProvider,
+      modelSettings: state.modelSettings,
+      assistantHistory: [],
+      isAssistantLoading: false,
+    };
+    setState(loaded);
+    setLastSyncedState(deskSnapshot(loaded));
+    setResponseTruncated(false);
+    setReadyToAdvance(false);
+    pendingBlockRef.current = null;
+    setShowHelp(false);
+    triggerToast('Loaded the example — "The Veil of Thorns". Browse it through the pipeline steps.', "ai-to-ui");
   };
 
   // SNAPSHOT: instant, no AI call. Saves a full human-readable backup of the
@@ -2614,7 +2581,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
 
       {/* Help / How-To */}
       <AnimatePresence>
-        {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
+        {showHelp && <HelpModal onClose={() => setShowHelp(false)} onLoadExample={loadExampleProject} />}
         {showVersionHistory && <VersionHistoryModal onClose={() => setShowVersionHistory(false)} />}
       </AnimatePresence>
 
@@ -2979,6 +2946,18 @@ function CollaboratorChat({ state, setState, compact, askAssistant, setIsChatOpe
 function VersionHistoryModal({ onClose }: { onClose: () => void }) {
   const releases: { v: string; title: string; items: string[] }[] = [
     {
+      v: "0.13.0", title: "Load Example, leaner deliverables & sturdier capture",
+      items: [
+        "NEW — \"Load example project\": open the Help panel (?) and load a complete finished package — \"The Veil of Thorns\" — to see what a real ISK0 story package looks like before building your own. It replaces the current project but keeps your provider and keys.",
+        "Leaner output, automatically: the collaborator's deliverables no longer carry decorative **bold** markers or fragile text tables — both wasted tokens (one test package was ~18% bold!) and the table form could confuse the deployed AI. Existing packages are cleaned on load. Cards (HTML) are untouched.",
+        "Sturdier capture: deliverables now save reliably even when the model writes them as plain text and forgets the capture markers (it happened on roughly half of \"Tighten\" and some generations) — the workshop re-wraps and saves them under the right type instead of silently losing the work. A placeholder like \"[...]\" never overwrites real captured content anymore.",
+        "Capture-first prompts: building a character or designing rules now produces the finished block on the first reply instead of writing it out as prose and then asking to confirm — fewer tokens, fewer round-trips.",
+        "Image Prompts now have an on-screen editable box on their step (previously they had nowhere to land).",
+        "Compliance & Assembly now reports honestly: the score reflects the actual deployable package (Prompt Plot, Guidelines, Reminders, First Message), so it no longer shows 100% / \"verified\" while those are still missing.",
+        "Fixes: the Guidelines \"Compact mode\" note no longer wrongly claims Guidelines are re-read every message (that's the Reminders); clearer Mistral API-key steps in Help; the model dropdown's \"Tighten to cap\" re-emits keep a deliverable's exact name (no accidental duplicate characters).",
+      ],
+    },
+    {
       v: "0.12.12", title: "Re-draft a character's HTML card any time",
       items: [
         "Character cards now have a persistent \"Re-draft HTML card\" button that stays available even after a card has been captured. Before, once anything landed in the card slot — including a placeholder or a card the model returned without real HTML — the generate button disappeared and you had to nudge the collaborator by hand. Now one click re-requests the card from the guidance with the normal step instructions, replacing the current one when it returns. (The Plot Card already worked this way.)",
@@ -3243,7 +3222,7 @@ function VersionHistoryModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-function HelpModal({ onClose }: { onClose: () => void }) {
+function HelpModal({ onClose, onLoadExample }: { onClose: () => void; onLoadExample: () => void }) {
   const Link = ({ href, children }: { href: string; children: React.ReactNode }) => (
     <a href={href} target="_blank" rel="noopener noreferrer" className="text-accent underline decoration-accent/40 hover:decoration-accent break-all">{children}</a>
   );
@@ -3276,6 +3255,18 @@ function HelpModal({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="px-8 pb-8 overflow-y-auto custom-scrollbar space-y-5 text-left text-[13px] leading-relaxed text-text-muted">
+          {/* Load example — first thing in the panel so a newcomer can see the OUTPUT before reading anything. */}
+          <button
+            onClick={onLoadExample}
+            className="w-full flex items-center gap-3 p-4 rounded-2xl border border-accent bg-accent/10 hover:bg-accent/20 transition-all text-left group"
+          >
+            <div className="w-10 h-10 rounded-full bg-accent/20 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform"><Sparkles className="w-5 h-5 text-accent" /></div>
+            <div className="min-w-0">
+              <div className="text-[13px] font-black uppercase tracking-wide text-text-main">Load example project →</div>
+              <div className="text-[12px] text-text-muted">See a finished package first — <span className="text-text-main">"The Veil of Thorns"</span> (full cast, cards, prompt plot &amp; more). Replaces the current project; your provider &amp; keys are kept.</div>
+            </div>
+          </button>
+
           <section className="space-y-2">
             <H>What this is</H>
             <p>Aether_Core is a <span className="text-text-main">workshop</span>, not a chatbot. You collaborate step-by-step with an AI to build a complete, copy-paste-ready <span className="text-text-main">story package</span> for the ISK0 platform — using the USCS v6.1 framework under the hood. The AI is a co-author and architect; it never plays the story itself.</p>
@@ -3331,7 +3322,7 @@ function HelpModal({ onClose }: { onClose: () => void }) {
             </div>
             <div className="p-3 rounded-xl border border-border bg-bg/50 space-y-1">
               <p className="text-text-main font-bold">Mistral AI (free tier)</p>
-              <p>Go to <Link href="https://console.mistral.ai/api-keys">console.mistral.ai/api-keys</Link>, create an account, and on the free <span className="text-text-main">Experiment</span> plan (you may need to verify a phone number) click <span className="text-text-main">Create new key</span>. Copy it (a plain random string, no special prefix) into Settings → Mistral. The default <code className="bg-black/30 px-1 rounded text-[12px]">mistral-medium-latest</code> works well here; the free tier is rate-limited but costs nothing.</p>
+              <p>Go to <Link href="https://console.mistral.ai">console.mistral.ai</Link> and <span className="text-text-main">sign in</span> (Google account, GitHub, or email). Then open the <span className="text-text-main">Admin panel</span> → <span className="text-text-main">API keys</span> → <span className="text-text-main">Create new key</span> (you may need to verify a phone number for the free <span className="text-text-main">Experiment</span> plan). Copy it (a plain random string, no special prefix) into Settings → Mistral. The default <code className="bg-black/30 px-1 rounded text-[12px]">mistral-medium-latest</code> works well here; the free tier is rate-limited but costs nothing.</p>
             </div>
             <div className="p-3 rounded-xl border border-border bg-bg/50 space-y-1">
               <p className="text-text-main font-bold">OpenRouter (one key, many models)</p>
@@ -3453,7 +3444,7 @@ function CopyButton({ text, label = "Copy", title, variant = "icon" }: { text: s
 }
 
 type RestoreTarget = { kind: "scalar"; key: RestorableScalar } | { kind: "charDesc" | "charCard"; name: string };
-function StatusMonitor({ state, onTighten, onRestore }: { state: StoryState; onTighten?: (p: string) => void; onRestore?: (t: RestoreTarget) => void }) {
+function StatusMonitor({ state, onTighten, onRestore }: { state: StoryState; onTighten?: (p: string, h?: Message[], c?: boolean, expectBlock?: { type: string; name?: string }) => void; onRestore?: (t: RestoreTarget) => void }) {
   // Counts ONLY the captured §21.1 package blocks (Prompt Plot + Guidelines +
   // Reminders + Player Persona + each character's AI description) — not workshop
   // chatter or non-counting HTML/image blocks. ~4 chars/token estimate.
@@ -3523,7 +3514,7 @@ function StatusMonitor({ state, onTighten, onRestore }: { state: StoryState; onT
         </div>
         {over && onTighten && opts?.type && (
           <button
-            onClick={() => onTighten(`[WORKSHOP ACTION — TIGHTEN TO CAP] "${label}" is over its §21 cap (~${fmtN(t)} tokens vs the ${fmtN(cap!)} limit). Compress it to AT OR UNDER ${fmtN(cap!)} tokens without losing essential meaning — cut redundancy and filler, tighten the prose, drop the lowest-value detail, but keep every required section.${crule ? ` Follow my custom compacting rules for this block: ${crule}` : ""} Re-emit the FULL tightened block wrapped in <<<USCS_BLOCK ${opts.name ? `${opts.type}: ${opts.name}` : opts.type}>>> … <<<END USCS_BLOCK>>>; keep only a one-line note in chat.`)}
+            onClick={() => onTighten(`[WORKSHOP ACTION — TIGHTEN TO CAP] "${label}" is over its §21 cap (~${fmtN(t)} tokens vs the ${fmtN(cap!)} limit). Compress it to AT OR UNDER ${fmtN(cap!)} tokens without losing essential meaning — cut redundancy and filler, tighten the prose, drop the lowest-value detail, but keep every required section.${crule ? ` Follow my custom compacting rules for this block: ${crule}` : ""} Re-emit the FULL tightened block wrapped in <<<USCS_BLOCK ${opts.name ? `${opts.type}: ${opts.name}` : opts.type}>>> … <<<END USCS_BLOCK>>>; keep only a one-line note in chat.`, undefined, false, { type: opts.type!, name: opts.name })}
             className="w-full mb-1.5 py-1 rounded bg-[#fbbf24]/10 border border-[#fbbf24]/30 text-[#fbbf24] text-[9px] font-black uppercase tracking-widest hover:bg-[#fbbf24]/20 transition-colors animate-pulse"
           >
             ⚠ Tighten to {fmtN(cap!)} →
@@ -4476,7 +4467,7 @@ function characterCardPrompt(name: string, palette: string[], aestheticMode: str
   return `[WORKSHOP ACTION — CHARACTER HTML CARD] The narration guidance for "${name}" is defined — now produce their user-facing Part A HTML card based on it, using my locked palette and ${aestheticMode} aesthetic, per the injected USCS HTML spec. HARD CONSTRAINTS: the card is FLUID, never a narrow fixed width — width:100%; max-width:600px; margin:0 auto (fills a phone, caps and centers on desktop). Any multi-column section uses PERCENTAGE-width cells (width:50%/33%/100% + padding + box-sizing:border-box) inside display:flex; flex-wrap:wrap, so it reflows from ~300px to 600px; any fixed-px decorative element stays ≤300px. The OUTER CARD BACKGROUND must be EXACTLY ${palette[0]} (the locked palette background — not an off-palette near-black). Use ${palette[2]} as the SOLID hex for accent TEXT (title, accent words, pill text) — rgba is fine for borders and faint background tints, never for text. ACCENT BORDERS: to set apart a section, use a FULL border (border:2px solid #hex) — NEVER a single-side border-left/right bar, inset box-shadow, or gradient strip; ISK0 strips those so the accent vanishes on the platform. Emit it wrapped in <<<USCS_BLOCK CHAR_CARD: ${name}>>> … <<<END USCS_BLOCK>>> so it loads into the preview here. Keep only a brief note in chat.`;
 }
 
-function renderStep(storyStep: number, state: StoryState, setState: React.Dispatch<React.SetStateAction<StoryState>>, next: () => void, askAssistant: (p: string) => Promise<void>, setHoverHeatLevel?: (lvl: HeatLevel | null) => void, hoverHeatLevel?: HeatLevel | null, isSyncNeeded?: boolean, syncDeskstateToAI?: () => void, onExportDM?: () => void, triggerToast?: (m: string, t: "ai-to-ui" | "ui-to-ai" | "info") => void) {
+function renderStep(storyStep: number, state: StoryState, setState: React.Dispatch<React.SetStateAction<StoryState>>, next: () => void, askAssistant: (p: string, h?: Message[], c?: boolean, expectBlock?: { type: string; name?: string }) => Promise<void>, setHoverHeatLevel?: (lvl: HeatLevel | null) => void, hoverHeatLevel?: HeatLevel | null, isSyncNeeded?: boolean, syncDeskstateToAI?: () => void, onExportDM?: () => void, triggerToast?: (m: string, t: "ai-to-ui" | "ui-to-ai" | "info") => void) {
   const HEAT_DESCRIPTIONS = {
     1: "Slow Burn / Tension Only",
     2: "Mild Intimacy / Suggestive",
@@ -5255,7 +5246,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
 
           {/* Primary action: co-design with the collaborator */}
           <button
-            onClick={() => askAssistant(`[WORKSHOP ACTION — DESIGN GROUNDING RULES] Let's build custom World Grounding "Reality Protocols" for THIS story together — not a generic template. Using the established setting, concept, and tone, propose a tailored DO NOT / INSTEAD ruleset in the [PROTOCOL_NN] format that locks this world's physics/logic and stops the deployed AI from drifting into genre clichés. Briefly explain your reasoning, then emit the finished ruleset with a [SET_RULES: ...] tag so it loads into my editor. We'll refine from there.`)}
+            onClick={() => askAssistant(`[WORKSHOP ACTION — DESIGN GROUNDING RULES] Build custom World Grounding "Reality Protocols" for THIS story — not a generic template. Using the established setting, concept, and tone, write a tailored DO NOT / INSTEAD ruleset in the [PROTOCOL_NN] format that locks this world's physics/logic and stops the deployed AI from drifting into genre clichés. Emit the COMPLETE ruleset on your FIRST reply, with the full text INSIDE a single [SET_RULES: ...] tag so it loads straight into my editor — do NOT also write the rules out as prose, and never put a "[...]" placeholder in the tag. Then, in one or two sentences below the tag, invite me to refine (we iterate by you re-emitting the full updated [SET_RULES: ...], never as prose).`)}
             disabled={state.isAssistantLoading}
             className="w-full p-6 rounded-2xl border border-accent bg-accent/10 hover:bg-accent/15 transition-all text-left group disabled:opacity-50 shadow-[0_0_24px_rgba(20,184,166,0.18)] active:scale-[0.995]"
           >
@@ -5423,7 +5414,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
             </div>
             <div className="flex gap-4">
               <button
-                onClick={() => askAssistant(`[WORKSHOP ACTION — DRAFT PLOT CARD] Draft the COMPLETE user-facing Plot Card for "${state.title || 'this story'}" as self-contained HTML, following the injected USCS Plot Card spec. Use my locked visual identity — background ${state.palette[0]}, text ${state.palette[1]}, primary ${state.palette[2]}, secondary ${state.palette[3]}, accent ${state.palette[4]} — and the ${state.aestheticMode} aesthetic. Include every required field; do not abbreviate. ACCENT BORDERS: to set apart or colour-code a section, use a FULL border (border:2px solid #hex) in the accent colour — NEVER a single-side left/right accent bar (border-left:Npx solid …), nor an inset box-shadow or gradient strip faking one; ISK0 strips all of those, so the accent silently vanishes on the platform. Emit the finished card wrapped in <<<USCS_BLOCK PLOT_CARD>>> … <<<END USCS_BLOCK>>> so it loads into my live preview; keep only a brief note in chat.`)}
+                onClick={() => askAssistant(`[WORKSHOP ACTION — DRAFT PLOT CARD] Draft the COMPLETE user-facing Plot Card for "${state.title || 'this story'}" as self-contained HTML, following the injected USCS Plot Card spec. Use my locked visual identity — background ${state.palette[0]}, text ${state.palette[1]}, primary ${state.palette[2]}, secondary ${state.palette[3]}, accent ${state.palette[4]} — and the ${state.aestheticMode} aesthetic. Include every required field; do not abbreviate. ACCENT BORDERS: to set apart or colour-code a section, use a FULL border (border:2px solid #hex) in the accent colour — NEVER a single-side left/right accent bar (border-left:Npx solid …), nor an inset box-shadow or gradient strip faking one; ISK0 strips all of those, so the accent silently vanishes on the platform. Emit the finished card wrapped in <<<USCS_BLOCK PLOT_CARD>>> … <<<END USCS_BLOCK>>> so it loads into my live preview; keep only a brief note in chat.`, undefined, false, { type: "PLOT_CARD" })}
                 disabled={state.isAssistantLoading}
                 className="px-6 py-2 bg-accent text-black rounded-lg text-[11px] font-black uppercase tracking-widest hover:bg-white transition-all flex items-center gap-2 disabled:opacity-50"
               >
@@ -5626,7 +5617,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
               <p className="text-xs text-text-dim max-w-sm">Develop the next character's narration guidance — who they are, what they want, how they speak, their lore. The HTML card comes afterwards, once they're defined.</p>
             </div>
             <button
-              onClick={() => askAssistant(`[WORKSHOP ACTION — BUILD NEXT CHARACTER] Let's develop the next character's NARRATION GUIDANCE together — the substance the deployed AI needs to play them: personality, wants/goals, fears, speech & mannerisms, relationships to {{user}} and the cast, and the relevant lore — following the injected USCS Character Sheet "Part B" spec (respect §21 caps: ≤1500 tokens primary / ≤800 supporting). Propose the character (or continue from the cast we've discussed) and refine it WITH me; when it's solid, capture it as <<<USCS_BLOCK CHAR_DESC: [the character's actual name]>>> … <<<END USCS_BLOCK>>>. CRITICAL: put the character's REAL name in that sentinel (e.g. "CHAR_DESC: Aria Vance") — never the literal word "Name". Do NOT produce the HTML card yet — we generate that separately once the character is fully defined. Build and confirm ONE character before the next.`)}
+              onClick={() => askAssistant(`[WORKSHOP ACTION — BUILD NEXT CHARACTER] Develop the next character's NARRATION GUIDANCE — the substance the deployed AI needs to play them: personality, wants/goals, fears, speech & mannerisms, relationships to {{user}} and the cast, and the relevant lore — following the injected USCS Character Sheet "Part B" spec. RESPECT the §21 caps: ≤1500 tokens for a primary, ≤800 for a supporting character — keep it tight. Emit the COMPLETE sheet on your FIRST reply, with the full content INSIDE the capture block: <<<USCS_BLOCK CHAR_DESC: [the character's actual name]>>> … <<<END USCS_BLOCK>>>. Do NOT write the sheet out as prose first and capture later, and never put a "[...]" placeholder inside the block. CRITICAL: put the character's REAL name in that sentinel (e.g. "CHAR_DESC: Aria Vance") — never the literal word "Name". After the block, in one or two sentences, invite me to refine — we iterate by you re-emitting the FULL revised block under the SAME exact name. Do NOT produce the HTML card yet — we generate that separately once the character is fully defined. Build ONE character before the next.`)}
               disabled={state.isAssistantLoading}
               className="px-6 py-2 bg-accent/20 border border-accent/40 text-accent rounded-lg text-[11px] font-black uppercase tracking-widest hover:bg-accent/30 transition-all font-mono disabled:opacity-50"
             >
@@ -5685,7 +5676,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                           <span className="flex items-center gap-2"><ChevronRight className="w-3.5 h-3.5 transition-transform group-open/card:rotate-90" /> Preview HTML card</span>
                           <span onClick={(e) => e.preventDefault()} className="flex items-center gap-2">
                             <button
-                              onClick={(e) => { e.preventDefault(); askAssistant(characterCardPrompt(char.name, state.palette, state.aestheticMode)); }}
+                              onClick={(e) => { e.preventDefault(); askAssistant(characterCardPrompt(char.name, state.palette, state.aestheticMode), undefined, false, { type: "CHAR_CARD", name: char.name }); }}
                               disabled={state.isAssistantLoading}
                               title={`Re-draft ${char.name}'s HTML card from the guidance — replaces the current one when it returns`}
                               className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-border bg-bg hover:border-accent text-[11px] font-black uppercase tracking-widest text-text-muted hover:text-accent transition-all active:scale-95 disabled:opacity-50"
@@ -5773,7 +5764,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                       </>
                     ) : char.desc ? (
                       <button
-                        onClick={() => askAssistant(characterCardPrompt(char.name, state.palette, state.aestheticMode))}
+                        onClick={() => askAssistant(characterCardPrompt(char.name, state.palette, state.aestheticMode), undefined, false, { type: "CHAR_CARD", name: char.name })}
                         disabled={state.isAssistantLoading}
                         className="w-full py-2.5 rounded-lg border border-accent/40 bg-accent/10 text-accent text-[9px] font-black uppercase tracking-widest hover:bg-accent/20 transition-all disabled:opacity-50"
                       >
@@ -5851,12 +5842,12 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
             </div>
             <div className="min-w-0">
               <div className="text-[12px] font-black uppercase tracking-[0.15em] text-text-main">Compact mode {state.leanGuidelines ? <span className="text-accent">· ON</span> : <span className="text-text-dim">· OFF</span>}</div>
-              <p className="text-[12px] text-text-dim leading-snug mt-1">The Guidelines are the rulebook your story-AI re-reads on <span className="text-text-muted">every single message</span> — so a bigger rulebook costs more tokens on every turn of the finished story. <span className="text-text-muted">Compact mode</span> builds a leaner one: fewer, tighter rules and a condensed cast-relationship map, roughly half the size. Great with strong models (Claude / GPT-4-class) that fill in the gaps — leave it OFF for weaker / free models, which behave better with the fuller, more spelled-out version.</p>
+              <p className="text-[12px] text-text-dim leading-snug mt-1">The Guidelines are a core part of your story-AI's <span className="text-text-muted">standing instruction set</span> — loaded as context for the whole story (it's the <span className="text-text-muted">Reminders</span> that get re-sent on every message). A bigger Guidelines block still eats more of your token budget and makes the deployed prompt heavier. <span className="text-text-muted">Compact mode</span> builds a leaner one: fewer, tighter rules and a condensed cast-relationship map, roughly half the size. Great with strong models (Claude / GPT-4-class) that fill in the gaps — leave it OFF for weaker / free models, which behave better with the fuller, more spelled-out version.</p>
             </div>
           </button>
 
           <button
-            onClick={() => askAssistant(`[WORKSHOP ACTION — ASSEMBLE GUIDELINES] Assemble the complete Prompt Guidelines for the deployed AI now, per the injected USCS §7 spec. OPEN with the one-paragraph emotional mandate (§22.4). ${state.leanGuidelines ? "COMPACT BUILD — keep it lean: ~15 essential rules, each terse (1–2 sentences, no worked examples); condense the NPC Social Web (§7A) to a short relationship map plus only the rules that actually change behaviour (skip the full subsection treatment); list any active modules as a brief reference. Prioritise the highest-impact guidance and drop low-value elaboration — aim for roughly HALF the length of a full build (target ≤3000 tokens)." : "Include AT LEAST 15 rules, and weave in: our locked World Grounding rules, the NPC Social Web & Anti-Harem architecture (§7A) for our cast, the Status Dashboard rules (§7B) if we enabled one, and character-specific voice/behaviour/speech rules now that the sheets exist. Respect the §21 cap (≤3000 tokens)."} Emit the finished block wrapped in <<<USCS_BLOCK GUIDELINES>>> … <<<END USCS_BLOCK>>>; keep only a brief note in chat.`)}
+            onClick={() => askAssistant(`[WORKSHOP ACTION — ASSEMBLE GUIDELINES] Assemble the complete Prompt Guidelines for the deployed AI now, per the injected USCS §7 spec. OPEN with the one-paragraph emotional mandate (§22.4). ${state.leanGuidelines ? "COMPACT BUILD — keep it lean: ~15 essential rules, each terse (1–2 sentences, no worked examples); condense the NPC Social Web (§7A) to a short relationship map plus only the rules that actually change behaviour (skip the full subsection treatment); list any active modules as a brief reference. Prioritise the highest-impact guidance and drop low-value elaboration — aim for roughly HALF the length of a full build (target ≤3000 tokens)." : "Include AT LEAST 15 rules, and weave in: our locked World Grounding rules, the NPC Social Web & Anti-Harem architecture (§7A) for our cast, the Status Dashboard rules (§7B) if we enabled one, and character-specific voice/behaviour/speech rules now that the sheets exist. Respect the §21 cap (≤3000 tokens)."} Emit the finished block wrapped in <<<USCS_BLOCK GUIDELINES>>> … <<<END USCS_BLOCK>>>; keep only a brief note in chat.`, undefined, false, { type: "GUIDELINES" })}
             disabled={state.isAssistantLoading}
             className="w-full p-5 rounded-2xl border border-accent bg-accent/10 hover:bg-accent/15 transition-all flex items-center gap-4 shadow-[0_0_24px_rgba(20,184,166,0.18)] disabled:opacity-50 active:scale-[0.995] text-left"
           >
@@ -6003,7 +5994,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
           </div>
 
           <button
-            onClick={() => askAssistant(`[WORKSHOP ACTION — ASSEMBLE REMINDERS] Assemble the complete AI Reminders block now, per the injected USCS §8 spec. OPEN with the single emotional-target line (§22.4) — the AI's north star. Produce ~7 high-priority reminders reinforcing the non-negotiables (no self-narration, output format, heat bounds ${state.mode === 'NSFW' ? `${state.heatLevel}/5` : 'SFW'}, and character precision now that the sheets exist). Respect the §21 cap (≤800 tokens). Emit the finished block wrapped in <<<USCS_BLOCK REMINDERS>>> … <<<END USCS_BLOCK>>>; keep only a brief note in chat.`)}
+            onClick={() => askAssistant(`[WORKSHOP ACTION — ASSEMBLE REMINDERS] Assemble the complete AI Reminders block now, per the injected USCS §8 spec. OPEN with the single emotional-target line (§22.4) — the AI's north star. Produce ~7 high-priority reminders reinforcing the non-negotiables (no self-narration, output format, heat bounds ${state.mode === 'NSFW' ? `${state.heatLevel}/5` : 'SFW'}, and character precision now that the sheets exist). Respect the §21 cap (≤800 tokens). Emit the finished block wrapped in <<<USCS_BLOCK REMINDERS>>> … <<<END USCS_BLOCK>>>; keep only a brief note in chat.`, undefined, false, { type: "REMINDERS" })}
             disabled={state.isAssistantLoading}
             className="w-full p-5 rounded-2xl border border-accent bg-accent/10 hover:bg-accent/15 transition-all flex items-center gap-4 shadow-[0_0_24px_rgba(20,184,166,0.18)] disabled:opacity-50 active:scale-[0.995] text-left"
           >
@@ -6152,34 +6143,61 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                               storyStep === 10 ? "Structure the prompt plot instructions and include Architect Protocols." :
                               storyStep === 13 ? "Draft the opening First Message for each scenario variant we defined — one authored opening per variant, per the USCS First Message rules. Wrap EACH finished message in its own <<<USCS_BLOCK FIRST_MESSAGE: N>>> … <<<END USCS_BLOCK>>> (numbered 1, 2, 3… per scenario) so they're captured and counted toward the budget." :
                               "Build detailed stable diffusion image prompts for our main cast.";
-                askAssistant(query);
+                // expectBlock — if the model returns the deliverable as bare prose
+                // (mistral drops the <<<USCS_BLOCK>>> markers on ~½ of generations), the
+                // finalize fallback re-wraps it under this type. Skip step 13: First
+                // Messages are multiple numbered blocks, not one.
+                const expect = storyStep === 9 ? { type: "SCENARIOS" } : storyStep === 10 ? { type: "PROMPT_PLOT" } : storyStep === 14 ? { type: "IMAGE_PROMPTS" } : undefined;
+                askAssistant(query, undefined, false, expect);
               }}
               className="px-6 py-3 bg-accent border border-accent text-black font-black text-[11px] uppercase tracking-widest rounded-xl hover:bg-transparent hover:text-accent transition-all shrink-0 active:scale-95"
             >
               TRIGGER_COHESION
             </button>
           </div>
+
+          {/* Image Prompts capture surface — the only step whose deliverable lacked an
+              on-screen home. Editable; capture already strips decorative **bold**. */}
+          {storyStep === 14 && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between px-1">
+                <span className="text-[11px] font-black uppercase tracking-widest text-accent flex items-center gap-1.5"><ImageIcon className="w-3.5 h-3.5" /> Captured Image Prompts {state.deliverables.imagePrompts ? <CheckCircle2 className="w-3.5 h-3.5 text-[#10b981]" /> : null}</span>
+                {state.deliverables.imagePrompts && <CopyButton variant="button" label="Copy" text={state.deliverables.imagePrompts} title="Copy the image prompts" />}
+              </div>
+              <textarea
+                value={state.deliverables.imagePrompts}
+                onChange={(e) => setState(s => ({ ...s, deliverables: { ...s.deliverables, imagePrompts: e.target.value } }))}
+                placeholder="Your captured image prompts land here once the collaborator emits them — generate with the button above, or paste/edit your own. (Markdown **bold** is stripped automatically on capture.)"
+                className="w-full h-72 bg-card border border-border rounded-xl p-4 font-mono text-[12px] leading-relaxed text-text-muted focus:border-accent focus:outline-none transition-all whitespace-pre-wrap custom-scrollbar"
+              />
+              <p className="text-[11px] text-text-dim px-1">Portrait / cover / title-edit prompts and per-character emotion sets. These do NOT count toward the token budget; paste them into your image tool of choice.</p>
+            </div>
+          )}
         </div>
       );
 
     case 15: { // Compliance & Assembly
       // Calculate Compliance Integrity Score
+      const d0 = state.deliverables;
       const modeCompliant = state.mode !== null;
       const toneCompliant = !!state.tone && !!state.settingType;
       const aestheticCompliant = !!state.artStyle && state.palette.length > 0;
       const groundingCompliant = state.groundingRules.length > 10;
-      const personaCompliant = state.deliverables.characters.length > 0;
+      const personaCompliant = d0.characters.some(c => (c.desc || "").trim().length > 0); // ≥1 character WITH narration guidance
       const creativeCompliant = !!state.title && state.concept.length > 10;
-      const chatCompliant = state.assistantHistory.length > 1;
+      // The DEPLOYABLE instruction package — what actually pastes into ISK0. These were
+      // NOT checked before, so the score hit 100% while the package was unshippable
+      // (no Reminders / First Message). Now they count.
+      const promptPlotCompliant = (d0.promptPlot || "").trim().length > 0;
+      const guidelinesCompliant = (d0.guidelines || "").trim().length > 0;
+      const remindersCompliant = (d0.reminders || "").trim().length > 0;
+      const firstMessageCompliant = (d0.firstMessages || []).some(f => (f.content || "").trim().length > 0);
+      const packageCompliant = promptPlotCompliant && guidelinesCompliant && remindersCompliant && firstMessageCompliant;
+      // Genuinely ready to paste into ISK0: core setup + cast + the full deployable package.
+      const shippable = modeCompliant && toneCompliant && groundingCompliant && creativeCompliant && personaCompliant && packageCompliant;
 
-      let score = 0;
-      if (modeCompliant) score += 15;
-      if (toneCompliant) score += 15;
-      if (aestheticCompliant) score += 15;
-      if (groundingCompliant) score += 15;
-      if (personaCompliant) score += 15;
-      if (creativeCompliant) score += 15;
-      if (chatCompliant) score += 10;
+      const scoreChecks = [modeCompliant, toneCompliant, aestheticCompliant, groundingCompliant, creativeCompliant, personaCompliant, promptPlotCompliant, guidelinesCompliant, remindersCompliant, firstMessageCompliant];
+      const score = Math.round((scoreChecks.filter(Boolean).length / scoreChecks.length) * 100);
 
       // Helper function to extract relevant summaries from history
       const parseSummaryFromChat = (keywords: string[], fallback: string) => {
@@ -6264,12 +6282,12 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
           askQuery: "What is your main structural outline recommendation based on our locked story title and concept?"
         },
         {
-          id: "compiled_integrity",
-          title: "Performer Prompt Assembly",
-          keywords: ["assembly", "prompt plot", "verbatim", "instruction", "payload", "compile", "completion"],
-          status: chatCompliant,
-          fallback: "Aether-stream prompt packaging encloses compliance vectors within structural enclosures to prevent model drift.",
-          askQuery: "Give a final review of the system instructions and compiler integrity safeguards."
+          id: "deployable_package",
+          title: "Deployable Instruction Package",
+          keywords: ["prompt plot", "guidelines", "reminders", "first message", "assembly", "payload", "instruction", "compile"],
+          status: packageCompliant,
+          fallback: "The deployable package — Prompt Plot, Guidelines, Reminders and at least one First Message — is what pastes into ISK0. Assemble all four before export; setup alone is not shippable.",
+          askQuery: "Which of my Prompt Plot, Guidelines, Reminders or First Messages still need to be assembled before this is ready to ship to ISK0?"
         }
       ];
 
@@ -6295,13 +6313,15 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                 </div>
                 
                 <h3 className="text-2xl font-black uppercase tracking-tight">
-                  {score >= 85 ? "MASTER_INTEGRITY_VERIFIED" : "ADVISORY_CALIBRATION_ACTIVE"}
+                  {shippable ? "MASTER_INTEGRITY_VERIFIED" : "ADVISORY_CALIBRATION_ACTIVE"}
                 </h3>
-                
+
                 <p className="text-xs text-text-dim leading-relaxed max-w-xl">
-                  {score >= 85 
-                    ? "All critical visual identity profiles, pacing thresholds, grounding rules, and dialogue matrices are fully synced. Ready for master engine orchestration."
-                    : "The story engine has detected missing parameters or unsynced dialogue lines. Ask the collaborator on the sideline to finalize your calibration matrices."
+                  {shippable
+                    ? "Setup, cast and the full deployable package (Prompt Plot, Guidelines, Reminders, First Message) are all in place. Ready to compile and paste into ISK0."
+                    : packageCompliant
+                      ? "Setup looks good — finish the remaining creative parameters flagged below before export."
+                      : "The deployable package is incomplete. Assemble your Prompt Plot, Guidelines, Reminders and at least one First Message (the items pasted into ISK0) before this is ready to ship — setup alone is not enough."
                   }
                 </p>
               </div>
@@ -6314,7 +6334,7 @@ function renderStep(storyStep: number, state: StoryState, setState: React.Dispat
                     {score}%
                   </div>
                   <span className="text-[8px] uppercase tracking-widest text-accent font-black">
-                    {score >= 85 ? "NOMINAL" : "TUNING"}
+                    {shippable ? "NOMINAL" : "TUNING"}
                   </span>
                 </div>
                 {/* Visual Ring effect */}

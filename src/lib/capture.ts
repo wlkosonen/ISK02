@@ -103,6 +103,58 @@ function stripWrappingFences(s: string): string {
 // ("<<<USCS_BLOCK CHAR_DESC: Name>>>") instead of substituting the real
 // character name. Treat those as "no real name" so we don't spawn a ghost
 // character literally called "Name"/"NAME" (and silently duplicate the cast).
+// True if a block's ENTIRE content is a do-it-later placeholder — an ellipsis
+// ("...", "…", optionally wrapped in brackets like "[...]") or a TBD marker. Weak
+// models (and even mistral-medium as a chat lengthens) sometimes write a
+// deliverable out as prose and then emit the capture block with only a placeholder
+// inside, expecting a follow-up turn to fill it. Capturing that silently overwrites
+// real, good content with junk — so we skip + warn instead.
+export function isPlaceholderContent(content: string): boolean {
+  const t = content.trim().replace(/^[[<({"'`]+/, "").replace(/[\]>)}"'`]+$/, "").trim();
+  if (/^[.…]+$/.test(t)) return true;            // ... or … (optionally bracketed)
+  return ["tbd", "todo", "placeholder", "n/a", "content here", "to be added"].includes(t.toLowerCase());
+}
+
+// Strip decorative **bold** markers from a TEXT deliverable. Models (mistral-medium
+// especially) bold half the words; that emphasis renders nowhere in the workshop and
+// carries no meaning for the deployed ISK0 AI that consumes the block — it's pure
+// token bloat (~800 bold pairs ≈ 1–1.6k tokens were measured on one package, ~15% of
+// budget). We remove only PAIRED inline `**…**` (and `__…__`); single `*` italics,
+// list bullets, and unbalanced markers are left untouched, and this is NEVER applied
+// to the HTML card deliverables (PLOT_CARD / CHAR_CARD).
+export function stripDecorativeMarkdown(s: string): string {
+  return s
+    .replace(/\*\*(?=\S)([^\n]+?)\*\*/g, "$1")
+    .replace(/__(?=\S)([^\n_]+?)__/g, "$1");
+}
+
+// Apply stripDecorativeMarkdown to every TEXT deliverable, leaving the HTML card
+// blocks (plotCard, character cards) alone. Used as a one-time migration when loading
+// a package captured before bold-stripping existed (and harmless/idempotent after).
+export function normalizeDeliverables(d: Deliverables): Deliverables {
+  const t = stripDecorativeMarkdown;
+  return {
+    ...d,
+    titleSummary: t(d.titleSummary || ""),
+    promptPlot: t(d.promptPlot || ""),
+    guidelines: t(d.guidelines || ""),
+    reminders: t(d.reminders || ""),
+    playerPersona: t(d.playerPersona || ""),
+    scenarios: t(d.scenarios || ""),
+    imagePrompts: t(d.imagePrompts || ""),
+    characters: d.characters.map(c => ({ ...c, desc: t(c.desc || "") })),       // card = HTML, untouched
+    firstMessages: d.firstMessages.map(f => ({ ...f, content: t(f.content || "") })),
+    dmConfig: {
+      ...d.dmConfig,
+      statSchema: t(d.dmConfig.statSchema || ""),
+      gameRules: t(d.dmConfig.gameRules || ""),
+      gameRuleReminder: t(d.dmConfig.gameRuleReminder || ""),
+      instruction: t(d.dmConfig.instruction || ""),
+      playerGuide: t(d.dmConfig.playerGuide || ""),
+    },
+  };
+}
+
 export function isPlaceholderCharName(name: string): boolean {
   const n = name.trim().replace(/^[<[("'{]+|[>\])"'}]+$/g, "").trim().toLowerCase();
   return [
@@ -156,8 +208,19 @@ export function captureDeliverables(text: string, current: Deliverables, palette
     // the whole block (opener onward) back as pendingBlock so the next Continue turn
     // can stitch the rest onto it, instead of silently dropping the half.
     if (eofBounded && !endsWithFence(raw)) { pendingBlock = scanText.slice(op.markerStart); continue; }
-    const content = stripWrappingFences(raw);
+    let content = stripWrappingFences(raw);
     if (!content) continue;
+    // Strip decorative **bold** from TEXT blocks (token bloat the consumer ignores).
+    // NEVER touch the HTML card blocks — they're real markup, not markdown.
+    if (type !== "PLOT_CARD" && type !== "CHAR_CARD") content = stripDecorativeMarkdown(content);
+    // A block whose whole body is a placeholder ("[...]", "...", "TBD") is the model
+    // saying "I'll fill this in next turn" — never capture it, or it clobbers a good
+    // prior value with junk. Warn so the message stays re-capturable from history.
+    if (isPlaceholderContent(content)) {
+      const label = DELIVERABLE_LABELS[type] || (name ? `${name} (${type === "CHAR_CARD" ? "card" : "description"})` : type);
+      warnings.push(`The ${label} block came back as just a placeholder — nothing was saved. Ask the collaborator to emit the full content inside the block.`);
+      continue;
+    }
 
     if (type === "CHAR_DESC" || type === "CHAR_CARD") {
       if (!name) continue;
