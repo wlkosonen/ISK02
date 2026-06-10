@@ -820,7 +820,19 @@ export default function App() {
         const res = await fetch(`/api/models?${q.toString()}`, { signal: controller.signal });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || `Status ${res.status}`);
-        if (isMounted) setRemoteModels(data.models || []);
+        if (isMounted) {
+          const list: string[] = data.models || [];
+          setRemoteModels(list);
+          // Guard: a stored Mistral model that isn't in the freshly filtered
+          // live list (e.g. a non-chat id like mistral-moderation-latest saved
+          // from before we filtered the list) would 400 on every request.
+          // Reset it to the default so the session self-heals.
+          if (provider === "mistral" && list.length) {
+            setState(s => s.modelSettings.model && !list.includes(s.modelSettings.model)
+              ? { ...s, modelSettings: { ...s.modelSettings, model: "mistral-medium-latest" } }
+              : s);
+          }
+        }
       } catch (err: any) {
         if (err.name !== "AbortError" && isMounted) {
           setRemoteModelError(err.message || "Could not list models");

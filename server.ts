@@ -73,6 +73,60 @@ function buildAlternatingMessages(
   return out;
 }
 
+// Strips reasoning blocks (<think>…</think> or [THINK]…[/THINK]) from a model
+// response. Magistral (Mistral's reasoning model) emits these traces inline in
+// the content; the workshop only wants the final answer, and an unstripped
+// <think> dump otherwise lands inside a captured deliverable. Stateful so it
+// works across streamed deltas where a tag may straddle two chunks. For
+// non-reasoning models (no tags) it is a pass-through.
+function makeThinkStripper() {
+  const OPENERS = ["<think>", "[THINK]"];
+  const CLOSERS = ["</think>", "[/THINK]"];
+  const MAXTAG = 8; // longest tag, for boundary hold-back
+  let inside = false;
+  let carry = "";
+  const earliest = (tags: string[]) => {
+    let idx = -1, tag = "";
+    for (const t of tags) {
+      const i = carry.indexOf(t);
+      if (i >= 0 && (idx < 0 || i < idx)) { idx = i; tag = t; }
+    }
+    return { idx, tag };
+  };
+  const step = (flushAll: boolean): string => {
+    let out = "";
+    for (;;) {
+      if (!inside) {
+        const { idx, tag } = earliest(OPENERS);
+        if (idx < 0) {
+          // No opener; emit all but a possible partial-tag tail held for next chunk.
+          const keep = flushAll ? 0 : Math.min(MAXTAG - 1, carry.length);
+          out += carry.slice(0, carry.length - keep);
+          carry = carry.slice(carry.length - keep);
+          break;
+        }
+        out += carry.slice(0, idx);
+        carry = carry.slice(idx + tag.length);
+        inside = true;
+      } else {
+        const { idx, tag } = earliest(CLOSERS);
+        if (idx < 0) {
+          // Still inside the reasoning block; drop everything but a partial closer tail.
+          carry = flushAll ? "" : carry.slice(Math.max(0, carry.length - (MAXTAG - 1)));
+          break;
+        }
+        carry = carry.slice(idx + tag.length);
+        inside = false;
+      }
+    }
+    return out;
+  };
+  return {
+    push: (delta: string): string => { carry += delta; return step(false); },
+    flush: (): string => step(true),
+  };
+}
+
 // SSRF guard for the Ollama proxy. On a public deploy the server must not be
 // usable to fetch arbitrary URLs (e.g. cloud metadata endpoints). Allow only
 // loopback / private-LAN targets, which is all a real Ollama setup needs. A
@@ -222,9 +276,17 @@ async function startServer() {
         clearTimeout(timeoutId);
         if (!r.ok) throw new Error(`Mistral models list returned status ${r.status}`);
         const data = (await r.json()) as any;
+        // Mistral's /v1/models returns EVERY model on the account — including
+        // non-chat ones (moderation, embeddings, OCR) that 400 on a chat call —
+        // and lists alias ids as separate objects (so the same id appears twice).
+        // Keep only chat-capable models (capabilities.completion_chat, lenient if
+        // absent) and dedup, so the dropdown can't offer a foot-gun like
+        // mistral-moderation-latest or show duplicate rows.
+        const seen = new Set<string>();
         const models = (data.data || [])
-          .map((m: any) => m.id)
-          .filter(Boolean)
+          .filter((m: any) => m?.id && m?.capabilities?.completion_chat !== false)
+          .map((m: any) => m.id as string)
+          .filter((id: string) => (seen.has(id) ? false : (seen.add(id), true)))
           .sort();
         return res.json({ models });
       }
@@ -833,9 +895,10 @@ async function startServer() {
             // Mistral streams OpenAI-style SSE: "data: {choices:[{delta:{content}}]}" lines, ending with "data: [DONE]".
             const reader = (response.body as any).getReader();
             const decoder = new TextDecoder();
+            const stripper = makeThinkStripper();
             let buf = "";
             let truncated = false;
-            let any = false;
+            let rawAny = false;
             for (;;) {
               const { done, value } = await reader.read();
               if (done) break;
@@ -850,20 +913,27 @@ async function startServer() {
                 let obj: any;
                 try { obj = JSON.parse(data); } catch { continue; }
                 const t = obj?.choices?.[0]?.delta?.content;
-                if (t) { any = true; sseDelta(t); }
+                if (t) { rawAny = true; const out = stripper.push(t); if (out) sseDelta(out); }
                 if (obj?.choices?.[0]?.finish_reason === "length") truncated = true;
               }
             }
-            if (!any) throw new Error("Empty response from Mistral (the model may have returned nothing — try another model).");
+            const tail = stripper.flush();
+            if (tail) sseDelta(tail);
+            if (!rawAny) throw new Error("Empty response from Mistral (the model may have returned nothing — try another model).");
             return sseDone(truncated);
           }
 
           const responseData = (await response.json()) as any;
-          const text = responseData?.choices?.[0]?.message?.content;
+          const rawText = responseData?.choices?.[0]?.message?.content;
 
-          if (!text) {
+          if (!rawText) {
             throw new Error(`No content from Mistral response: ${JSON.stringify(responseData)}`);
           }
+
+          // Strip reasoning traces (magistral); fall back to raw if the whole
+          // reply was reasoning so we never return an empty answer.
+          const stripper = makeThinkStripper();
+          const text = (stripper.push(rawText) + stripper.flush()).trim() || rawText;
 
           const truncated = responseData?.choices?.[0]?.finish_reason === "length";
           return res.json({ text, truncated });
