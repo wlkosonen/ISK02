@@ -127,6 +127,25 @@ function makeThinkStripper() {
   };
 }
 
+// Mistral returns assistant content as EITHER a plain string (normal models)
+// or, for reasoning models (magistral), a structured array of chunks —
+// {type:"thinking", …} for the reasoning trace and {type:"text", text} for the
+// answer. Keep only the text chunks; the thinking chunks must never reach a
+// captured deliverable. A plain string passes straight through.
+function mistralTextContent(content: any): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((c: any) => c?.type === "text")
+      .map((c: any) => c?.text || "")
+      .join("");
+  }
+  return "";
+}
+function mistralHasThinking(content: any): boolean {
+  return Array.isArray(content) && content.some((c: any) => c?.type === "thinking");
+}
+
 // SSRF guard for the Ollama proxy. On a public deploy the server must not be
 // usable to fetch arbitrary URLs (e.g. cloud metadata endpoints). Allow only
 // loopback / private-LAN targets, which is all a real Ollama setup needs. A
@@ -912,12 +931,14 @@ async function startServer() {
 
           if (wantStream && response.body) {
             // Mistral streams OpenAI-style SSE: "data: {choices:[{delta:{content}}]}" lines, ending with "data: [DONE]".
+            // For magistral the delta content is a chunk array; mistralTextContent
+            // keeps only the answer text and drops {type:"thinking"} reasoning.
             const reader = (response.body as any).getReader();
             const decoder = new TextDecoder();
-            const stripper = makeThinkStripper();
             let buf = "";
             let truncated = false;
-            let rawAny = false;
+            let answered = false;   // emitted at least one answer-text token
+            let sawThinking = false; // model produced reasoning
             for (;;) {
               const { done, value } = await reader.read();
               if (done) break;
@@ -931,28 +952,30 @@ async function startServer() {
                 if (!data || data === "[DONE]") continue;
                 let obj: any;
                 try { obj = JSON.parse(data); } catch { continue; }
-                const t = obj?.choices?.[0]?.delta?.content;
-                if (t) { rawAny = true; const out = stripper.push(t); if (out) sseDelta(out); }
+                const c = obj?.choices?.[0]?.delta?.content;
+                if (mistralHasThinking(c)) sawThinking = true;
+                const piece = mistralTextContent(c);
+                if (piece) { answered = true; sseDelta(piece); }
                 if (obj?.choices?.[0]?.finish_reason === "length") truncated = true;
               }
             }
-            const tail = stripper.flush();
-            if (tail) sseDelta(tail);
-            if (!rawAny) throw new Error("Empty response from Mistral (the model may have returned nothing — try another model).");
+            if (!answered) {
+              throw new Error(sawThinking
+                ? "The model returned only reasoning and no final answer — it likely ran out of tokens while 'thinking'. Raise max tokens, or switch to a non-reasoning model."
+                : "Empty response from Mistral (the model may have returned nothing — try another model).");
+            }
             return sseDone(truncated);
           }
 
           const responseData = (await response.json()) as any;
-          const rawText = responseData?.choices?.[0]?.message?.content;
+          const content = responseData?.choices?.[0]?.message?.content;
+          const text = mistralTextContent(content);
 
-          if (!rawText) {
-            throw new Error(`No content from Mistral response: ${JSON.stringify(responseData)}`);
+          if (!text) {
+            throw new Error(mistralHasThinking(content)
+              ? "The model returned only reasoning and no final answer — it likely ran out of tokens while 'thinking'. Raise max tokens, or switch to a non-reasoning model."
+              : `No content from Mistral response: ${JSON.stringify(responseData)}`);
           }
-
-          // Strip reasoning traces (magistral); fall back to raw if the whole
-          // reply was reasoning so we never return an empty answer.
-          const stripper = makeThinkStripper();
-          const text = (stripper.push(rawText) + stripper.flush()).trim() || rawText;
 
           const truncated = responseData?.choices?.[0]?.finish_reason === "length";
           return res.json({ text, truncated });
