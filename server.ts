@@ -713,6 +713,9 @@ async function startServer() {
             // Ollama streams newline-delimited JSON: {message:{content,thinking},done,done_reason}
             const reader = (response.body as any).getReader();
             const decoder = new TextDecoder();
+            // `think:false` routes reasoning into message.thinking (skipped below),
+            // but some local models still leak inline <think>…</think> into content.
+            const stripper = makeThinkStripper();
             let buf = "";
             let truncated = false;
             let any = false;
@@ -729,11 +732,13 @@ async function startServer() {
                 let obj: any;
                 try { obj = JSON.parse(line); } catch { continue; }
                 const t = obj?.message?.content;
-                if (t) { any = true; sseDelta(t); }
+                if (t) { any = true; const out = stripper.push(t); if (out) sseDelta(out); }
                 else if (obj?.message?.thinking) thoughtOnly = true;
                 if (obj?.done && obj?.done_reason === "length") truncated = true;
               }
             }
+            const tail = stripper.flush();
+            if (tail) sseDelta(tail);
             if (!any) {
               throw new Error(thoughtOnly
                 ? "The model returned only reasoning and no final answer — it likely ran out of context while 'thinking'. Try a non-reasoning model, or raise the model's context length."
@@ -743,13 +748,17 @@ async function startServer() {
           }
 
           const responseData = (await response.json()) as any;
-          const text = responseData?.message?.content;
+          const rawText = responseData?.message?.content;
 
-          if (!text) {
+          if (!rawText) {
             throw new Error(responseData?.message?.thinking
               ? "The model returned only reasoning and no final answer — it likely ran out of context while 'thinking'. Try a non-reasoning model, or raise the model's context length."
               : `No content from Ollama response: ${JSON.stringify(responseData)}`);
           }
+
+          // Strip leaked inline reasoning; fall back to raw if the reply was pure reasoning.
+          const stripper = makeThinkStripper();
+          const text = (stripper.push(rawText) + stripper.flush()).trim() || rawText;
 
           const truncated = responseData?.done_reason === "length";
           return res.json({ text, truncated });
@@ -807,9 +816,13 @@ async function startServer() {
             // OpenRouter streams OpenAI-style SSE: "data: {choices:[{delta:{content}}]}" lines, ending with "data: [DONE]".
             const reader = (response.body as any).getReader();
             const decoder = new TextDecoder();
+            // OpenRouter usually splits reasoning into a separate `reasoning`
+            // field we ignore, but many free DeepSeek-R1 / QwQ / Qwen3 models
+            // leak inline <think>…</think> into content — strip it.
+            const stripper = makeThinkStripper();
             let buf = "";
             let truncated = false;
-            let any = false;
+            let rawAny = false;
             for (;;) {
               const { done, value } = await reader.read();
               if (done) break;
@@ -824,20 +837,26 @@ async function startServer() {
                 let obj: any;
                 try { obj = JSON.parse(data); } catch { continue; }
                 const t = obj?.choices?.[0]?.delta?.content;
-                if (t) { any = true; sseDelta(t); }
+                if (t) { rawAny = true; const out = stripper.push(t); if (out) sseDelta(out); }
                 if (obj?.choices?.[0]?.finish_reason === "length") truncated = true;
               }
             }
-            if (!any) throw new Error("Empty response from OpenRouter (the model may have returned nothing — try another model).");
+            const tail = stripper.flush();
+            if (tail) sseDelta(tail);
+            if (!rawAny) throw new Error("Empty response from OpenRouter (the model may have returned nothing — try another model).");
             return sseDone(truncated);
           }
 
           const responseData = (await response.json()) as any;
-          const text = responseData?.choices?.[0]?.message?.content;
+          const rawText = responseData?.choices?.[0]?.message?.content;
 
-          if (!text) {
+          if (!rawText) {
             throw new Error(`No content from OpenRouter response: ${JSON.stringify(responseData)}`);
           }
+
+          // Strip inline reasoning traces; fall back to raw if the reply was pure reasoning.
+          const stripper = makeThinkStripper();
+          const text = (stripper.push(rawText) + stripper.flush()).trim() || rawText;
 
           const truncated = responseData?.choices?.[0]?.finish_reason === "length";
           return res.json({ text, truncated });
