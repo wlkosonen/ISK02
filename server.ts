@@ -6,6 +6,7 @@ import { GoogleGenAI } from "@google/genai";
 import Anthropic from "@anthropic-ai/sdk";
 import dotenv from "dotenv";
 import { buildStepContext, buildDMStepContext, buildDMIntegrationContext, uscsLoaded } from "./uscs";
+import { makeThinkStripper, mistralTextContent, mistralHasThinking } from "./src/lib/reasoning";
 
 dotenv.config();
 
@@ -71,79 +72,6 @@ function buildAlternatingMessages(
     else out.push({ ...m });
   }
   return out;
-}
-
-// Strips reasoning blocks (<think>…</think> or [THINK]…[/THINK]) from a model
-// response. Magistral (Mistral's reasoning model) emits these traces inline in
-// the content; the workshop only wants the final answer, and an unstripped
-// <think> dump otherwise lands inside a captured deliverable. Stateful so it
-// works across streamed deltas where a tag may straddle two chunks. For
-// non-reasoning models (no tags) it is a pass-through.
-function makeThinkStripper() {
-  const OPENERS = ["<think>", "[THINK]"];
-  const CLOSERS = ["</think>", "[/THINK]"];
-  const MAXTAG = 8; // longest tag, for boundary hold-back
-  let inside = false;
-  let carry = "";
-  const earliest = (tags: string[]) => {
-    let idx = -1, tag = "";
-    for (const t of tags) {
-      const i = carry.indexOf(t);
-      if (i >= 0 && (idx < 0 || i < idx)) { idx = i; tag = t; }
-    }
-    return { idx, tag };
-  };
-  const step = (flushAll: boolean): string => {
-    let out = "";
-    for (;;) {
-      if (!inside) {
-        const { idx, tag } = earliest(OPENERS);
-        if (idx < 0) {
-          // No opener; emit all but a possible partial-tag tail held for next chunk.
-          const keep = flushAll ? 0 : Math.min(MAXTAG - 1, carry.length);
-          out += carry.slice(0, carry.length - keep);
-          carry = carry.slice(carry.length - keep);
-          break;
-        }
-        out += carry.slice(0, idx);
-        carry = carry.slice(idx + tag.length);
-        inside = true;
-      } else {
-        const { idx, tag } = earliest(CLOSERS);
-        if (idx < 0) {
-          // Still inside the reasoning block; drop everything but a partial closer tail.
-          carry = flushAll ? "" : carry.slice(Math.max(0, carry.length - (MAXTAG - 1)));
-          break;
-        }
-        carry = carry.slice(idx + tag.length);
-        inside = false;
-      }
-    }
-    return out;
-  };
-  return {
-    push: (delta: string): string => { carry += delta; return step(false); },
-    flush: (): string => step(true),
-  };
-}
-
-// Mistral returns assistant content as EITHER a plain string (normal models)
-// or, for reasoning models (magistral), a structured array of chunks —
-// {type:"thinking", …} for the reasoning trace and {type:"text", text} for the
-// answer. Keep only the text chunks; the thinking chunks must never reach a
-// captured deliverable. A plain string passes straight through.
-function mistralTextContent(content: any): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .filter((c: any) => c?.type === "text")
-      .map((c: any) => c?.text || "")
-      .join("");
-  }
-  return "";
-}
-function mistralHasThinking(content: any): boolean {
-  return Array.isArray(content) && content.some((c: any) => c?.type === "thinking");
 }
 
 // SSRF guard for the Ollama proxy. On a public deploy the server must not be
