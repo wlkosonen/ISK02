@@ -117,3 +117,37 @@ export function parseSetTags(fullText: string): ParsedSetTags {
 
   return { updates, toastMsgs };
 }
+
+// Flatten an HTML deliverable into clean plain text for the TEXT portion of the
+// Export_Core package. The Title & Summary block in particular ships as
+// <h1>/<h2>/<h3>/<p>/<strong> markup, and those tags must not leak into the
+// exported .txt. Block-level tags become line breaks, inline tags are dropped,
+// and common entities are decoded. Whitespace inside a line is left alone so
+// already-plain blocks (Prompt Plot, Guidelines, descriptions) pass through
+// essentially untouched — only stray tags/entities are cleaned.
+export function htmlToText(input: string): string {
+  if (!input) return "";
+  let s = input.replace(/\r\n/g, "\n");
+  // <br> and the end of a block element start a new line.
+  s = s.replace(/<\s*br\s*\/?\s*>/gi, "\n");
+  s = s.replace(/<\/\s*(p|div|h[1-6]|tr|ul|ol|section|article|header|footer|blockquote)\s*>/gi, "\n");
+  // A list item opens with a bullet (its </li> is dropped with the other tags so
+  // items stay single-spaced); other block openers just break the line.
+  s = s.replace(/<\s*li\b[^>]*>/gi, "\n- ");
+  s = s.replace(/<\s*(p|div|h[1-6]|tr|ul|ol|section|article|header|footer|blockquote)\b[^>]*>/gi, "\n");
+  // Drop every remaining tag.
+  s = s.replace(/<[^>]+>/g, "");
+  // Decode the entities a model actually emits.
+  const named: Record<string, string> = {
+    amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ",
+    mdash: "—", ndash: "–", hellip: "…",
+    rsquo: "’", lsquo: "‘", rdquo: "”", ldquo: "“",
+  };
+  s = s.replace(/&(amp|lt|gt|quot|apos|nbsp|mdash|ndash|hellip|rsquo|lsquo|rdquo|ldquo);/gi,
+    (m, n: string) => named[n.toLowerCase()] ?? m);
+  s = s.replace(/&#(\d+);/g, (_m, n: string) => String.fromCodePoint(parseInt(n, 10)));
+  s = s.replace(/&#x([0-9a-fA-F]+);/g, (_m, n: string) => String.fromCodePoint(parseInt(n, 16)));
+  // Tidy: strip trailing spaces per line, collapse 3+ blank lines to one gap.
+  s = s.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n");
+  return s.trim();
+}

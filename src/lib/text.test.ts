@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { estimateTokens, stripSyncTags, hexToRgb, recolorHtml, parseSetTags } from "./text";
+import { estimateTokens, stripSyncTags, hexToRgb, recolorHtml, parseSetTags, htmlToText } from "./text";
 
 describe("estimateTokens", () => {
   it("returns 0 for empty / nullish input", () => {
@@ -186,5 +186,36 @@ describe("parseSetTags", () => {
     expect(updates.title).toBe("Quiet Town");
     expect(updates.palette).toEqual(["#111111", "#222222", "#333333"]);
     expect(toastMsgs.length).toBe(3);
+  });
+});
+
+describe("htmlToText", () => {
+  it("returns empty string for empty / nullish input", () => {
+    expect(htmlToText("")).toBe("");
+    expect(htmlToText(undefined as unknown as string)).toBe("");
+  });
+
+  it("turns headings and paragraphs into clean line-separated text", () => {
+    expect(htmlToText("<h1>The Veil of Thorns</h1><p>A hunter's oath is simple.</p>"))
+      .toBe("The Veil of Thorns\n\nA hunter's oath is simple.");
+  });
+
+  it("drops inline tags but keeps their text (the <h3>/<strong> case from the export)", () => {
+    expect(htmlToText("<h3>Gothic</h3><p><strong>Role:</strong> The Cursed Cat Girl.</p>"))
+      .toBe("Gothic\n\nRole: The Cursed Cat Girl.");
+  });
+
+  it("decodes common entities", () => {
+    expect(htmlToText("Tom &amp; Jerry &mdash; &#39;hi&#39; &lt;tag&gt;")).toBe("Tom & Jerry — 'hi' <tag>");
+  });
+
+  it("renders <br> and list items as line breaks / bullets", () => {
+    expect(htmlToText("Line one<br>Line two<ul><li>a</li><li>b</li></ul>"))
+      .toBe("Line one\nLine two\n\n- a\n- b");
+  });
+
+  it("passes already-plain text through essentially unchanged", () => {
+    const plain = "Prompt Plot:\n- Beat one.\n- Beat two.";
+    expect(htmlToText(plain)).toBe(plain);
   });
 });

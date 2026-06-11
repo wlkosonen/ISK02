@@ -7,7 +7,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
 import { captureDeliverables, withRestorePoints, isPlaceholderContent, normalizeDeliverables, type Deliverables, type DMConfig, type RestorableScalar } from "./lib/capture";
-import { estimateTokens, stripSyncTags, recolorHtml, parseSetTags } from "./lib/text";
+import { estimateTokens, stripSyncTags, recolorHtml, parseSetTags, htmlToText } from "./lib/text";
 import { 
   Settings, 
   BookOpen, 
@@ -328,7 +328,7 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 
 // Version of THIS app (the Aether_Core tool), distinct from the USCS framework
 // version it implements. Bump this when you ship changes.
-const APP_VERSION = "0.13.0";
+const APP_VERSION = "0.13.1";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
 const USCS_VERSION = "6.1.1";
 
@@ -1532,67 +1532,90 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
     const failures: string[] = [];
     let regenerated = 0;
 
-    // Prefer the captured block. Only call the model if that slot is empty.
-    const getOrGen = async (heading: string, captured: string, step: number, what: string) => {
-      setExportProgress(heading);
-      if (captured && captured.trim()) {
-        parts.push(`${divider(heading)}\n\n${captured.trim()}`);
-        return;
-      }
+    // Prefer the captured block; only call the model if that slot is empty.
+    const getOrGen = async (label: string, captured: string, step: number, what: string): Promise<string> => {
+      setExportProgress(label);
+      if (captured && captured.trim()) return captured.trim();
       regenerated++;
       try {
-        const body = await callRaw(sectionInstruction(what), step);
-        parts.push(`${divider(heading)}\n\n${body || "(not generated)"}`);
+        return (await callRaw(sectionInstruction(what), step)) || "(not generated)";
       } catch (err: any) {
-        failures.push(heading);
-        parts.push(`${divider(heading)}\n\n[EXPORT ERROR — this block could not be compiled: ${err.message || err}. Re-run the export to retry.]`);
+        failures.push(label);
+        return `[EXPORT ERROR — this block could not be compiled: ${err.message || err}. Re-run the export to retry.]`;
       }
     };
+    // Same prefer-captured logic for a single character piece (its desc or its card).
+    const charPiece = async (label: string, captured: string, regen: () => Promise<string>): Promise<string> => {
+      if (captured && captured.trim()) return captured.trim();
+      regenerated++;
+      try { return (await regen()) || "(not generated)"; }
+      catch (err: any) { failures.push(label); return `[EXPORT ERROR — ${err.message || err}]`; }
+    };
+    // The TEXT portion ships tag-free (the Title & Summary block is authored as
+    // <h1>/<h3>/<strong> HTML); the HTML CARDS portion keeps its raw markup.
+    const pushText = (heading: string, body: string) => parts.push(`${divider(heading)}\n\n${htmlToText(body)}`);
+    const pushRaw = (heading: string, body: string) => parts.push(`${divider(heading)}\n\n${body}`);
+    const isNotGenerated = (s: string) => /^\(not generated\)$/i.test((s || "").trim());
 
     try {
-      await getOrGen("TITLE & SUMMARY", d.titleSummary, 6, "the Title and the Plot Summary plus the per-character summaries");
-      await getOrGen("PLOT CARD", d.plotCard, 7, "the Plot Card as raw HTML, exactly as built");
+      // ---- TEXT SECTION (tag-free) -------------------------------------------
+      pushText("TITLE & SUMMARY", await getOrGen("TITLE & SUMMARY", d.titleSummary, 6, "the Title and the Plot Summary plus the per-character summaries"));
+      pushText("PROMPT PLOT", await getOrGen("PROMPT PLOT", d.promptPlot, 10, "the Prompt Plot performer instructions, including the Architect Protocol block verbatim"));
+      pushText("GUIDELINES", await getOrGen("GUIDELINES", d.guidelines, 11, "the complete Prompt Guidelines rule list, every rule in full"));
+      pushText("REMINDERS", await getOrGen("REMINDERS", d.reminders, 12, "the complete AI Reminders list, in priority order"));
 
-      // Character Sheets — prefer captured cards/descriptions; otherwise discover + regenerate per character.
-      setExportProgress("Character sheets");
-      let charBlock = "";
-      const capturedChars = d.characters.filter(c => c.card || c.desc);
-      if (capturedChars.length > 0) {
-        charBlock = capturedChars.map(c =>
-          `### ${c.name}\n\nPART A — CARD (HTML):\n${c.card || "(card not generated)"}\n\nPART B — AI DESCRIPTION:\n${c.desc || "(description not generated)"}`
-        ).join("\n\n");
+      // First Message — the authored openings, one per variant.
+      setExportProgress("First Message");
+      let fmBody: string;
+      if (d.firstMessages && d.firstMessages.length > 0) {
+        fmBody = d.firstMessages
+          .map((f, i) => `--- First Message ${f.label || i + 1} ---\n${htmlToText(f.content || "").trim()}`)
+          .join("\n\n\n");
       } else {
+        fmBody = htmlToText(await getOrGen("FIRST MESSAGE", "", 13, "every authored opening / first message, each one in full"));
+      }
+      pushRaw("FIRST MESSAGE", fmBody);
+
+      // Character AI instructions (the text 'desc' for each), with the Player
+      // Persona listed as one of the cast. The HTML cards are emitted separately
+      // in the HTML CARDS section below.
+      setExportProgress("Character instructions");
+      let roster = d.characters.filter(c => c.desc || c.card).map(c => ({ name: c.name, desc: c.desc, card: c.card }));
+      if (roster.length === 0) {
         regenerated++;
         try {
           const namesRaw = await callRaw(`[EXPORT] List ONLY the names of the characters that have a character sheet in this story — one name per line, nothing else. No numbering, no commentary. If there are none, output exactly "(none)".`, 8);
           const names = namesRaw.split(/\r?\n/).map(s => s.replace(/^[\s\-*\d.)]+/, "").trim()).filter(s => s && !/^\(?none\)?$/i.test(s)).slice(0, 15);
-          if (names.length === 0) {
-            charBlock = await callRaw(sectionInstruction("ALL character sheets — Part A (HTML card) and Part B (AI prompt description) for every character, each in full"), 8);
-          } else {
-            const chunks: string[] = [];
-            for (let i = 0; i < names.length; i++) {
-              setExportProgress(`Character ${i + 1}/${names.length}: ${names[i]}`);
-              try {
-                const cs = await callRaw(`[EXPORT — MACHINE OUTPUT] Output the COMPLETE finalized character sheet for the character named "${names[i]}": Part A (the raw HTML card, verbatim) followed by Part B (the AI prompt description, in full). No commentary, no questions, no tags. If this character has no finished sheet, output exactly "(not generated)".`, 8);
-                chunks.push(`### ${names[i]}\n\n${cs || "(not generated)"}`);
-              } catch (err: any) {
-                failures.push(`Character: ${names[i]}`);
-                chunks.push(`### ${names[i]}\n\n[EXPORT ERROR: ${err.message || err}]`);
-              }
-            }
-            charBlock = chunks.join("\n\n");
-          }
+          roster = names.map(name => ({ name, desc: "", card: "" }));
         } catch (err: any) {
-          failures.push("Character Sheets");
-          charBlock = `[EXPORT ERROR — character roster could not be read: ${err.message || err}]`;
+          failures.push("Character roster");
         }
       }
-      parts.push(`${divider("CHARACTER SHEETS")}\n\n${charBlock}`);
+      const instrBlocks: string[] = [];
+      for (const c of roster) {
+        const desc = await charPiece(`Instruction: ${c.name}`, c.desc,
+          () => callRaw(`[EXPORT — MACHINE OUTPUT] Output ONLY the finalized AI prompt description (Part B) for the character named "${c.name}", in full. No HTML card, no commentary, no tags. If none, output exactly "(not generated)".`, 8));
+        instrBlocks.push(`${c.name}\n\n${htmlToText(desc).trim()}`);
+      }
+      const persona = await getOrGen("Player Persona", d.playerPersona, 8, "the Player Persona / player-character AI instruction, in full");
+      if (persona && persona.trim() && !isNotGenerated(persona)) {
+        instrBlocks.push(`The Player (Player Persona)\n\n${htmlToText(persona).trim()}`);
+      }
+      pushRaw("CHARACTER INSTRUCTIONS", instrBlocks.length ? instrBlocks.join("\n\n\n") : "(no character instructions generated)");
 
-      await getOrGen("SCENARIOS — OPENING / FIRST MESSAGES", d.scenarios, 13, "every scenario's authored opening / first message, each one in full");
-      await getOrGen("PROMPT PLOT", d.promptPlot, 10, "the Prompt Plot performer instructions, including the Architect Protocol block verbatim");
-      await getOrGen("GUIDELINES", d.guidelines, 11, "the complete Prompt Guidelines rule list, every rule in full");
-      await getOrGen("REMINDERS", d.reminders, 12, "the complete AI Reminders list, in priority order");
+      // ---- HTML SECTION (raw markup) -----------------------------------------
+      const plotCardHtml = await getOrGen("PLOT CARD", d.plotCard, 7, "the Plot Card as raw HTML, exactly as built");
+      const cardBlocks: string[] = [`PLOT CARD\n\n${plotCardHtml}`];
+      for (const c of roster) {
+        setExportProgress(`Card: ${c.name}`);
+        const card = await charPiece(`Card: ${c.name}`, c.card,
+          () => callRaw(`[EXPORT — MACHINE OUTPUT] Output ONLY the finalized HTML character card (Part A) for the character named "${c.name}", raw HTML verbatim. No description, no commentary, no tags. If none, output exactly "(not generated)".`, 8));
+        cardBlocks.push(`${c.name}\n\n${card}`);
+      }
+      pushRaw("HTML CARDS", cardBlocks.join("\n\n\n"));
+
+      // ---- EXTRAS -------------------------------------------------------------
+      pushRaw("IMAGE PROMPTS", await getOrGen("IMAGE PROMPTS", d.imagePrompts, 14, "the per-character image-generation prompts, each in full"));
 
       const pkg = countingPackageTokens(d);
       const pkgFmt = pkg >= 1000 ? `${(pkg / 1000).toFixed(1)}k` : `${pkg}`;
@@ -2909,7 +2932,7 @@ function CollaboratorChat({ state, setState, compact, askAssistant, setIsChatOpe
             <button
               onClick={onExport}
               disabled={isExporting || state.assistantHistory.length === 0}
-              title="Compile the final ISK0 package (Title, Plot Card, Characters, Scenarios, Prompt Plot, Guidelines, Reminders) and download it as a clean .txt — no chat"
+              title="Compile the final ISK0 package as a clean .txt — no chat. Text section first (Title & Summary, Prompt Plot, Guidelines, Reminders, First Message, character instructions), then the HTML cards (plot card + per character), then image prompts"
               className={`${compact ? 'py-1.5' : 'py-2'} bg-accent/10 hover:bg-accent/20 border border-accent/20 text-accent rounded-lg flex items-center justify-center gap-2 text-[9px] font-black uppercase tracking-widest transition-all disabled:opacity-40 disabled:cursor-not-allowed`}
             >
               {isExporting ? (
@@ -2957,6 +2980,15 @@ function CollaboratorChat({ state, setState, compact, askAssistant, setIsChatOpe
 
 function VersionHistoryModal({ onClose }: { onClose: () => void }) {
   const releases: { v: string; title: string; items: string[] }[] = [
+    {
+      v: "0.13.1", title: "Cleaner Export_Core layout",
+      items: [
+        "Export_Core is reorganised for ISK0: a TEXT section first (Title & Summary → Prompt Plot → Guidelines → Reminders → First Message → character AI instructions), then an HTML CARDS section (plot card, then each character's name + card), then image prompts at the end.",
+        "The text section is now tag-free — the Title & Summary block is authored as HTML (<h1>/<h3>/<strong>), and those markers no longer leak into the exported .txt. The HTML cards keep their markup.",
+        "Each character is split: their AI instruction (text) sits in the text section with the cast (the Player Persona is listed there too), while their HTML card moves to the cards section.",
+        "First Message now exports the authored openings; image prompts are included at the end.",
+      ],
+    },
     {
       v: "0.13.0", title: "Load Example, leaner deliverables & sturdier capture",
       items: [
