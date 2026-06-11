@@ -1559,7 +1559,19 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
 
     try {
       // ---- TEXT SECTION (tag-free) -------------------------------------------
-      pushText("TITLE & SUMMARY", await getOrGen("TITLE & SUMMARY", d.titleSummary, 6, "the Title and the Plot Summary plus the per-character summaries"));
+      // Title & Summary: prefer the captured block (it may carry per-character
+      // summaries); otherwise compose from state.title / state.summary, which the
+      // creator always fills in on the Title & Summary step — so we never
+      // regenerate (or error on) something they already typed.
+      setExportProgress("Title & Summary");
+      let titleSummaryBody = d.titleSummary && d.titleSummary.trim() ? d.titleSummary.trim() : "";
+      if (!titleSummaryBody && (state.title?.trim() || state.summary?.trim())) {
+        titleSummaryBody = `${state.title?.trim() || "Untitled"}\n\n${state.summary?.trim() || ""}`.trim();
+      }
+      if (!titleSummaryBody) {
+        titleSummaryBody = await getOrGen("TITLE & SUMMARY", "", 6, "the Title and the Plot Summary plus the per-character summaries");
+      }
+      pushText("TITLE & SUMMARY", titleSummaryBody);
       pushText("PROMPT PLOT", await getOrGen("PROMPT PLOT", d.promptPlot, 10, "the Prompt Plot performer instructions, including the Architect Protocol block verbatim"));
       pushText("GUIDELINES", await getOrGen("GUIDELINES", d.guidelines, 11, "the complete Prompt Guidelines rule list, every rule in full"));
       pushText("REMINDERS", await getOrGen("REMINDERS", d.reminders, 12, "the complete AI Reminders list, in priority order"));
@@ -1599,7 +1611,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
       }
       const persona = await getOrGen("Player Persona", d.playerPersona, 8, "the Player Persona / player-character AI instruction, in full");
       if (persona && persona.trim() && !isNotGenerated(persona)) {
-        instrBlocks.push(`The Player (Player Persona)\n\n${htmlToText(persona).trim()}`);
+        instrBlocks.push(`The Player\n\n${htmlToText(persona).trim()}`);
       }
       pushRaw("CHARACTER INSTRUCTIONS", instrBlocks.length ? instrBlocks.join("\n\n\n") : "(no character instructions generated)");
 
@@ -2987,6 +2999,7 @@ function VersionHistoryModal({ onClose }: { onClose: () => void }) {
         "The text section is now tag-free — the Title & Summary block is authored as HTML (<h1>/<h3>/<strong>), and those markers no longer leak into the exported .txt. The HTML cards keep their markup.",
         "Each character is split: their AI instruction (text) sits in the text section with the cast (the Player Persona is listed there too), while their HTML card moves to the cards section.",
         "First Message now exports the authored openings; image prompts are included at the end.",
+        "Title & Summary falls back to the title and summary you typed on that step if the combined block was never separately captured — so the export never errors or regenerates content you already have.",
       ],
     },
     {
