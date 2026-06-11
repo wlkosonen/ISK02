@@ -9,6 +9,10 @@ proxies model calls to Gemini / Anthropic / OpenRouter / local Ollama. The app i
 `src/App.tsx` (large, single file) plus `src/lib/capture.ts` (deliverable capture,
 unit-tested). Built with Vite + esbuild.
 
+## Environment
+This is a Windows environment using PowerShell 5.1. Use PowerShell-native syntax
+(e.g., `;` instead of `&&` for chaining commands); avoid bash-style separators.
+
 ## Working principles
 - **Think before coding.** Don't assume, don't hide confusion — surface
   tradeoffs. When a request has multiple reasonable readings (which track/step
