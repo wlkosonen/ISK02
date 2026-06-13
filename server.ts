@@ -726,6 +726,16 @@ async function startServer() {
         if (fullSystem) messages.push({ role: "system", content: fullSystem });
         messages.push(...buildAlternatingMessages(history, prompt));
 
+        // Inactivity watchdog: OpenRouter sometimes holds a socket open with no
+        // bytes (the "empty response" case) or stalls mid-stream. Without this the
+        // server's own fetch/reader.read() would block until OpenRouter eventually
+        // closes — keeping the client waiting too. Abort after a stretch of complete
+        // silence; reset on every chunk so long generations aren't killed.
+        const orController = new AbortController();
+        const OR_STALL_MS = 300_000;
+        let orWatchdog: ReturnType<typeof setTimeout> = setTimeout(() => orController.abort(), OR_STALL_MS);
+        const bumpOr = () => { clearTimeout(orWatchdog); orWatchdog = setTimeout(() => orController.abort(), OR_STALL_MS); };
+
         try {
           console.log("Forwarding request to OpenRouter with model %s", modelName);
           const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -743,8 +753,10 @@ async function startServer() {
               temperature: settings.temperature ?? 1,
               max_tokens: settings.maxTokens || 4096,
               stream: wantStream
-            })
+            }),
+            signal: orController.signal
           });
+          bumpOr(); // headers arrived — reset the clock for the stream body
 
           if (!response.ok) {
             const errorText = await response.text();
@@ -773,6 +785,7 @@ async function startServer() {
             for (;;) {
               const { done, value } = await reader.read();
               if (done) break;
+              bumpOr();
               buf += decoder.decode(value, { stream: true });
               let nl: number;
               while ((nl = buf.indexOf("\n")) >= 0) {
@@ -809,7 +822,12 @@ async function startServer() {
           return res.json({ text, truncated });
         } catch (orErr: any) {
           console.error("OpenRouter bridge failed:", safeErr(orErr));
-          return failOut(400, orErr.message || String(orErr));
+          const msg = orErr?.name === "AbortError"
+            ? "OpenRouter stopped responding (the connection stalled with no data). Try again, or switch to another model."
+            : (orErr.message || String(orErr));
+          return failOut(400, msg);
+        } finally {
+          clearTimeout(orWatchdog);
         }
       }
 

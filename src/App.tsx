@@ -328,7 +328,7 @@ const BUDGET_PRESETS: { label: string; min: number; max: number; hint: string; t
 
 // Version of THIS app (the Aether_Core tool), distinct from the USCS framework
 // version it implements. Bump this when you ship changes.
-const APP_VERSION = "0.13.1";
+const APP_VERSION = "0.13.2";
 // Version of the USCS framework/spec this build targets (docs/USCS_v6.1.txt).
 const USCS_VERSION = "6.1.1";
 
@@ -1027,7 +1027,25 @@ Acknowledge the established parameters, leave everything under NOT YET DECIDED u
       isAssistantLoading: true
     }));
 
+    // Inactivity watchdog: a stalled connection (e.g. OpenRouter holding a socket
+    // open with no bytes, or a stream that goes silent mid-token) would otherwise
+    // block `await fetch`/`reader.read()` forever — leaving isAssistantLoading true,
+    // the spinner up, and the chat input disabled until a page reload. The timer
+    // aborts the request after a stretch of COMPLETE silence; it's reset on every
+    // chunk (bumpWatchdog), so long legitimate generations and slow first-tokens are
+    // never killed — only a genuinely dead connection trips it. Local Ollama can take
+    // ~2min to first token while a model loads, so its budget is larger.
+    const directOllamaForStall = state.aiProvider === "ollama" && !!state.modelSettings.ollamaDirect;
+    const controller = new AbortController();
+    const STALL_MS = directOllamaForStall ? 720_000 : 360_000;
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    const bumpWatchdog = () => {
+      if (watchdog) clearTimeout(watchdog);
+      watchdog = setTimeout(() => controller.abort(), STALL_MS);
+    };
+
     try {
+      bumpWatchdog();
       // BYO local Ollama: when enabled, the browser talks to the visitor's OWN
       // machine. The USCS-injected prompt is still assembled server-side (via
       // /api/assistant/prepare), then inference streams directly from their
@@ -1153,6 +1171,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(requestBody),
+          signal: controller.signal,
         });
         if (!prep.ok) {
           const e = await prep.json().catch(() => ({}));
@@ -1178,6 +1197,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
               num_ctx: numCtx,
             },
           }),
+          signal: controller.signal,
         });
         try {
           response = await callChat(false);
@@ -1193,6 +1213,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(requestBody),
+          signal: controller.signal,
         });
       }
 
@@ -1202,6 +1223,9 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
         const errData = await response.json().catch(() => ({}));
         throw new Error(errData.error || "Communication link severed");
       }
+      // Headers arrived; reset the clock so model-load/first-token latency is timed
+      // separately from the (slow) header wait above.
+      bumpWatchdog();
 
       // Runs the SAME capture/tag/usage processing as before, on the COMPLETE
       // text — whether it arrived streamed (replaceLast=true, swaps the live
@@ -1329,6 +1353,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
+          bumpWatchdog();
           buf += decoder.decode(value, { stream: true });
           let nl: number;
           while ((nl = buf.indexOf("\n")) >= 0) {
@@ -1385,6 +1410,7 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
+          bumpWatchdog();
           buf += decoder.decode(value, { stream: true });
           let sep: number;
           while ((sep = buf.indexOf("\n\n")) >= 0) {
@@ -1419,12 +1445,19 @@ LENGTH MANAGEMENT (AVOID TRUNCATION)
       }
     } catch (error: any) {
       console.error(error);
+      // The watchdog fired (or the user reload aborted): the connection stalled with
+      // no data. Surface a clear, retryable message instead of leaving the spinner up.
+      const msg = error?.name === "AbortError"
+        ? "The model stopped responding — the connection stalled with no data. Request cancelled; hit Retry to try again, or switch models in Settings."
+        : (error?.message || "Unknown anomaly");
       setState(s => {
         const h = [...s.assistantHistory];
         // Drop a half-streamed placeholder so the error replaces it cleanly.
         if (h.length && h[h.length - 1].role === "assistant" && h[h.length - 1].streaming) h.pop();
-        return { ...s, isAssistantLoading: false, assistantHistory: [...h, { role: "assistant", content: `ERROR_SIGNAL: ${error.message || "Unknown anomaly"}` }] };
+        return { ...s, isAssistantLoading: false, assistantHistory: [...h, { role: "assistant", content: `ERROR_SIGNAL: ${msg}` }] };
       });
+    } finally {
+      if (watchdog) clearTimeout(watchdog);
     }
   };
 
@@ -2992,6 +3025,14 @@ function CollaboratorChat({ state, setState, compact, askAssistant, setIsChatOpe
 
 function VersionHistoryModal({ onClose }: { onClose: () => void }) {
   const releases: { v: string; title: string; items: string[] }[] = [
+    {
+      v: "0.13.2", title: "No more stuck \"processing\" spinner",
+      items: [
+        "Fixed a hang where a stalled model connection (e.g. OpenRouter returning nothing, or a stream that goes silent mid-reply) left the chat stuck on \"…processing\" with the input locked until you reloaded the page.",
+        "A request that receives no data for an extended period is now cancelled automatically, and you get a clear error message with a Retry button instead of an indefinite spinner.",
+        "The timeout only trips on genuine silence — it resets on every token received, so long generations and slow first-tokens (including local models loading) are never cut off.",
+      ],
+    },
     {
       v: "0.13.1", title: "Cleaner Export_Core layout",
       items: [
