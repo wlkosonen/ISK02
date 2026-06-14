@@ -423,6 +423,7 @@ async function startServer() {
               if ((chunk as any)?.candidates?.[0]?.finishReason === "MAX_TOKENS") truncated = true;
             }
             if (!any) throw new Error("Empty response from Gemini");
+            console.log("Gemini stream complete with model: %s (truncated:%s)", modelName, truncated);
             return sseDone(truncated);
           }
 
@@ -514,6 +515,7 @@ async function startServer() {
                   cacheRead: fu.cache_read_input_tokens ?? 0,
                   cacheWrite: fu.cache_creation_input_tokens ?? 0,
                 } : undefined;
+                console.log("Anthropic stream complete with model: %s (in:%d out:%d truncated:%s)", candidateModel, fu?.input_tokens ?? 0, fu?.output_tokens ?? 0, streamTruncated);
                 streamed = true;
                 break;
               } catch (err: any) {
@@ -691,6 +693,7 @@ async function startServer() {
                 ? "The model returned only reasoning and no final answer — it likely ran out of context while 'thinking'. Try a non-reasoning model, or raise the model's context length."
                 : "Empty response from Ollama");
             }
+            console.log("Ollama stream complete with model: %s (truncated:%s)", modelName, truncated);
             return sseDone(truncated);
           }
 
@@ -804,6 +807,7 @@ async function startServer() {
             const tail = stripper.flush();
             if (tail) sseDelta(tail);
             if (!rawAny) throw new Error("Empty response from OpenRouter (the model may have returned nothing — try another model).");
+            console.log("OpenRouter stream complete with model: %s (truncated:%s)", modelName, truncated);
             return sseDone(truncated);
           }
 
@@ -910,6 +914,7 @@ async function startServer() {
                 ? "The model returned only reasoning and no final answer — it likely ran out of tokens while 'thinking'. Raise max tokens, or switch to a non-reasoning model."
                 : "Empty response from Mistral (the model may have returned nothing — try another model).");
             }
+            console.log("Mistral stream complete with model: %s (truncated:%s)", modelName, truncated);
             return sseDone(truncated);
           }
 
